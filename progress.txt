@@ -89,6 +89,12 @@ Desktop-first experimentation platform for evaluating LLM-generated context.
 ## Current Status
 Backend core is functional. Frontend has basic structure with all major panels implemented. Need to wire up remaining UI features and complete analysis agent backend.
 
+Examples added:
+- Sample Jinja template for analysis prompts
+- Sample JSON data file
+- Sample JavaScript transformation script  
+- Sample pipeline YAML definition
+
 ## Build Notes
 - Rust toolchain needs to be installed: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - After Rust install: run `./setup.sh` then `npm run tauri dev`
