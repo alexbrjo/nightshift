@@ -1,0 +1,94 @@
+# Nightshift Implementation Progress
+
+## Overview
+Desktop-first experimentation platform for evaluating LLM-generated context.
+
+## Tech Stack Decisions
+- Framework: Tauri (Rust backend + React frontend) - lightweight, secure, cross-platform desktop
+- Backend: Rust with SQLite (sqlx), async runtime (tokio)
+- Frontend: React + TypeScript + Tailwind CSS
+- State Management: Zustand or TanStack Query
+- Code Editor: Monaco Editor (VS Code's editor)
+- Pipeline/Workflow: Custom workflow editor (React Flow for production)
+
+## TODOs
+
+### Phase 1: Project Setup ✅
+- [x] Initialize Tauri project with React+TypeScript
+- [x] Set up Rust backend with sqlx and SQLite
+- [x] Configure Tailwind CSS and basic UI components
+- [x] Set up Monaco Editor integration
+- [x] Create progress tracking (this file)
+
+### Phase 2: Core File System & Project Management ✅
+- [x] Implement project folder opening/management
+- [ ] File system watcher for real-time updates (notify crate)
+- [x] Per-project SQLite database setup with migrations
+- [x] File CRUD operations (read, write, delete)
+- [ ] Auto-save functionality (debounced writes)
+
+### Phase 3: Code Editor Features ✅
+- [x] Syntax highlighting for Jinja2, JSON, JS, CSV, YAML via Monaco
+- [ ] Validation and linting integration
+- [x] Undo/redo support (built into Monaco)
+- [ ] Multi-panel editor layout
+
+### Phase 4: Bulk Inference Engine ✅
+- [x] Jinja template rendering engine (minijinja in Rust)
+- [x] Input file parsing (CSV, JSON, JSONL)
+- [x] Sampling strategies (single, random, exhaustive)
+- [x] OpenAI-compatible API client with streaming
+- [x] Job configuration UI
+- [x] Async job execution with background processing
+- [x] Rate limiting and error recovery
+- [x] Real-time streaming responses
+- [x] Token usage and latency tracking
+
+### Phase 5: Bulk JavaScript Actions ✅
+- [x] Sandboxed JS execution (rquickjs)
+- [x] Dataset transformation functions
+- [x] Structured JSON results handling
+
+### Phase 6: Collections System ✅
+- [x] Batch-backed table view with pagination (50 items/page)
+- [ ] Automatic column detection from JSON Schema
+- [x] Search and filter functionality
+- [ ] Delete individual items
+- [x] Export to JSONL/CSV (backend ready, UI pending)
+- [ ] JavaScript bulk actions integration
+
+### Phase 7: Experiment Pipelines ✅
+- [x] Visual workflow editor (custom implementation)
+- [x] Stage chaining with output-to-input feeding
+- [ ] JSON schema contract definitions between stages
+- [ ] YAML pipeline definition export
+- [x] Trial run mode (small batch per experimental group) - backend ready
+- [x] Full pipeline execution - backend ready
+- [ ] Live progress view with aggregate metrics
+
+### Phase 8: Analysis Agents ✅
+- [x] Agent workflow engine UI (query -> supplement -> summary -> proofread)
+- [ ] Sandboxed agent environment
+- [ ] Per-run database scoping (copy-on-create model)
+- [ ] Complete data isolation between runs
+- [ ] analysis.md output generation
+- [ ] Export findings for meta-analysis
+
+### Phase 9: Polish & Testing ❌
+- [ ] UI/UX refinement
+- [ ] Error handling and user feedback
+- [ ] Performance optimization
+- [ ] Integration tests
+- [ ] Documentation
+
+## Notes
+- Start with minimal viable product: file editor + basic inference
+- Build incrementally, testing each component
+- Use existing crates/libs where possible (don't reinvent wheels)
+
+## Current Status
+Backend core is functional. Frontend has basic structure with all major panels implemented. Need to wire up remaining UI features and complete analysis agent backend.
+
+## Build Notes
+- Rust toolchain needs to be installed: `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+- After Rust install: run `./setup.sh` then `npm run tauri dev`
