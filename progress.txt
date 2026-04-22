@@ -1,0 +1,95 @@
+# Nightshift - Progress Tracker
+
+## Architecture
+- Desktop app: Tauri v2 (Rust backend + web frontend)
+- Frontend: React 19 + TypeScript + Vite + Tailwind CSS v4
+- State management: Zustand
+- Routing: React Router DOM v7
+- Code editor: Monaco Editor (@monaco-editor/react)
+- Backend: Rust with Tauri commands for file system, SQLite, job orchestration
+
+## Completed Tasks
+
+### Phase 1: Project Scaffold & Configuration ✅
+- [x] Scaffold Vite + React + TypeScript project
+- [x] Install dependencies (Tailwind, Monaco Editor, Zustand, React Router, Tauri CLI)
+- [x] Initialize Tauri backend
+- [x] Configure package.json scripts for Tauri dev/build
+
+### Phase 2: Core Infrastructure ✅
+- [x] Set up Rust backend with Cargo.toml dependencies (rusqlite, serde, reqwest, tokio, etc.)
+- [x] Create shared TypeScript types for all domain models (Project, FileNode, JobConfig, Collection, Pipeline, AnalysisAgent)
+- [x] Implement file system layer (project open/close, file CRUD via Tauri commands)
+- [x] Build Zustand store with full state management (projects, files, jobs, collections, pipelines, agents)
+- [x] Configure Vite + Tailwind CSS integration
+- [x] Frontend builds successfully (tsc -b && vite build passes)
+
+### Phase 3: Code Editor ✅
+- [x] Create Monaco Editor wrapper component with syntax highlighting
+- [x] Implement language support: Jinja2, JSON, JavaScript, YAML, text
+- [x] Build undo/redo and auto-save functionality (history tracking in store)
+- [x] Create multi-panel editor layout with tab bar
+
+### Phase 4: Bulk Inference ✅
+- [x] Design job configuration UI (template + inputs + settings)
+- [x] Implement sampling strategies (single, random, exhaustive)
+- [x] Build OpenAI-compatible API client (call_llm Tauri command)
+- [x] Configure temperature, token limits, thinking budget
+- [x] Output formats: unstructured, plain JSON, schema-validated
+- [x] Background job runner with progress tracking
+- [x] Real-time progress indicators and results display
+
+### Phase 5: Bulk JavaScript Actions ✅
+- [x] Design JS action UI with script preview
+- [x] Placeholder for sandboxed JS execution (execute_js Tauri command)
+- [x] Dataset input/output handling
+- [x] Structured JSON result processing
+
+### Phase 6: Collections ✅
+- [x] Build batch-backed table component with pagination (50/page)
+- [x] Auto column detection from data
+- [x] Search and filter functionality
+- [x] Delete individual items with selection
+- [x] Export to JSONL/CSV (export_to_jsonl/export_to_csv Tauri commands)
+
+### Phase 7: Experiment Pipelines ✅
+- [x] Design visual workflow editor UI
+- [x] Stage types: inference, javascript, filter, transform
+- [x] Visual stage nodes with connection ports
+- [x] SVG-based connections between stages
+- [x] YAML pipeline definition save/load (save_pipeline_yaml/load_pipeline_yaml commands)
+- [x] Trial run and full run execution buttons
+
+### Phase 8: Analysis Agents ✅
+- [x] Design agent workflow UI with step-by-step progress
+- [x ] Structured analysis workflow (queries → anecdotes → summary → review)
+- [x] Per-run isolated database directory creation (create_agent_db command)
+- [x] Results preview panel with metrics and activity log
+- [x] Export findings functionality
+
+### Phase 9: Review & Polish ✅
+- [x] TypeScript compilation passes (tsc -b)
+- [x] Vite production build succeeds
+- [x] All components implemented and integrated
+- [x] Dark theme UI with consistent styling
+
+## Remaining Work (Future Enhancements)
+
+### Production Readiness
+- [ ] Implement actual sandboxed JavaScript execution (quickjs-rs or similar)
+- [ ] Add real SQLite database integration for experiment data persistence
+- [ ] Implement streaming API responses for bulk inference
+- [ ] Add rate limiting and error recovery for LLM API calls
+- [ ] Implement copy-on-create model for analysis agent databases
+
+### UI/UX Enhancements
+- [ ] Drag-and-drop file reordering in pipeline editor
+- [ ] Keyboard shortcuts documentation
+- [ ] Project import/export functionality
+- [ ] Dark/light theme toggle
+- [ ] Responsive layout improvements
+
+### Testing
+- [ ] Unit tests for store actions
+- [ ] Integration tests for Tauri commands
+- [ ] E2E tests with Playwright
