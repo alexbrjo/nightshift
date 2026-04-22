@@ -19,7 +19,7 @@ export default function InferenceJobForm({ isOpen, onClose }: InferenceJobFormPr
       maxTokens: 1024,
     },
     sampling: {
-      strategy: 'single' as const,
+      strategy: 'single' as 'single' | 'random' | 'exhaustive',
       sampleCount: 10,
     },
     outputFormat: 'unstructured' as const,
@@ -138,7 +138,7 @@ export default function InferenceJobForm({ isOpen, onClose }: InferenceJobFormPr
             value={config.sampling.strategy}
             onChange={(e) => setConfig({
               ...config,
-              sampling: { ...config.sampling, strategy: e.target.value as any }
+              sampling: { ...config.sampling, strategy: e.target.value as 'single' | 'random' | 'exhaustive' }
             })}
             className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded focus:outline-none focus:border-primary-500"
           >

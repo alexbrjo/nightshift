@@ -4,6 +4,16 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::time::{Duration, sleep};
+use futures_util::stream::StreamExt;
+use rand::prelude::SliceRandom;
+
+async fn load_file_helper(state: &AppState, path: &str) -> Result<String> {
+    let project_path = state.project_path.as_ref()
+        .ok_or_else(|| crate::db::DbError::ProjectNotFound("No project".to_string()))?;
+    
+    let full_path = std::path::PathBuf::from(project_path).join(path);
+    Ok(tokio::fs::read_to_string(&full_path).await?)
+}
 
 #[derive(Debug, Deserialize)]
 pub struct InferenceJobConfig {
@@ -78,7 +88,7 @@ pub async fn run_inference_job(
         .build()?;
 
     // Load template
-    let template_content = load_file(&state, &config.template_path).await?;
+    let template_content = load_file_helper(&state, &config.template_path).await?;
     let mut env = Environment::new();
     env.add_template("prompt", &template_content)?;
     let template = env.get_template("prompt")?;
@@ -135,19 +145,11 @@ pub async fn run_inference_job(
     })
 }
 
-async fn load_file(state: &AppState, path: &str) -> Result<String> {
-    let project_path = state.project_path.as_ref()
-        .ok_or_else(|| crate::db::DbError::ProjectNotFound("No project".to_string()))?;
-    
-    let full_path = std::path::PathBuf::from(project_path).join(path);
-    Ok(tokio::fs::read_to_string(&full_path).await?)
-}
-
-async fn load_input_files(state: &AppState, paths: &[String]) -> Result<Vec<serde_json::Value>> {
+pub async fn load_input_files(state: &AppState, paths: &[String]) -> Result<Vec<serde_json::Value>> {
     let mut all_inputs = Vec::new();
 
     for path in paths {
-        let content = load_file(state, path).await?;
+        let content = load_file_helper(state, path).await?;
         let ext = std::path::Path::new(path)
             .extension()
             .and_then(|e| e.to_str())
@@ -228,7 +230,7 @@ async fn run_single_sample(
 
     // Render prompt
     let rendered_prompt = template.render(context! {
-        ..input_vars
+        input_vars => input_vars
     })?;
 
     // Build request
@@ -300,12 +302,20 @@ async fn run_single_sample(
         index,
         rendered_prompt: Some(rendered_prompt),
         raw_response: Some(raw_response.clone()),
-        parsed_content: parse_output(&raw_response, &provider.output_format)?,
+        parsed_content: parse_output(&raw_response, &config.output_format)?,
         token_usage,
         latency_ms,
         status: "completed".to_string(),
         error_message: None,
     })
+}
+
+async fn load_file_helper(state: &AppState, path: &str) -> Result<String> {
+    let project_path = state.project_path.as_ref()
+        .ok_or_else(|| crate::db::DbError::ProjectNotFound("No project".to_string()))?;
+    
+    let full_path = std::path::PathBuf::from(project_path).join(path);
+    Ok(tokio::fs::read_to_string(&full_path).await?)
 }
 
 fn parse_output(content: &str, format: &OutputFormat) -> Result<Option<String>> {

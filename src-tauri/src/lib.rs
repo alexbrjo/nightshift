@@ -1,11 +1,13 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod analysis_agent;
 mod commands;
 mod db;
 mod inference;
 mod js_executor;
 mod pipeline;
 
+use db::AppState;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -18,8 +20,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    let app_state = AppState::initialize().await?;
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
+        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::open_project,
             commands::read_file,
@@ -32,9 +37,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             commands::create_collection,
             commands::get_collection_items,
             commands::export_collection,
+            commands::delete_collection_item,
             commands::save_pipeline,
             commands::run_pipeline_trial,
             commands::run_pipeline,
+            commands::get_pipeline_run_progress,
+            commands::run_analysis_agent,
         ])
         .run(tauri::generate_context!())?;
 

@@ -1,10 +1,7 @@
-import { useState } from 'react'
-import { invoke } from '@tauri-apps/api/core'
 import { useProjectStore } from '../store/project'
 
 export default function Toolbar() {
-  const { isOpen, closeProject, openProject } = useProjectStore()
-  const [showOpenDialog, setShowOpenDialog] = useState(false)
+  const { isOpen, closeProject } = useProjectStore()
   
   const handleOpenProject = async () => {
     // In a real app, this would use Tauri's dialog API

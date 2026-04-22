@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useProjectStore } from '../store/project'
 import WorkflowEditor from './WorkflowEditor'
 
 export default function PipelinesPanel() {

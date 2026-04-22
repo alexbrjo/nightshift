@@ -1,17 +1,26 @@
 use sqlx::SqlitePool;
-use std::sync::Arc;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum DbError {
     #[error("Database error: {0}")]
     Sqlx(#[from] sqlx::Error),
+    #[error("IO error: {0}")]
+    Io(#[from] std::io::Error),
     #[error("Project not found: {0}")]
     ProjectNotFound(String),
     #[error("Collection not found: {0}")]
     CollectionNotFound(String),
     #[error("Job not found: {0}")]
     JobNotFound(String),
+    #[error("Template error: {0}")]
+    Template(#[from] minijinja::Error),
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("HTTP error: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("JS error: {0}")]
+    Js(#[from] rquickjs::Error),
 }
 
 pub type Result<T> = std::result::Result<T, DbError>;
@@ -23,6 +32,19 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub async fn initialize() -> Result<Self> {
+        let db_path = "sqlite:./nightshift.db?mode=rwc".to_string();
+
+        let pool = SqlitePool::connect(&db_path).await?;
+        
+        Self::migrate(&pool).await?;
+        
+        Ok(Self {
+            pool,
+            project_path: None,
+        })
+    }
+
     pub async fn new(project_path: Option<&str>) -> Result<Self> {
         let db_path = match project_path {
             Some(path) => format!("{}/.nightshift/db.sqlite", path),

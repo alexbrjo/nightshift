@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import { useProjectStore } from './store/project'
 import Sidebar from './components/Sidebar'
 import Editor from './components/Editor'
 import Toolbar from './components/Toolbar'

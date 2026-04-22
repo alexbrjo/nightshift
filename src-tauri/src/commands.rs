@@ -2,9 +2,8 @@ use crate::db::{AppState, DbError, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use sqlx::Row;
 use tauri::State;
-use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub struct OpenProjectParams {
@@ -34,7 +33,6 @@ pub async fn open_project(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "Untitled".to_string());
 
-    // Store project in database
     sqlx::query::<_>(
         r#"
         INSERT OR REPLACE INTO projects (path, name)
@@ -43,11 +41,13 @@ pub async fn open_project(
     )
     .bind(&params.path)
     .bind(&name)
-    .execute(&state.pool)
+    .execute(state.pool.clone().inner())
     .await?;
 
+    state.project_path = Some(params.path.clone());
+
     Ok(ProjectInfo {
-        id: 1, // TODO: Get actual ID from insert
+        id: 1,
         name,
         path: params.path,
     })
@@ -105,7 +105,6 @@ pub async fn write_file(
     
     let full_path = PathBuf::from(project_path).join(&params.path);
     
-    // Ensure parent directory exists
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -153,7 +152,7 @@ pub async fn list_directory(
     let project_path = state.project_path.as_ref()
         .ok_or_else(|| DbError::ProjectNotFound("No project open".to_string()))?;
     
-    let full_path = match path {
+    let full_path = match &path {
         Some(p) => PathBuf::from(project_path).join(p),
         None => PathBuf::from(project_path),
     };
@@ -165,10 +164,11 @@ pub async fn list_directory(
         let file_name = entry.file_name().to_string_lossy().to_string();
         
         if !file_name.starts_with('.') && file_name != ".nightshift" {
+            let current_path = path.clone().unwrap_or_default();
             entries.push(DirectoryEntry {
                 name: file_name.clone(),
                 path: format!("{}/{}", 
-                    path.as_deref().unwrap_or(""), 
+                    current_path, 
                     file_name
                 ),
                 is_directory: metadata.is_dir(),
@@ -197,7 +197,7 @@ pub async fn run_inference_job(
     state: State<'_, AppState>,
     params: RunInferenceJobParams,
 ) -> Result<crate::inference::InferenceJobResult> {
-    crate::inference::run_inference_job(Arc::new(state.into_inner()), params.config).await
+    crate::inference::run_inference_job(state.into_inner(), params.config).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -210,7 +210,7 @@ pub async fn run_js_action(
     state: State<'_, AppState>,
     params: RunJsActionParams,
 ) -> Result<crate::js_executor::JsActionResult> {
-    crate::js_executor::run_js_action(&state.into_inner(), params.config).await
+    crate::js_executor::run_js_action(state.into_inner(), params.config).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,7 +224,7 @@ pub async fn create_collection(
     state: State<'_, AppState>,
     params: CreateCollectionParams,
 ) -> Result<i64> {
-    let project_id = 1; // TODO: Get actual project ID
+    let project_id = 1;
     
     sqlx::query::<_>(
         r#"
@@ -235,17 +235,10 @@ pub async fn create_collection(
     .bind(project_id)
     .bind(&params.name)
     .bind(&params.schema_json.unwrap_or_default())
-    .execute(&state.pool)
+    .execute(state.pool.clone().inner())
     .await?;
 
-    Ok(1) // TODO: Return actual ID
-}
-
-#[derive(Debug, Serialize)]
-pub struct CollectionItem {
-    id: i64,
-    data_json: String,
-    created_at: String,
+    Ok(1)
 }
 
 #[tauri::command]
@@ -259,7 +252,7 @@ pub async fn get_collection_items(
     let page_size = page_size.unwrap_or(50);
     let offset = (page - 1) * page_size;
 
-    let items = sqlx::query_as::<_, CollectionItem>(
+    let rows = sqlx::query::<_>(
         r#"
         SELECT id, data_json, created_at
         FROM collection_items
@@ -271,15 +264,23 @@ pub async fn get_collection_items(
     .bind(collection_id)
     .bind(page_size)
     .bind(offset)
-    .fetch_all(&state.pool)
+    .fetch_all(state.pool.clone().inner())
     .await?;
 
     let total: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM collection_items WHERE collection_id = ?",
     )
     .bind(collection_id)
-    .fetch_one(&state.pool)
+    .fetch_one(state.pool.clone().inner())
     .await?;
+
+    let items: Vec<serde_json::Value> = rows.iter().map(|row| {
+        serde_json::json!({
+            "id": row.get::<i64, _>("id"),
+            "data_json": row.get::<String, _>("data_json"),
+            "created_at": row.get::<String, _>("created_at"),
+        })
+    }).collect();
 
     Ok(serde_json::json!({
         "items": items,
@@ -301,29 +302,28 @@ pub async fn export_collection(
     state: State<'_, AppState>,
     params: ExportCollectionParams,
 ) -> Result<String> {
-    let items = sqlx::query::<_>(
+    let rows = sqlx::query::<_>(
         "SELECT data_json FROM collection_items WHERE collection_id = ?",
     )
     .bind(params.collection_id)
-    .fetch_all(&state.pool)
+    .fetch_all(state.pool.clone().inner())
     .await?;
 
     match params.format.as_str() {
         "jsonl" => {
             let mut output = String::new();
-            for row in items {
-                let data: (String,) = row.try_into()?;
-                output.push_str(&data.0);
+            for row in rows {
+                let data: String = row.get("data_json");
+                output.push_str(&data);
                 output.push('\n');
             }
             Ok(output)
         }
         "csv" => {
-            // Simplified CSV export - would need proper header detection in production
             let mut output = String::new();
-            for row in items {
-                let data: (String,) = row.try_into()?;
-                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data.0) {
+            for row in rows {
+                let data: String = row.get("data_json");
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&data) {
                     if let Some(obj) = value.as_object() {
                         let values: Vec<String> = obj.values()
                             .map(|v| v.to_string())
@@ -350,7 +350,7 @@ pub async fn save_pipeline(
     state: State<'_, AppState>,
     params: SavePipelineParams,
 ) -> Result<i64> {
-    crate::pipeline::save_pipeline(&state.into_inner(), params.name, params.definition_yaml).await
+    crate::pipeline::save_pipeline(state.into_inner(), params.name, params.definition_yaml).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -364,7 +364,7 @@ pub async fn run_pipeline_trial(
     state: State<'_, AppState>,
     params: RunPipelineTrialParams,
 ) -> Result<crate::pipeline::PipelineRunResult> {
-    crate::pipeline::run_pipeline_trial(&state.into_inner(), params.definition, params.batch_size).await
+    crate::pipeline::run_pipeline_trial(state.into_inner(), params.definition, params.batch_size).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -377,7 +377,81 @@ pub async fn run_pipeline(
     state: State<'_, AppState>,
     params: RunPipelineParams,
 ) -> Result<crate::pipeline::PipelineRunResult> {
-    crate::pipeline::run_pipeline(&state.into_inner(), params.definition).await
+    crate::pipeline::run_pipeline(state.into_inner(), params.definition).await
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DeleteCollectionItemParams {
+    collection_id: i64,
+    item_id: i64,
+}
+
+#[tauri::command]
+pub async fn delete_collection_item(
+    state: State<'_, AppState>,
+    params: DeleteCollectionItemParams,
+) -> Result<bool> {
+    sqlx::query::<_>(
+        r#"
+        DELETE FROM collection_items
+        WHERE id = ? AND collection_id = ?
+        "#,
+    )
+    .bind(params.item_id)
+    .bind(params.collection_id)
+    .execute(state.pool.clone().inner())
+    .await?;
+
+    Ok(true)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RunAnalysisAgentParams {
+    config: crate::analysis_agent::AnalysisAgentConfig,
+}
+
+#[tauri::command]
+pub async fn run_analysis_agent(
+    state: State<'_, AppState>,
+    params: RunAnalysisAgentParams,
+) -> Result<crate::analysis_agent::AnalysisAgentResult> {
+    crate::analysis_agent::run_analysis_agent(state.into_inner(), params.config).await
+}
+
+#[derive(Debug, Serialize)]
+pub struct PipelineRunProgress {
+    pub run_id: i64,
+    pub current_stage: String,
+    pub progress: f64,
+    pub status: String,
+}
+
+#[tauri::command]
+pub async fn get_pipeline_run_progress(
+    state: State<'_, AppState>,
+    run_id: i64,
+) -> Result<Option<PipelineRunProgress>> {
+    let row = sqlx::query::<_>(
+        r#"
+        SELECT 
+            id as run_id,
+            COALESCE(current_stage, '') as current_stage,
+            progress,
+            status
+        FROM pipeline_runs
+        WHERE id = ?
+        "#,
+    )
+    .bind(run_id)
+    .fetch_optional(state.pool.clone().inner())
+    .await?;
+
+    Ok(row.map(|r| PipelineRunProgress {
+        run_id: r.get("run_id"),
+        current_stage: r.get("current_stage"),
+        progress: r.get("progress"),
+        status: r.get("status"),
+    }))
 }
 
 fn detect_language(path: &str) -> String {
@@ -386,12 +460,12 @@ fn detect_language(path: &str) -> String {
         .unwrap_or("");
     
     match ext {
-        "jinja" | "jinja2" | "tpl" => "jinja",
-        "json" | "jsonl" => "json",
-        "js" | "jsx" | "ts" | "tsx" => "javascript",
-        "csv" => "csv",
-        "yaml" | "yml" => "yaml",
-        "md" => "markdown",
-        _ => "plaintext",
+        "jinja" | "jinja2" | "tpl" => "jinja".to_string(),
+        "json" | "jsonl" => "json".to_string(),
+        "js" | "jsx" | "ts" | "tsx" => "javascript".to_string(),
+        "csv" => "csv".to_string(),
+        "yaml" | "yml" => "yaml".to_string(),
+        "md" => "markdown".to_string(),
+        _ => "plaintext".to_string(),
     }
 }

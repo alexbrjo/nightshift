@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useProjectStore } from '../store/project'
 
 interface AgentStep {
   id: string
@@ -10,6 +11,9 @@ interface AgentStep {
 export default function AnalysisAgent() {
   const [experimentId, setExperimentId] = useState('')
   const [isRunning, setIsRunning] = useState(false)
+  const [analysisResult, setAnalysisResult] = useState<string | null>(null)
+  const runAnalysisAgent = useProjectStore(state => state.runAnalysisAgent)
+  
   const [steps, setSteps] = useState<AgentStep[]>([
     { id: 'query', name: 'Run Analysis Query', status: 'pending' },
     { id: 'supplement', name: 'Supplement with Anecdotes', status: 'pending' },
@@ -21,25 +25,37 @@ export default function AnalysisAgent() {
     if (!experimentId) return
     
     setIsRunning(true)
+    setAnalysisResult(null)
     
-    for (let i = 0; i < steps.length; i++) {
-      setSteps(prev => prev.map((step, idx) => 
-        idx === i ? { ...step, status: 'running' } : step
-      ))
+    // Reset steps
+    setSteps(prev => prev.map(step => ({ ...step, status: 'pending', output: undefined })))
+    
+    try {
+      const result = await runAnalysisAgent(experimentId)
       
-      // Simulate step execution
-      await new Promise(resolve => setTimeout(resolve, 2000))
+      // Update steps based on result
+      if (result.steps) {
+        setSteps(result.steps.map((step: any, index: number) => ({
+          id: ['query', 'supplement', 'summary', 'proofread'][index] || step.step_name.toLowerCase().replace(/\s+/g, ''),
+          name: step.step_name,
+          status: step.status === 'completed' ? 'completed' : step.status,
+          output: step.output
+        })))
+      }
       
-      setSteps(prev => prev.map((step, idx) => 
-        idx === i ? { ...step, status: 'completed', output: 'Step completed' } : step
+      setAnalysisResult(result.analysis_md)
+    } catch (error) {
+      console.error('Failed to run analysis agent:', error)
+      setSteps(prev => prev.map(step => 
+        step.status === 'running' ? { ...step, status: 'error' } : step
       ))
+    } finally {
+      setIsRunning(false)
     }
-    
-    setIsRunning(false)
   }
   
   return (
-    <div className="p-4 max-w-2xl mx-auto">
+    <div className="p-4 max-w-4xl mx-auto">
       <h2 className="text-xl font-semibold mb-4">Analysis Agent</h2>
       
       <div className="mb-6">
@@ -71,6 +87,11 @@ export default function AnalysisAgent() {
               }`}>
                 {step.status}
               </div>
+              {step.output && (
+                <pre className="mt-2 text-xs bg-gray-900 p-2 rounded overflow-auto max-h-32">
+                  {step.output}
+                </pre>
+              )}
             </div>
             
             {step.status === 'running' && (
@@ -88,9 +109,12 @@ export default function AnalysisAgent() {
         {isRunning ? 'Running Analysis...' : 'Run Analysis Agent'}
       </button>
       
-      {steps[steps.length - 1].status === 'completed' && (
-        <div className="mt-4 p-3 bg-green-900/20 border border-green-700 rounded">
-          <p className="text-green-400 text-sm">Analysis complete! Check analysis.md for results.</p>
+      {analysisResult && (
+        <div className="mt-6">
+          <h3 className="text-lg font-semibold mb-2">Analysis Report</h3>
+          <div className="bg-gray-800 border border-gray-700 rounded p-4 overflow-auto max-h-96">
+            <pre className="text-sm whitespace-pre-wrap">{analysisResult}</pre>
+          </div>
         </div>
       )}
     </div>

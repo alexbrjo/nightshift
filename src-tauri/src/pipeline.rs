@@ -1,14 +1,14 @@
 use crate::db::{AppState, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use sqlx::Row;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct PipelineDefinition {
     pub name: String,
     pub stages: Vec<PipelineStage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct PipelineStage {
     pub id: String,
     pub name: String,
@@ -18,7 +18,7 @@ pub struct PipelineStage {
     pub output_schema: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum StageType {
     Inference,
@@ -28,7 +28,7 @@ pub enum StageType {
     Aggregate,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct PipelineRunResult {
     pub run_id: String,
     pub status: String,
@@ -36,7 +36,7 @@ pub struct PipelineRunResult {
     pub metrics: PipelineMetrics,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct StageRunResult {
     pub stage_id: String,
     pub name: String,
@@ -46,7 +46,7 @@ pub struct StageRunResult {
     pub error_message: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct PipelineMetrics {
     pub total_duration_ms: u64,
     pub total_tokens: u32,
@@ -59,7 +59,7 @@ pub async fn save_pipeline(
     name: String,
     definition_yaml: String,
 ) -> Result<i64> {
-    let project_id = 1; // TODO: Get actual project ID
+    let project_id = 1;
     
     sqlx::query::<_>(
         r#"
@@ -70,10 +70,10 @@ pub async fn save_pipeline(
     .bind(project_id)
     .bind(&name)
     .bind(&definition_yaml)
-    .execute(&state.pool)
+    .execute(state.pool.clone().inner())
     .await?;
 
-    Ok(1) // TODO: Return actual ID
+    Ok(1)
 }
 
 pub async fn run_pipeline_trial(
@@ -182,7 +182,6 @@ async fn run_single_stage_full(
 
     match stage.stage_type {
         StageType::Inference => {
-            // Run inference job
             let config: crate::inference::InferenceJobConfig = 
                 serde_json::from_value(stage.config.clone())?;
             
@@ -201,7 +200,6 @@ async fn run_single_stage_full(
             })
         }
         StageType::JsAction => {
-            // Run JS action
             let config: crate::js_executor::JsActionConfig = 
                 serde_json::from_value(stage.config.clone())?;
             
@@ -217,7 +215,6 @@ async fn run_single_stage_full(
             })
         }
         _ => {
-            // Placeholder for other stage types
             Ok(StageRunResult {
                 stage_id: stage.id.clone(),
                 name: stage.name.clone(),

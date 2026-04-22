@@ -3,7 +3,7 @@ import Editor from '@monaco-editor/react'
 import { useProjectStore } from '../store/project'
 
 export default function CodeEditor() {
-  const { currentFile, writeFile } = useProjectStore()
+  const { currentFile } = useProjectStore()
   const editorRef = useRef<any>(null)
   const lastSavedContent = useRef<string>('')
   
@@ -11,7 +11,7 @@ export default function CodeEditor() {
     lastSavedContent.current = currentFile?.content || ''
   }, [currentFile])
   
-  const handleEditorChange = (value: string | undefined) => {
+  const handleEditorChange = (_value: string | undefined) => {
     // Auto-save with debounce would go here
     if (editorRef.current) {
       // Could implement auto-save logic
