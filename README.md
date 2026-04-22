@@ -25,3 +25,56 @@ Chain jobs together in a visual workflow editor where the output of one stage fe
 ## Analysis Agents
 
 Post-experiment evaluation agents walk through a structured workflow: running analysis queries, supplementing quantitative metrics with anecdotes, writing a summary, and proof-reading their work. Each agent runs in a sandboxed environment with a database scoped to only the current experiment. A copy-on-create model clones relevant tables (schemas, input data, intermediate results) into a per-run database. The agent reads and writes freely inside that boundary but cannot see or access data from other runs, ensuring complete isolation. Results are written to a single `analysis.md` file. Before cleanup, agents can export their findings for cross-run or suite-level meta-analysis.
+
+## Development Setup
+
+### Prerequisites
+
+- Node.js 18+
+- Rust toolchain (https://rustup.rs)
+
+### Installation
+
+```bash
+# Install dependencies
+npm install
+
+# Start development server
+npm run tauri dev
+
+# Build for production
+npm run tauri build
+```
+
+## Project Structure
+
+```
+nightshift/
+├── src/                    # React frontend
+│   ├── components/         # UI components
+│   ├── store/             # Zustand state management
+│   └── App.tsx            # Main app component
+├── src-tauri/             # Rust backend
+│   ├── src/
+│   │   ├── commands.rs    # Tauri command handlers
+│   │   ├── db.rs          # Database schema & migrations
+│   │   ├── inference.rs   # LLM inference engine
+│   │   ├── js_executor.rs # Sandboxed JS execution
+│   │   └── pipeline.rs    # Pipeline orchestration
+│   └── tauri.conf.json    # Tauri configuration
+├── package.json           # Frontend dependencies
+├── Cargo.toml             # Backend dependencies
+└── progress.txt           # Implementation progress
+```
+
+## Tech Stack
+
+- **Framework**: Tauri 2 (Rust + React)
+- **Backend**: Rust with tokio, sqlx, minijinja, rquickjs
+- **Frontend**: React 18, TypeScript, Tailwind CSS
+- **Editor**: Monaco Editor
+- **Database**: SQLite
+
+## License
+
+MIT
