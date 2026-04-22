@@ -1,0 +1,12 @@
+[
+  {
+    "title": "Sample Analysis 1",
+    "content": "This is sample content for testing the inference pipeline.",
+    "tags": ["test", "sample", "demo"]
+  },
+  {
+    "title": "Sample Analysis 2", 
+    "content": "Another example entry with different data.",
+    "tags": ["example", "data"]
+  }
+]

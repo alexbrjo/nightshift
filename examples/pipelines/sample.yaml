@@ -1,0 +1,46 @@
+name: Sample Analysis Pipeline
+description: A sample pipeline demonstrating inference and transformation stages
+
+stages:
+  - id: stage-1
+    name: Generate Analysis
+    type: inference
+    config:
+      template_path: prompts/analysis.jinja
+      input_files:
+        - data/sample.json
+      provider:
+        base_url: https://api.openai.com/v1/chat/completions
+        model: gpt-4o-mini
+        temperature: 0.7
+        max_tokens: 500
+      sampling:
+        strategy: exhaustive
+    input_schema:
+      type: object
+      properties:
+        title: {type: string}
+        content: {type: string}
+        tags: {type: array, items: {type: string}}
+    output_schema:
+      type: object
+      properties:
+        analysis: {type: string}
+        insights: {type: array, items: {type: string}}
+
+  - id: stage-2
+    name: Transform Results
+    type: js_action
+    config:
+      script_path: scripts/transform.js
+    input_schema:
+      type: object
+      properties:
+        analysis: {type: string}
+        insights: {type: array, items: {type: string}}
+    output_schema:
+      type: object
+      properties:
+        analysis: {type: string}
+        insights: {type: array, items: {type: string}}
+        processed: {type: boolean}
