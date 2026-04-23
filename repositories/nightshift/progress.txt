@@ -1,0 +1,27 @@
+# Nightshift Implementation Progress
+
+## Tasks
+- [ ] Setup Project Structure (Electron + React + SQLite)
+- [ ] Implement File System Project Management (Open directory, project store)
+- [ ] Build Code Editor with Syntax Highlighting (Jinja2, JSON, JS, CSV, YAML)
+- [ ] Implement Bulk Inference Engine
+    - [ ] Jinja Template rendering
+    - [ ] OpenAI-compatible API integration
+    - [ ] Sampling strategies (single, random, exhaustive)
+    - [ ] Output validation (JSON Schema)
+    - [ ] Asynchronous job handling & streaming
+- [ ] Implement Bulk JavaScript Actions (Sandboxed execution)
+- [ ] Build Collections View (Table view, pagination, filtering, export)
+- [ ] Implement Experiment Pipelines
+    - [ ] Visual Workflow Editor
+    - [ ] YAML pipeline definitions
+    - [ ] Trial runs logic
+    - [ ] Execution live view
+- [ ] Implement Analysis Agents
+    - [ ] Sandboxed agent environment
+    - [ ] Database scoping/cloning
+    - [ ] `analysis.md` generation
+- [ ] Final Review and Polish
+
+## Current Status
+Starting implementation from scratch.
