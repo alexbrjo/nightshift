@@ -1,0 +1,67 @@
+# Nightshift Implementation Progress
+
+## Branch: oneshot/minimax-m2.7-Q3-K-S
+
+## Completed:
+- [x] Project initialization with Electron + React + TypeScript
+- [x] Vite build configuration with electron plugins  
+- [x] Main process setup with logging (electron-log)
+- [x] IPC communication via preload script
+- [x] File system operations (readDir, readFile, writeFile)
+- [x] Project sidebar with file tree navigation
+- [x] Monaco editor integration for JSON, YAML, JavaScript, Jinja2, CSV
+- [x] Collections view component
+- [x] Jobs view component  
+- [x] Pipelines view component
+- [x] Tab management for open files
+- [x] Auto-save indicator and save functionality
+- [x] SQLite per-project store (better-sqlite3)
+  - Collections table
+  - Collection items table
+  - Jobs table
+  - Pipelines table
+  - Experiments table
+- [x] Bulk inference system (src/services/inference.ts)
+  - Template rendering with {{variable}} syntax
+  - OpenAI-compatible API calls
+  - Sampling strategies: single, random, exhaustive
+  - Token usage and latency metrics
+  - Error handling and recovery
+- [x] Visual pipeline workflow editor (src/components/PipelineEditor.tsx)
+  - Drag-and-drop reordering of stages
+  - Add/remove stages
+  - Stage types: inference, js-action, evaluation
+- [x] Analysis agents system (src/services/agents.ts)
+  - Structured analysis workflow
+  - Quantitative + qualitative analysis
+
+## Key Files:
+- electron/main.ts - Main process with IPC handlers and database init
+- electron/preload.ts - Context bridge API
+- electron/database.ts - SQLite operations via better-sqlite3
+- src/App.tsx - Main React app component
+- src/components/FileTree.tsx - File browser sidebar
+- src/components/EditorPanel.tsx - Monaco editor wrapper
+- src/components/PipelineEditor.tsx - Visual pipeline workflow editor
+- src/services/inference.ts - Bulk inference and JS actions
+- src/services/agents.ts - Analysis agent system
+- src/types/index.ts - TypeScript type definitions
+
+## Build Instructions:
+```bash
+npm install    # Install dependencies
+npm run dev    # Start development server with Electron
+```
+
+## Architecture Notes:
+- Desktop-first: Uses Electron for native desktop features
+- Filesystem as source of truth: All content lives in project files
+- SQLite store: Persists experiment data and metadata per-project
+- OpenAI-compatible inference: Works with any OpenAI-like API provider
+- Sandboxed agents: Each analysis runs in isolated scope
+
+## TODO:
+- [ ] Add JSON schema validation for collection items
+- [ ] Implement trial run mode for pipelines
+- [ ] Add live streaming view during job execution
+- [ ] Export to CSV/JSONL from collections UI
