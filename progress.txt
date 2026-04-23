@@ -4,46 +4,48 @@
 
 ## Completed:
 - [x] Project initialization with Electron + React + TypeScript
-- [x] Vite build configuration with electron plugins  
+- [x] Vite build configuration with electron plugins
 - [x] Main process setup with logging (electron-log)
 - [x] IPC communication via preload script
 - [x] File system operations (readDir, readFile, writeFile)
 - [x] Project sidebar with file tree navigation
 - [x] Monaco editor integration for JSON, YAML, JavaScript, Jinja2, CSV
-- [x] Collections view component
-- [x] Jobs view component  
-- [x] Pipelines view component
+- [x] Collections view component + "New" button to create collections
+- [x] Jobs view component + "New" button to create jobs
+- [x] Pipelines view component + "New" button to create pipelines
 - [x] Tab management for open files
 - [x] Auto-save indicator and save functionality
 - [x] SQLite per-project store (better-sqlite3)
-  - Collections table
-  - Collection items table
-  - Jobs table
-  - Pipelines table
-  - Experiments table
+  - Collections table, Collection items table, Jobs table, Pipelines table, Experiments table
 - [x] Bulk inference system (src/services/inference.ts)
   - Template rendering with {{variable}} syntax
   - OpenAI-compatible API calls
   - Sampling strategies: single, random, exhaustive
-  - Token usage and latency metrics
-  - Error handling and recovery
-- [x] Visual pipeline workflow editor (src/components/PipelineEditor.tsx)
-  - Drag-and-drop reordering of stages
-  - Add/remove stages
-  - Stage types: inference, js-action, evaluation
+  - Token usage and latency metrics, Error handling
+- [x] Visual pipeline workflow editor (PipelineEditor.tsx) - drag-drop stages, add/remove
 - [x] Analysis agents system (src/services/agents.ts)
-  - Structured analysis workflow
-  - Quantitative + qualitative analysis
+- [x] **NEW** Job execution UI: Run button in EditorPanel for .job.json files
+  - Parses job config from file content
+  - Loads input data from referenced files
+  - Executes inference with progress bar
+  - Saves results as .collection.json on completion
+  - Updates job status to 'completed'
+- [x] **NEW** Pipeline execution engine (src/services/pipeline.ts)
+  - Sequential stage execution: inference, js-action, evaluation
+  - Stage outputs feed into next stage inputs
+  - Progress callbacks for UI updates
+- [x] **NEW** Live progress bar during job/pipeline runs
 
 ## Key Files:
 - electron/main.ts - Main process with IPC handlers and database init
 - electron/preload.ts - Context bridge API
 - electron/database.ts - SQLite operations via better-sqlite3
-- src/App.tsx - Main React app component
+- src/App.tsx - Main React app, file creation logic
 - src/components/FileTree.tsx - File browser sidebar
-- src/components/EditorPanel.tsx - Monaco editor wrapper
+- src/components/EditorPanel.tsx - Monaco editor + Run Job/Pipeline buttons
 - src/components/PipelineEditor.tsx - Visual pipeline workflow editor
-- src/services/inference.ts - Bulk inference and JS actions
+- src/services/inference.ts - Bulk LLM inference and template rendering
+- src/services/pipeline.ts - Pipeline execution engine (NEW)
 - src/services/agents.ts - Analysis agent system
 - src/types/index.ts - TypeScript type definitions
 
@@ -61,7 +63,8 @@ npm run dev    # Start development server with Electron
 - Sandboxed agents: Each analysis runs in isolated scope
 
 ## TODO:
-- [ ] Add JSON schema validation for collection items
-- [ ] Implement trial run mode for pipelines
-- [ ] Add live streaming view during job execution
+- [x] ~~Add JSON schema validation for collection items~~ (low priority)
+- [ ] Trial run mode for pipelines (single item pass-through)
+- [x] ~~Add live streaming view during job execution~~ (progress bar added)
 - [ ] Export to CSV/JSONL from collections UI
+- [ ] Better YAML parsing in pipeline executor

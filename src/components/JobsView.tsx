@@ -4,6 +4,7 @@ import type { Job } from '../types'
 interface Props {
   projectPath: string
   onItemOpen: (id: string) => void
+  onCreate: () => void
 }
 
 function JobsView({ projectPath, onItemOpen }: Props) {
@@ -52,7 +53,10 @@ function JobsView({ projectPath, onItemOpen }: Props) {
 
   return (
     <div>
-      <h3 style={{ marginBottom: 16 }}>Jobs</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h3>Jobs</h3>
+        <button className="btn btn-primary" onClick={onCreate}>+ New</button>
+      </div>
       {jobs.length === 0 ? (
         <p style={{ color: '#8b949e' }}>No jobs yet. Create a job configuration to start bulk inference.</p>
       ) : (

@@ -4,6 +4,7 @@ import type { Pipeline } from '../types'
 interface Props {
   projectPath: string
   onItemOpen: (id: string) => void
+  onCreate: () => void
 }
 
 function PipelinesView({ projectPath, onItemOpen }: Props) {
@@ -50,7 +51,10 @@ function PipelinesView({ projectPath, onItemOpen }: Props) {
 
   return (
     <div>
-      <h3 style={{ marginBottom: 16 }}>Pipelines</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h3>Pipelines</h3>
+        <button className="btn btn-primary" onClick={onCreate}>+ New</button>
+      </div>
       {pipelines.length === 0 ? (
         <p style={{ color: '#8b949e' }}>No pipelines yet. Chain jobs together in a workflow.</p>
       ) : (

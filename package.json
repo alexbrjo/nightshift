@@ -20,6 +20,7 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
     "@types/better-sqlite3": "^7.6.12",
     "@types/js-yaml": "^4.0.9",
     "@types/react": "^18.3.17",
@@ -35,8 +36,15 @@
   "build": {
     "appId": "com.nightshift.app",
     "productName": "Nightshift",
-    "directories": {"output": "release"},
-    "files": ["dist/**/*", "dist-electron/**/*"],
-    "mac": {"category": "public.app-category.developer-tools"}
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools"
+    }
   }
 }

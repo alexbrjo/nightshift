@@ -12,6 +12,10 @@ export interface Tab {
   type: 'file' | 'collection' | 'job' | 'pipeline'
 }
 
+function generateId(): string {
+  return `Untitled-${Date.now()}`
+}
+
 function App() {
   const [projectPath, setProjectPath] = useState<string | null>(null)
   const [tabs, setTabs] = useState<Tab[]>([])
@@ -64,6 +68,49 @@ function App() {
     return 'file'
   }
 
+  const createFile = async (type: 'collection' | 'job' | 'pipeline') => {
+    if (!projectPath) return
+    const id = generateId()
+    let filename: string, content: string
+
+    if (type === 'collection') {
+      filename = `${id}.collection.json`
+      content = JSON.stringify({
+        id,
+        name: `Collection ${Date.now()}`,
+        createdAt: Date.now(),
+        items: []
+      }, null, 2)
+    } else if (type === 'job') {
+      filename = `${id}.job.json`
+      content = JSON.stringify({
+        id,
+        name: `Job ${Date.now()}`,
+        templatePath: '',
+        inputFiles: [],
+        samplingStrategy: 'single',
+        provider: {
+          type: 'openai-compatible',
+          baseUrl: 'https://api.openai.com/v1',
+          apiKey: '',
+          model: 'gpt-4o-mini',
+          temperature: 0.7,
+          maxTokens: 1024
+        },
+        outputFormat: 'json',
+        status: 'pending',
+        results: []
+      }, null, 2)
+    } else {
+      filename = `${id}.pipeline.yaml`
+      content = `id: ${id}\nname: Pipeline ${Date.now()}\nstages: []\nstatus: draft\n`
+    }
+
+    const filePath = `${projectPath}/${filename}`
+    await window.electronAPI.writeFile(filePath, content)
+    openFile(filePath, filename)
+  }
+
   const activeTab = tabs.find(t => t.id === activeTabId)
 
   return (
@@ -105,9 +152,27 @@ function App() {
         
         {(view === 'collections' || view === 'jobs' || view === 'pipelines') && projectPath && (
           <div style={{ padding: 16, fontSize: 13 }}>
-            {view === 'collections' && <CollectionsView projectPath={projectPath} onItemOpen={(id) => openFile(id, `${id}.collection.json`)} />}
-            {view === 'jobs' && <JobsView projectPath={projectPath} onItemOpen={(id) => openFile(id, `${id}.job.json`)} />}
-            {view === 'pipelines' && <PipelinesView projectPath={projectPath} onItemOpen={(id) => openFile(id, `${id}.pipeline.yaml`)} />}
+            {view === 'collections' && (
+              <CollectionsView
+                projectPath={projectPath}
+                onItemOpen={(id) => openFile(`${projectPath}/${id}.collection.json`, `${id}.collection.json`)}
+                onCreate={() => createFile('collection')}
+              />
+            )}
+            {view === 'jobs' && (
+              <JobsView
+                projectPath={projectPath}
+                onItemOpen={(id) => openFile(`${projectPath}/${id}.job.json`, `${id}.job.json`)}
+                onCreate={() => createFile('job')}
+              />
+            )}
+            {view === 'pipelines' && (
+              <PipelinesView
+                projectPath={projectPath}
+                onItemOpen={(id) => openFile(`${projectPath}/${id}.pipeline.yaml`, `${id}.pipeline.yaml`)}
+                onCreate={() => createFile('pipeline')}
+              />
+            )}
           </div>
         )}
       </div>

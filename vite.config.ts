@@ -10,7 +10,12 @@ export default defineConfig({
       {
         entry: 'electron/main.ts',
         vite: {
-          build: { outDir: 'dist-electron' }
+          build: {
+            outDir: 'dist-electron',
+            rollupOptions: {
+              external: ['better-sqlite3']
+            }
+          }
         }
       },
       {

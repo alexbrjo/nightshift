@@ -4,6 +4,7 @@ import type { Collection } from '../types'
 interface Props {
   projectPath: string
   onItemOpen: (id: string) => void
+  onCreate: () => void
 }
 
 function CollectionsView({ projectPath, onItemOpen }: Props) {
@@ -43,7 +44,10 @@ function CollectionsView({ projectPath, onItemOpen }: Props) {
 
   return (
     <div>
-      <h3 style={{ marginBottom: 16 }}>Collections</h3>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <h3>Collections</h3>
+        <button className="btn btn-primary" onClick={onCreate}>+ New</button>
+      </div>
       {collections.length === 0 ? (
         <p style={{ color: '#8b949e' }}>No collections yet. Run a bulk inference job to create one.</p>
       ) : (
