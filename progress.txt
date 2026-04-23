@@ -1,0 +1,61 @@
+# Nightshift Development Progress
+
+## Setup & Initialization
+- [x] Created project structure
+- [x] Set up Python backend with FastAPI
+- [x] Created database models (Project, Job, Collection, Pipeline, Analysis)
+- [x] Initialized SQLite database with SQLAlchemy
+- [x] Configured CORS and routing
+
+## Backend Implementation
+- [x] Created main application entry point
+- [x] Implemented config management
+- [x] Implemented database session management
+- [x] Created API routers for all endpoints:
+  - Projects (CRUD, file listing)
+  - Jobs (create, run, samples)
+  - Collections (create, export JSONL/CSV, pagination)
+  - Pipelines (stages, run, trial runs)
+  - Analyses (create, agent workflows)
+
+## Code Structure
+- src/backend/main.py - Application entry point
+- src/backend/config.py - Configuration management
+- src/backend/database.py - Database configuration
+- src/backend/models.py - SQLAlchemy models
+- src/backend/routers/api.py - API routes
+- src/backend/routers/views.py - View routes
+- src/backend/routers/projects.py - Project endpoints
+- src/backend/routers/jobs.py - Job endpoints
+- src/backend/routers/collections.py - Collection endpoints
+- src/backend/routers/pipelines.py - Pipeline endpoints
+- src/backend/routers/analyses.py - Analysis endpoints
+
+## Frontend (Minimal Static)
+- src/backend/static/index.html - Basic UI placeholder
+  - Project listing page
+  - Navigation sidebar
+
+## TODOs
+- [ ] Implement JavaScript sandboxing (e.g., with Pyodide or isolate)
+- [ ] Add OpenAI API integration for bulk inference
+- [ ] Implement Jinja2 template handling for prompt templates
+- [ ] Create full React frontend with Vite
+  - Project dashboard
+  - Job configuration panel
+  - Collection viewer with filtering
+  - Pipeline visual editor
+  - Analysis agent interface
+- [ ] Add streaming support for real-time job updates
+- [ ] Implement rate limiting and error recovery
+- [ ] Add file upload/selection UI
+- [ ] Create YAML pipeline editor
+- [ ] Implement sandboxed analysis agent database isolation
+- [ ] Add unit tests and integration tests
+
+## Next Steps
+1. Create React frontend with Vite
+2. Implement full UI components for each section
+3. Add real API calls to backend endpoints
+4. Test with sample data
+5. Deploy and verify functionality
