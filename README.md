@@ -1,27 +1,157 @@
-# nightshift
+# Nightshift
 
 A desktop-first experimentation platform for evaluating LLM-generated context. Open any directory as a project and work directly with files including Jinja prompt templates, JSON schemas, CSV/JSON/JSONL data, JavaScript scripts, and YAML pipeline definitions.
 
-## Getting Started
+## Current Status: In Progress (~75-80% complete)
 
-Nightshift treats your filesystem as the source of truth. Drop a folder into the app and it becomes a project, with a per-project SQLite store handling experiment-generated data and all editor content and pipeline definitions living as files. The built-in code editor provides syntax highlighting and validation for Jinja2, JSON, JavaScript, CSV, and YAML, with undo/redo and auto-save across all panels.
+This is an active implementation. Core features are functional but some高级 features are still being built.
 
-## Bulk Inference
+---
 
-Configure jobs by pairing a Jinja template with optional input files to populate variables. Choose from single, random, or exhaustive sampling strategies, and pre-render URLs for RAG or external API integration. Select any OpenAI-compatible provider and configure temperature, token limits, and thinking budget. Output can be unstructured, plain JSON, or validated against a JSON Schema. Jobs run asynchronously in the background with real-time streaming, rate limit handling, and error recovery. Each sample produces rendered prompts, raw responses, parsed content, and token usage and latency metrics, with visual indicators for streaming, completed, and errored states.
+## Running
 
-## Bulk JavaScript Actions
+```bash
+npm install
+npx electron-builder install-app-deps   # rebuilds native modules for Electron
+npm run dev                             # development mode with hot reload
+```
 
-Apply sandboxed JavaScript functions to datasets in the same job model as bulk inference, returning structured JSON results. This lets you reshape, statically eval, or enrich data without leaving the platform.
+Production build:
 
-## Collections
+```bash
+npm run build    # typecheck → vite build → electron-builder
+```
 
-Bulk inference output is organized into collections, which are batch-backed tables with automatic column detection from JSON Schema. Navigate large datasets with pagination at 50 items per page. Filter by search, delete individual items, and export to JSONL or CSV. Apply JavaScript bulk actions to reshape data before exporting.
+---
 
-## Experiment Pipelines
+## Architecture
 
-Chain jobs together in a visual workflow editor where the output of one stage feeds the input of the next. JSON schema definitions track the contracts between stages, and the final pipeline is saved as a YAML definition. Before committing to a full run, trial runs execute a small batch per experimental group to validate prompts, scripts, and evaluation configurations. During execution, a live view shows each stage's progress, aggregate metrics, and streamed results on a single page.
+```
+nightshift/
+├── electron/
+│   ├── main.ts          # Main process: window management, IPC handlers
+│   ├── preload.ts       # Context bridge (file ops, dialogs, database)
+│   └── database.ts      # SQLite via better-sqlite3 (collections CRUD)
+└── src/
+    ├── App.tsx           # Root: project loading, tab/view management
+    ├── components/
+    │   ├── EditorPanel.tsx     # Monaco editor + run job/pipeline buttons
+    │   ├── FileTree.tsx        # Sidebar file browser
+    │   ├── CollectionsView.tsx # Collection list view
+    │   ├── JobsView.tsx        # Job list view
+    │   ├── PipelinesView.tsx   # Pipeline list view
+    │   └── PipelineEditor.tsx  # Visual pipeline workflow editor (not wired)
+    └── services/
+        ├── inference.ts  # Bulk LLM inference engine
+        ├── pipeline.ts   # Sequential pipeline stage executor
+        └── agents.ts     # Analysis agent system (stub, not integrated)
+```
 
-## Analysis Agents
+### Data Model
 
-Post-experiment evaluation agents walk through a structured workflow: running analysis queries, supplementing quantitative metrics with anecdotes, writing a summary, and proof-reading their work. Each agent runs in a sandboxed environment with a database scoped to only the current experiment. A copy-on-create model clones relevant tables (schemas, input data, intermediate results) into a per-run database. The agent reads and writes freely inside that boundary but cannot see or access data from other runs, ensuring complete isolation. Results are written to a single `analysis.md` file. Before cleanup, agents can export their findings for cross-run or suite-level meta-analysis.
+Projects are directories on disk. A per-project SQLite store (`nightshift.db`) tracks:
+
+- **collections** / **collection_items** — inference results and their rows
+- **jobs** — job configurations and status (file-based; metadata table exists but unused)
+- **pipelines** — pipeline definitions and stage configs (file-based; metadata table exists but unused)
+- **experiments** — experiment runs (table exists, not used)
+
+### File Types
+
+| Extension | Description |
+|-----------|-------------|
+| `.collection.json` | Collection of inference results |
+| `.job.json` | Job configuration (template path, sampling strategy, API key, etc.) |
+| `.pipeline.yaml` | Pipeline definition with sequential stages |
+| `.txt` / `.md` | Plain text or markdown files |
+
+---
+
+## Implemented Features
+
+### File Browser & Editor
+- Open any directory as a project — file tree on the left, tabs on top
+- Monaco editor with syntax highlighting for JSON, YAML, JavaScript, Jinja2 (via Monarch tokenizer), and CSV
+- Auto-save indicator shows when content has changed
+- Tab management: open multiple files, close tabs
+
+### Collections View
+- Lists all `.collection.json` files in the project
+- Click to open a collection in the editor
+- `+ New` button creates a new empty collection file
+
+### Jobs View & Execution
+- Lists all `.job.json` files with status badges (pending / running / completed)
+- `+ New` creates a properly structured job config file
+- **Run Job** button appears in EditorPanel when a job file is open:
+  - Parses the job config (template path, sampling strategy, input data paths)
+  - Renders Jinja2 template with each input row
+  - Makes API calls to an OpenAI-compatible endpoint
+  - Updates a live progress bar (`current/total`)
+  - Saves results as a `.collection.json` file on completion
+
+### Pipeline Execution Engine (`src/services/pipeline.ts`)
+- Executes stages sequentially: **inference → js-action → evaluation**
+- Each stage's output becomes the next stage's input data
+- Progress callbacks wired to UI for real-time status updates
+- Stage types:
+  - `inference` — calls LLM with template + context variables
+  - `js-action` — runs a sandboxed JS function over the data
+  - `evaluation` — scoring/grading pass
+
+### Live Progress Bar
+- Appears below the toolbar during job or pipeline runs
+- Shows `{status} (current/total)` with an animated green fill bar
+
+---
+
+## Not Yet Implemented
+
+| Feature | Notes |
+|---------|-------|
+| **PipelineEditor visual component** | Exists at `src/components/PipelineEditor.tsx` but is never rendered. Clicking a pipeline opens raw YAML in Monaco instead of the visual editor. |
+| **Analysis Agents** | `src/services/agents.ts` has stub methods but no UI integration to trigger them. No `analysis.md` output. |
+| **Jobs / Pipelines → SQLite** | Tables exist in `electron/database.ts` but jobs and pipelines are saved only as files, not written to the database. |
+| **Trial run mode for pipelines** | Single-item pass-through validation before a full pipeline run is not yet built. |
+| **Export to CSV/JSONL** | Collections view has no export buttons. |
+| **YAML parsing** | Pipeline executor uses regex-based line parsing instead of the already-installed `js-yaml` package. |
+
+---
+
+## Design Decisions
+
+- **File-based project + SQLite overlay** — Project folders are portable and self-contained (all source files on disk). A per-project SQLite store holds experiment-generated data and metadata that doesn't belong in source files.
+- **Template-driven inference** — Job configs reference a template file plus input data files by path. This avoids duplicating prompts across many inputs.
+- **Sequential pipeline stages** — Each stage's output becomes the next stage's input, making it easy to chain: generate → transform with JS → evaluate.
+
+---
+
+## Framework Stack
+
+| Layer | Choice |
+|-------|--------|
+| Desktop shell | Electron 33 + Vite 6 (via `vite-plugin-electron`) |
+| UI | React 18 + Zustand (lightweight global state) |
+| Editor | Monaco Editor (`@monaco-editor/react`) with custom Jinja2 Monarch tokenizer |
+| Database | SQLite via `better-sqlite3` (synchronous, main process only) |
+| YAML parsing | `js-yaml` installed but pipeline executor uses regex instead |
+
+### Native Module Note
+
+`better-sqlite3` is a native module that must be rebuilt for Electron's Node version:
+
+```bash
+npx electron-builder install-app-deps
+```
+
+Vite config (`vite.config.ts`) marks it as external in the Rollup bundle since it's loaded by the main process, not the renderer.
+
+---
+
+## Build Verification
+
+Production builds cleanly:
+
+```bash
+npx vite build   # ✓ built in ~272ms
+```
