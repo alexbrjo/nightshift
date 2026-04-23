@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from src.backend.database import get_session
 from src.backend.models import Job, JobSample, Project
@@ -36,17 +37,20 @@ class JobUpdate(BaseModel):
 @router.get("/", response_model=List[Dict[str, Any]])
 async def list_jobs(project_id: Optional[int] = None):
     async with get_session() as session:
-        query = session.query(Job)
+        stmt = select(Job)
         if project_id:
-            query = query.filter(Job.project_id == project_id)
-        jobs = await session.execute(query.order_by(Job.created_at.desc()))
-        return [job.to_dict() for job in jobs.scalars().all()]
+            stmt = stmt.where(Job.project_id == project_id)
+        stmt = stmt.order_by(Job.created_at.desc())
+        result = await session.execute(stmt)
+        return [job.to_dict() for job in result.scalars().all()]
 
 
 @router.get("/{job_id}", response_model=Dict[str, Any])
 async def get_job(job_id: int):
     async with get_session() as session:
-        job = await session.get(Job, job_id)
+        stmt = select(Job).where(Job.id == job_id)
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         return job.to_dict()
@@ -55,7 +59,9 @@ async def get_job(job_id: int):
 @router.post("/", response_model=Dict[str, Any])
 async def create_job(job_data: JobCreate):
     async with get_session() as session:
-        project = await session.get(Project, job_data.project_id)
+        stmt = select(Project).where(Project.id == job_data.project_id)
+        result = await session.execute(stmt)
+        project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -78,7 +84,9 @@ async def create_job(job_data: JobCreate):
 @router.patch("/{job_id}", response_model=Dict[str, Any])
 async def update_job(job_id: int, job_data: JobUpdate):
     async with get_session() as session:
-        job = await session.get(Job, job_id)
+        stmt = select(Job).where(Job.id == job_id)
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
@@ -97,7 +105,9 @@ async def update_job(job_id: int, job_data: JobUpdate):
 @router.delete("/{job_id}")
 async def delete_job(job_id: int):
     async with get_session() as session:
-        job = await session.get(Job, job_id)
+        stmt = select(Job).where(Job.id == job_id)
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
@@ -109,22 +119,17 @@ async def delete_job(job_id: int):
 @router.get("/{job_id}/samples", response_model=List[Dict[str, Any]])
 async def list_job_samples(job_id: int, skip: int = 0, limit: int = 100):
     async with get_session() as session:
-        job = await session.get(Job, job_id)
-        if not job:
-            raise HTTPException(status_code=404, detail="Job not found")
-
-        samples = await session.execute(
-            JobSample.query.filter(JobSample.job_id == job_id)
-            .offset(skip)
-            .limit(limit)
-        )
-        return [s.to_dict() for s in samples.scalars().all()]
+        stmt = select(JobSample).where(JobSample.job_id == job_id).offset(skip).limit(limit)
+        result = await session.execute(stmt)
+        return [s.to_dict() for s in result.scalars().all()]
 
 
 @router.post("/{job_id}/run", response_model=Dict[str, Any])
 async def run_job(job_id: int, background_tasks: BackgroundTasks):
     async with get_session() as session:
-        job = await session.get(Job, job_id)
+        stmt = select(Job).where(Job.id == job_id)
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
 
@@ -144,7 +149,9 @@ async def execute_job(job_id: int):
     from datetime import datetime
 
     async with get_session() as session:
-        job = await session.get(Job, job_id)
+        stmt = select(Job).where(Job.id == job_id)
+        result = await session.execute(stmt)
+        job = result.scalar_one_or_none()
         if not job:
             return
 
@@ -301,7 +308,11 @@ def validate_json(data: Dict, schema: Dict) -> List[str]:
 @router.get("/{job_id}/samples/{sample_id}", response_model=Dict[str, Any])
 async def get_sample(job_id: int, sample_id: int):
     async with get_session() as session:
-        sample = await session.get(JobSample, sample_id)
-        if not sample or sample.job_id != job_id:
+        stmt = select(JobSample).where(
+            JobSample.id == sample_id, JobSample.job_id == job_id
+        )
+        result = await session.execute(stmt)
+        sample = result.scalar_one_or_none()
+        if not sample:
             raise HTTPException(status_code=404, detail="Sample not found")
         return sample.to_dict()

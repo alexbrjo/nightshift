@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: nightshift
+Version: 0.1.0
+Summary: A desktop-first experimentation platform for evaluating LLM-generated context
+Requires-Python: >=3.10
+Requires-Dist: fastapi>=0.104.0
+Requires-Dist: uvicorn[standard]>=0.24.0
+Requires-Dist: sqlalchemy>=2.0.23
+Requires-Dist: asyncpg>=0.29.0
+Requires-Dist: PyYAML>=6.0.1
+Requires-Dist: jinja2>=3.1.2
+Requires-Dist: pydantic>=2.5.0
+Requires-Dist: pydantic-settings>=2.1.0
+Requires-Dist: python-multipart>=0.0.6
+Requires-Dist: openai>=1.3.0
+Requires-Dist: aiofiles>=23.2.1
+Requires-Dist: alembic>=1.13.0

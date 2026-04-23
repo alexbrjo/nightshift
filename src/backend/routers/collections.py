@@ -5,6 +5,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from src.backend.database import get_session
 from src.backend.models import Collection, Job, Project
@@ -28,17 +29,20 @@ class CollectionUpdate(BaseModel):
 @router.get("/", response_model=List[Dict[str, Any]])
 async def list_collections(project_id: Optional[int] = None):
     async with get_session() as session:
-        query = session.query(Collection)
+        stmt = select(Collection)
         if project_id:
-            query = query.filter(Collection.project_id == project_id)
-        collections = await session.execute(query.order_by(Collection.created_at.desc()))
-        return [c.to_dict() for c in collections.scalars().all()]
+            stmt = stmt.where(Collection.project_id == project_id)
+        stmt = stmt.order_by(Collection.created_at.desc())
+        result = await session.execute(stmt)
+        return [c.to_dict() for c in result.scalars().all()]
 
 
 @router.get("/{collection_id}", response_model=Dict[str, Any])
 async def get_collection(collection_id: int):
     async with get_session() as session:
-        collection = await session.get(Collection, collection_id)
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
         return collection.to_dict()
@@ -47,7 +51,9 @@ async def get_collection(collection_id: int):
 @router.post("/", response_model=Dict[str, Any])
 async def create_collection(collection_data: CollectionCreate):
     async with get_session() as session:
-        project = await session.get(Project, collection_data.project_id)
+        stmt = select(Project).where(Project.id == collection_data.project_id)
+        result = await session.execute(stmt)
+        project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -68,7 +74,9 @@ async def create_collection(collection_data: CollectionCreate):
 @router.patch("/{collection_id}", response_model=Dict[str, Any])
 async def update_collection(collection_id: int, collection_data: CollectionUpdate):
     async with get_session() as session:
-        collection = await session.get(Collection, collection_id)
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -84,7 +92,9 @@ async def update_collection(collection_id: int, collection_data: CollectionUpdat
 @router.delete("/{collection_id}")
 async def delete_collection(collection_id: int):
     async with get_session() as session:
-        collection = await session.get(Collection, collection_id)
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -96,7 +106,9 @@ async def delete_collection(collection_id: int):
 @router.post("/{collection_id}/export/jsonl")
 async def export_to_jsonl(collection_id: int):
     async with get_session() as session:
-        collection = await session.get(Collection, collection_id)
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -118,7 +130,9 @@ async def export_to_jsonl(collection_id: int):
 @router.post("/{collection_id}/export/csv")
 async def export_to_csv(collection_id: int):
     async with get_session() as session:
-        collection = await session.get(Collection, collection_id)
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -149,7 +163,9 @@ async def export_to_csv(collection_id: int):
 @router.post("/{collection_id}/items")
 async def add_items(collection_id: int, items: List[Dict[str, Any]]):
     async with get_session() as session:
-        collection = await session.get(Collection, collection_id)
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -166,7 +182,9 @@ async def add_items(collection_id: int, items: List[Dict[str, Any]]):
 @router.delete("/{collection_id}/items/{item_index}")
 async def delete_item(collection_id: int, item_index: int):
     async with get_session() as session:
-        collection = await session.get(Collection, collection_id)
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
 
@@ -188,7 +206,9 @@ async def list_items(
     search: Optional[str] = None,
 ):
     async with get_session() as session:
-        collection = await session.get(Collection, collection_id)
+        stmt = select(Collection).where(Collection.id == collection_id)
+        result = await session.execute(stmt)
+        collection = result.scalar_one_or_none()
         if not collection:
             raise HTTPException(status_code=404, detail="Collection not found")
 

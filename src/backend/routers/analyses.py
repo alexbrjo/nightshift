@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from src.backend.config import settings
 from src.backend.database import get_session
@@ -33,17 +34,20 @@ class AnalysisCreate(BaseModel):
 @router.get("/", response_model=List[Dict[str, Any]])
 async def list_analyses(project_id: Optional[int] = None):
     async with get_session() as session:
-        query = session.query(Analysis)
+        stmt = select(Analysis)
         if project_id:
-            query = query.filter(Analysis.project_id == project_id)
-        analyses = await session.execute(query.order_by(Analysis.created_at.desc()))
-        return [a.to_dict() for a in analyses.scalars().all()]
+            stmt = stmt.where(Analysis.project_id == project_id)
+        stmt = stmt.order_by(Analysis.created_at.desc())
+        result = await session.execute(stmt)
+        return [a.to_dict() for a in result.scalars().all()]
 
 
 @router.get("/{analysis_id}", response_model=Dict[str, Any])
 async def get_analysis(analysis_id: int):
     async with get_session() as session:
-        analysis = await session.get(Analysis, analysis_id)
+        stmt = select(Analysis).where(Analysis.id == analysis_id)
+        result = await session.execute(stmt)
+        analysis = result.scalar_one_or_none()
         if not analysis:
             raise HTTPException(status_code=404, detail="Analysis not found")
         return analysis.to_dict()
@@ -52,18 +56,30 @@ async def get_analysis(analysis_id: int):
 @router.post("/", response_model=Dict[str, Any])
 async def create_analysis(analysis_data: AnalysisCreate):
     async with get_session() as session:
-        project = await session.get(Project, analysis_data.project_id)
+        stmt = select(Project).where(Project.id == analysis_data.project_id)
+        result = await session.execute(stmt)
+        project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
         if analysis_data.job_id:
-            job = await session.get(Job, analysis_data.job_id)
-            if not job or job.project_id != project.id:
+            stmt = select(Job).where(
+                Job.id == analysis_data.job_id,
+                Job.project_id == project.id
+            )
+            result = await session.execute(stmt)
+            job = result.scalar_one_or_none()
+            if not job:
                 raise HTTPException(status_code=404, detail="Job not found")
 
         if analysis_data.collection_id:
-            collection = await session.get(Collection, analysis_data.collection_id)
-            if not collection or collection.project_id != project.id:
+            stmt = select(Collection).where(
+                Collection.id == analysis_data.collection_id,
+                Collection.project_id == project.id
+            )
+            result = await session.execute(stmt)
+            collection = result.scalar_one_or_none()
+            if not collection:
                 raise HTTPException(status_code=404, detail="Collection not found")
 
         analysis_id_hash = hashlib.md5(
@@ -93,7 +109,9 @@ async def create_analysis(analysis_data: AnalysisCreate):
 @router.post("/{analysis_id}/start", response_model=Dict[str, Any])
 async def start_analysis(analysis_id: int, background_tasks: BackgroundTasks):
     async with get_session() as session:
-        analysis = await session.get(Analysis, analysis_id)
+        stmt = select(Analysis).where(Analysis.id == analysis_id)
+        result = await session.execute(stmt)
+        analysis = result.scalar_one_or_none()
         if not analysis:
             raise HTTPException(status_code=404, detail="Analysis not found")
 
@@ -112,7 +130,9 @@ async def execute_analysis(analysis_id: int):
     from datetime import datetime
 
     async with get_session() as session:
-        analysis = await session.get(Analysis, analysis_id)
+        stmt = select(Analysis).where(Analysis.id == analysis_id)
+        result = await session.execute(stmt)
+        analysis = result.scalar_one_or_none()
         if not analysis:
             return
 
@@ -158,9 +178,9 @@ async def execute_analysis(analysis_id: int):
                 run.started_at = datetime.utcnow()
                 await session.commit()
 
-                result = await execute_step(session, analysis, step)
+                result_text = await execute_step(session, analysis, step)
 
-                run.output_result = result
+                run.output_result = result_text
                 run.status = "completed"
                 run.completed_at = datetime.utcnow()
                 await session.commit()
@@ -217,7 +237,7 @@ async def run_queries(session, analysis: Analysis) -> List[Dict]:
         query += " AND j.id = :job_id"
         params["job_id"] = analysis.job_id
 
-    result = await session.execute(query, params)
+    result = await session.execute(text(query), params)
     return [dict(row) for row in result.fetchall()]
 
 

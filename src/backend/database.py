@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Database configuration and session management."""
-
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -29,10 +26,24 @@ async_session_factory = sessionmaker(
 )
 
 
-async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    """Get a database session."""
-    async with async_session_factory() as session:
-        yield session
+class SessionManager:
+    """Async context manager for database sessions."""
+
+    def __init__(self):
+        self.session = None
+
+    async def __aenter__(self) -> AsyncSession:
+        self.session = async_session_factory()
+        return self.session
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        if self.session:
+            await self.session.close()
+
+
+def get_session() -> SessionManager:
+    """Get a database session context manager."""
+    return SessionManager()
 
 
 engine = sync_engine

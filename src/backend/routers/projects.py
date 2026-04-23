@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from src.backend.config import settings
 from src.backend.database import get_session
@@ -23,16 +24,17 @@ class ProjectCreate(BaseModel):
 @router.get("/", response_model=List[Dict[str, Any]])
 async def list_projects():
     async with get_session() as session:
-        projects = await session.execute(
-            Project.query.order_by(Project.created_at.desc())
-        )
-        return [p.to_dict() for p in projects.scalars().all()]
+        stmt = select(Project).order_by(Project.created_at.desc())
+        result = await session.execute(stmt)
+        return [p.to_dict() for p in result.scalars().all()]
 
 
 @router.get("/{project_id}", response_model=Dict[str, Any])
 async def get_project(project_id: int):
     async with get_session() as session:
-        project = await session.get(Project, project_id)
+        stmt = select(Project).where(Project.id == project_id)
+        result = await session.execute(stmt)
+        project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
         return project.to_dict()
@@ -45,10 +47,10 @@ async def create_project(project_data: ProjectCreate):
         if not path.exists():
             raise HTTPException(status_code=400, detail="Path does not exist")
 
-        existing = await session.execute(
-            Project.query.filter(Project.path == project_data.path)
-        )
-        if existing.scalar_one_or_none():
+        stmt = select(Project).where(Project.path == project_data.path)
+        result = await session.execute(stmt)
+        existing = result.scalar_one_or_none()
+        if existing:
             raise HTTPException(status_code=400, detail="Project already exists at this path")
 
         project = Project(
@@ -65,7 +67,9 @@ async def create_project(project_data: ProjectCreate):
 @router.patch("/{project_id}", response_model=Dict[str, Any])
 async def update_project(project_id: int, project_data: ProjectCreate):
     async with get_session() as session:
-        project = await session.get(Project, project_id)
+        stmt = select(Project).where(Project.id == project_id)
+        result = await session.execute(stmt)
+        project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -88,7 +92,9 @@ async def update_project(project_id: int, project_data: ProjectCreate):
 @router.delete("/{project_id}")
 async def delete_project(project_id: int):
     async with get_session() as session:
-        project = await session.get(Project, project_id)
+        stmt = select(Project).where(Project.id == project_id)
+        result = await session.execute(stmt)
+        project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -100,7 +106,9 @@ async def delete_project(project_id: int):
 @router.get("/{project_id}/files")
 async def list_project_files(project_id: int, pattern: str = "*"):
     async with get_session() as session:
-        project = await session.get(Project, project_id)
+        stmt = select(Project).where(Project.id == project_id)
+        result = await session.execute(stmt)
+        project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -124,15 +132,17 @@ async def list_project_files(project_id: int, pattern: str = "*"):
 @router.get("/{project_id}/stats")
 async def get_project_stats(project_id: int):
     async with get_session() as session:
-        project = await session.get(Project, project_id)
+        stmt = select(Project).where(Project.id == project_id)
+        result = await session.execute(stmt)
+        project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
     path = Path(project.path)
-    
+
     total_files = 0
     total_size = 0
-    
+
     for f in path.rglob("*"):
         if f.is_file():
             total_files += 1

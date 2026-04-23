@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
 
 from src.backend.database import get_session
 from src.backend.models import Pipeline, PipelineStage, Project
@@ -38,17 +39,20 @@ class PipelineUpdate(BaseModel):
 @router.get("/", response_model=List[Dict[str, Any]])
 async def list_pipelines(project_id: Optional[int] = None):
     async with get_session() as session:
-        query = session.query(Pipeline)
+        stmt = select(Pipeline)
         if project_id:
-            query = query.filter(Pipeline.project_id == project_id)
-        pipelines = await session.execute(query.order_by(Pipeline.created_at.desc()))
-        return [p.to_dict() for p in pipelines.scalars().all()]
+            stmt = stmt.where(Pipeline.project_id == project_id)
+        stmt = stmt.order_by(Pipeline.created_at.desc())
+        result = await session.execute(stmt)
+        return [p.to_dict() for p in result.scalars().all()]
 
 
 @router.get("/{pipeline_id}", response_model=Dict[str, Any])
 async def get_pipeline(pipeline_id: int):
     async with get_session() as session:
-        pipeline = await session.get(Pipeline, pipeline_id)
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        result = await session.execute(stmt)
+        pipeline = result.scalar_one_or_none()
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
         return pipeline.to_dict()
@@ -57,7 +61,9 @@ async def get_pipeline(pipeline_id: int):
 @router.post("/", response_model=Dict[str, Any])
 async def create_pipeline(pipeline_data: PipelineCreate):
     async with get_session() as session:
-        project = await session.get(Project, pipeline_data.project_id)
+        stmt = select(Project).where(Project.id == pipeline_data.project_id)
+        result = await session.execute(stmt)
+        project = result.scalar_one_or_none()
         if not project:
             raise HTTPException(status_code=404, detail="Project not found")
 
@@ -78,7 +84,9 @@ async def create_pipeline(pipeline_data: PipelineCreate):
 @router.patch("/{pipeline_id}", response_model=Dict[str, Any])
 async def update_pipeline(pipeline_id: int, pipeline_data: PipelineUpdate):
     async with get_session() as session:
-        pipeline = await session.get(Pipeline, pipeline_id)
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        result = await session.execute(stmt)
+        pipeline = result.scalar_one_or_none()
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
 
@@ -94,7 +102,9 @@ async def update_pipeline(pipeline_id: int, pipeline_data: PipelineUpdate):
 @router.delete("/{pipeline_id}")
 async def delete_pipeline(pipeline_id: int):
     async with get_session() as session:
-        pipeline = await session.get(Pipeline, pipeline_id)
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        result = await session.execute(stmt)
+        pipeline = result.scalar_one_or_none()
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
 
@@ -106,7 +116,9 @@ async def delete_pipeline(pipeline_id: int):
 @router.post("/{pipeline_id}/stages", response_model=Dict[str, Any])
 async def create_stage(pipeline_id: int, stage_data: PipelineStageCreate):
     async with get_session() as session:
-        pipeline = await session.get(Pipeline, pipeline_id)
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        result = await session.execute(stmt)
+        pipeline = result.scalar_one_or_none()
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
 
@@ -128,22 +140,19 @@ async def create_stage(pipeline_id: int, stage_data: PipelineStageCreate):
 @router.get("/{pipeline_id}/stages", response_model=List[Dict[str, Any]])
 async def list_stages(pipeline_id: int):
     async with get_session() as session:
-        pipeline = await session.get(Pipeline, pipeline_id)
-        if not pipeline:
-            raise HTTPException(status_code=404, detail="Pipeline not found")
-
-        stages = await session.execute(
-            PipelineStage.query.filter(PipelineStage.pipeline_id == pipeline_id).order_by(
-                PipelineStage.order
-            )
-        )
-        return [s.to_dict() for s in stages.scalars().all()]
+        stmt = select(PipelineStage).where(
+            PipelineStage.pipeline_id == pipeline_id
+        ).order_by(PipelineStage.order)
+        result = await session.execute(stmt)
+        return [s.to_dict() for s in result.scalars().all()]
 
 
 @router.post("/{pipeline_id}/run", response_model=Dict[str, Any])
 async def run_pipeline(pipeline_id: int, background_tasks: BackgroundTasks):
     async with get_session() as session:
-        pipeline = await session.get(Pipeline, pipeline_id)
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        result = await session.execute(stmt)
+        pipeline = result.scalar_one_or_none()
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
 
@@ -162,7 +171,9 @@ async def execute_pipeline(pipeline_id: int):
     from datetime import datetime
 
     async with get_session() as session:
-        pipeline = await session.get(Pipeline, pipeline_id)
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        result = await session.execute(stmt)
+        pipeline = result.scalar_one_or_none()
         if not pipeline:
             return
 
@@ -246,7 +257,9 @@ def execute_stage_config(config: Dict, input_data: List[Dict]) -> Dict:
 @router.post("/{pipeline_id}/trial-run", response_model=Dict[str, Any])
 async def run_pipeline_trial(pipeline_id: int, background_tasks: BackgroundTasks):
     async with get_session() as session:
-        pipeline = await session.get(Pipeline, pipeline_id)
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        result = await session.execute(stmt)
+        pipeline = result.scalar_one_or_none()
         if not pipeline:
             raise HTTPException(status_code=404, detail="Pipeline not found")
 
@@ -266,7 +279,9 @@ async def execute_pipeline_trial(pipeline_id: int):
     from datetime import datetime
 
     async with get_session() as session:
-        pipeline = await session.get(Pipeline, pipeline_id)
+        stmt = select(Pipeline).where(Pipeline.id == pipeline_id)
+        result = await session.execute(stmt)
+        pipeline = result.scalar_one_or_none()
         if not pipeline:
             return
 
