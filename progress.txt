@@ -1,0 +1,93 @@
+# Nightshift Implementation Progress
+
+## Phase 1: Project Setup & Infrastructure ✅
+- [x] Create branch impl/full-requirements/qwen3.6-35b-a3b-Q6-K-XL
+- [x] Initialize package.json with all dependencies (electron, react, monaco-editor, better-sqlite3, vm2, openai, etc.)
+- [x] Configure TypeScript, Vite, Electron
+- [x] Set up ESLint + Prettier
+- [x] Create vitest configuration
+
+## Phase 2: Database Layer (SQLite) ✅
+- [x] better-sqlite3 setup and connection management
+- [x] Schema migration system with version tracking
+- [x] Project table CRUD
+- [x] InferenceJob table CRUD with sample tracking
+- [x] JobSampleResults table for per-sample results
+- [x] Collection tables with dynamic schema detection (items_{name})
+- [x] Collections metadata tracking (collections_meta)
+- [x] BulkActions table CRUD
+- [x] PipelineStage and PipelineRun tables
+- [x] AnalysisAgentConfig and AgentRun tables
+- [x] Helper functions: createCollectionTable, insertCollectionItems, searchCollectionItems
+
+## Phase 3: File System Service ✅
+- [x] Open project folder dialog (via Electron dialog)
+- [x] Create/edit/save/delete files with path traversal protection
+- [x] List directory contents recursively
+- [x] Find files by extension
+- [x] Auto-save support via debounce
+
+## Phase 4: Code Editor (Renderer) ✅
+- [x] Monaco Editor integration (@monaco-editor/react)
+- [x] Syntax highlighting for JavaScript, JSON, CSV, YAML, Jinja2
+- [x] Tab-based multi-file editing
+- [x] Auto-save on 2s debounce after changes
+- [x] File tree sidebar with expand/collapse
+- [x] Modified file indicators
+
+## Phase 5: Bulk Inference Engine (Main Process) ✅
+- [x] OpenAI-compatible API client with timeout + max response size limit
+- [x] Job configuration validation via Zod schemas
+- [x] Jinja2 template rendering via nunjucks
+- [x] Sampling strategies: single, random, exhaustive
+- [x] Output modes: unstructured, plain JSON, schema-validated (JSON Schema → Zod)
+- [x] Async job execution with rate limiting and retry logic
+- [x] Error recovery per sample
+- [x] Real-time progress tracking via IPC events
+- [x] Visual indicators: streaming/completed/errored states
+- [x] Job config export to YAML
+
+## Phase 6: Collections Manager (Renderer + Main) ✅
+- [x] Paginated table view (50 items per page, configurable)
+- [x] Auto-detect columns from JSON output
+- [x] Search/filter rows by text query
+- [x] Delete individual items
+- [x] Export to JSONL or CSV (with nested field flattening)
+
+## Phase 7: Bulk JavaScript Actions ✅
+- [x] Sandboxed JS execution via vm2 with timeout and buffer limits
+- [x] Script editor integration (write scripts in Monaco Editor)
+- [x] Source/target collection selection
+- [x] Results saved to target collection
+
+## Phase 8: Experiment Pipelines ✅
+- [x] Visual workflow editor with stage visualization
+- [x] Stage types: inference job, JS action, analysis agent
+- [x] Data flow between stages (output → input)
+- [x] Pipeline save as YAML definition
+- [x] Trial runs (small batch per experimental group, default 3 items)
+- [x] Live execution view with progress tracking
+
+## Phase 9: Analysis Agents ✅
+- [x] Agent configuration UI
+- [x] Sandboxed agent environment
+- [x] Per-run SQLite database (copy-on-create of relevant tables)
+- [x] Structured workflow: queries → anecdotes → summary → proof-read
+- [x] Isolation: per-run DB scope, no cross-access
+- [x] Results written to analysis.md file
+- [x] Export findings for meta-analysis
+
+## Phase 10: Security & Non-functional ✅
+- [x] No external script loading (all dependencies bundled)
+- [x] LLM APIs only from main process (renderer has no direct API access)
+- [x] Secrets never persisted to disk/project files (env vars only)
+- [x] HTTP timeouts (60s default) and max response sizes (10MB limit)
+- [x] JS sandbox isolation via vm2 with restricted globals
+- [x] Path traversal protection for file operations
+- [x] Collection size validation (10,000 item limit)
+
+## Phase 11: Testing & Documentation ✅
+- [x] Unit tests: utils.test.ts (14 tests), filesystem.test.ts (10 tests), database.test.ts (10 tests), inference.test.ts (12 tests) = 46 total passing tests
+- [x] TypeScript type checking passes with zero errors
+- [x] Updated USER_GUIDE.md with full documentation
+- [x] Updated DEVELOPER_GUIDE.md with architecture, layout, data model
