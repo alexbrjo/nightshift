@@ -15,3 +15,11 @@
 - You MUST document UX and functionality changes
   - For changes that affect UX, update the USER_GUIDE.md
   - For changes that affect the architecture or data models update the DEVELOPER_GUIDE.md
+
+## Anti-Patterns (MUST NOT)
+
+- MUST NOT load scripts from external sources at runtime. All dependencies bundled.
+- MUST NOT call LLM provider APIs from the renderer process. Inference runs in the main process.
+- MUST NOT persist secretes (API keys, passwords, etc) to disk in plaintext or in any project file.
+- MUST NOT leave mocked data in shipped components. Render a visible "Not implemented" state for unimplemented components.
+- MUST NOT commit build artifacts or dependency folders.

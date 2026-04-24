@@ -1,10 +1,10 @@
 # nightshift
 
-A desktop-first experimentation platform for evaluating LLM-generated context. Open any directory as a project and work directly with files including Jinja prompt templates, JSON schemas, CSV/JSON/JSONL data, JavaScript scripts, and YAML pipeline definitions.
+An experimentation platform for evaluating LLM-generated context. Open any directory as a project and work directly with files including Jinja prompt templates, JSON schemas, CSV/JSON/JSONL data, JavaScript scripts, and YAML pipeline definitions.
 
 ## Getting Started
 
-Nightshift treats your filesystem as the source of truth. Drop a folder into the app and it becomes a project, with a per-project SQLite store handling experiment-generated data and all editor content and pipeline definitions living as files. The built-in code editor provides syntax highlighting and validation for Jinja2, JSON, JavaScript, CSV, and YAML, with undo/redo and auto-save across all panels.
+Open a folder with Nightshift and it becomes a project, with a per-project SQLite store handling experiment-generated data and all editor content and pipeline definitions living as files. The built-in code editor provides syntax highlighting and validation for Jinja2, JSON, JavaScript, CSV, and YAML, with auto-save across all panels.
 
 ## Bulk Inference
 

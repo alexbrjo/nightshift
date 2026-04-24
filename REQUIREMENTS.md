@@ -1,12 +1,14 @@
-# Nightshift Technical Requirements
+# Nightshift Requirements
 
-## 1 Editor Requirements
+## Functional Requirements
+
+### 1 Editor Requirements
 
 - 1.1 User can open a project folder in the editor
 - 1.2 User can create, edit, save and delete files in the editor
 - 1.3 Editor has syntax checking and syntax highlighting for js, json, jsonl, csv and jinja2
 
-## 2 Bulk Inference Requirements
+### 2 Bulk Inference Requirements
 
 - 2.1 User can configure an inference job. Parameters:
   - Job name
@@ -22,7 +24,7 @@
 - 2.5 Jobs run asynchronously with rate limit handling and error recovery; visual indicators show streaming, completed, and errored states per sample
 - 2.6 From the view page, configuration of the job can be exported to a yaml
 
-## 3 Collections Manager Requirements
+### 3 Collections Manager Requirements
 
 - 3.1 User can view inference job output as a paginated table (50 items per page)
 - 3.2 Columns are auto-detected from the job's JSON Schema definition
@@ -30,7 +32,7 @@
 - 3.4 User can delete individual items from a collection
 - 3.5 User can export collection data to JSONL or CSV
 
-## 4 Bulk Action Requirements
+### 4 Bulk Action Requirements
 
 - 4.1 User writes a sandboxed JavaScript function in the editor
 - 4.2 User runs the action against a source collection, specifying target collection for output
@@ -38,17 +40,16 @@
 - 4.4 The JS function executes against each dataset item and returns structured JSON results
 - 4.5 Results are saved to the target collection in the same manner as inference jobs
 
-## 5 Experiment Pipeline Requirements
+### 5 Experiment Pipeline Requirements
 
 - 5.1 User can chain multiple saved inference jobs and JS action scripts into a visual workflow editor
 - 5.2 Jinja2 style parameters (`{{my_variable}}`) are used in configurations to allow experiment groups to change the dependent variable
 - 5.3 Output from one stage feeds into the input of the next stage
-- 5.4 JSON Schema definitions track contracts between stages
-- 5.5 The final pipeline is saved as a YAML definition file
-- 5.6 User can run trial runs (small batch per experimental group) to validate prompts, scripts, and evaluation configs before full execution
-- 5.7 During execution, a live view shows each stage's progress, aggregate metrics, and streamed results on a single page
+- 5.4 The final pipeline is saved as a YAML definition file
+- 5.5 User can run trial runs (small batch per experimental group) to validate prompts, scripts, and evaluation configs before full execution
+- 5.6 During execution, a live view shows each stage's progress, aggregate metrics, and streamed results on a single page
 
-## 6 Agent Analysis Requirements
+### 6 Agent Analysis Requirements
 
 - 6.1 User can launch a post-experiment analysis agent standalone or as part of an experiment pipeline run
 - 6.2 Agent configuration can be saved to YAML for reuse
@@ -57,3 +58,17 @@
 - 6.5 The agent reads and writes freely within its scoped database but cannot access data from other runs
 - 6.6 Results are written to a single `analysis.md` file
 - 6.7 Before cleanup, the agent can export findings for cross-run or suite-level meta-analysis
+
+## Nonfunctional Requirements
+
+### 7 Security Requirements
+
+- 7.1 The user MUST NOT be able to execute arbitrary code on the machine via any of the scripts, template renders or job executions
+- 7.2 All external scripts MUST be bundled (no CDN <script src>). CSP MUST be set and MUST NOT include 'unsafe-eval' or 'unsafe-inline'.
+- 7.3 Any HTTP requests MUST include a timeout and a max response size
+- 7.4 Secrets MUST NEVER be written to project files.
+
+### 8 Acceptance Requirements
+
+- 8.1 The app MUST build with passing tests a clean clone
+- 8.2 All jobs MUST support collection sizes of up to 10000 items.
