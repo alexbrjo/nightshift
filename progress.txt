@@ -1,0 +1,27 @@
+# Nightshift Implementation Progress
+
+## Current Status
+- [x] Initial exploration and requirement analysis (Completed)
+- [x] Project scaffolding and environment setup (Completed)
+- [x] Editor implementation (In Progress)
+- [x] Bulk Inference implementation (In Progress)
+- [x] Collections Manager implementation (In Progress)
+- [x] Bulk Action implementation (In Progress)
+- [x] Experiment Pipeline implementation (In Progress)
+- [x] Agent Analysis implementation (In Progress)
+
+## Tasks
+- [x] Read README.md, REQUIREMENTS.md, and DEVELOPMENT_RULES.md
+- [x] Create implementation branch
+- [x] Initialize npm project and install dependencies
+- [x] Set up Electron + Vite + React scaffolding
+- [x] Implement basic App layout with sidebar
+- [x] Implement directory opening and file listing in sidebar
+- [x] Implement basic file reading, editing, saving, and deleting
+- [x] Add syntax highlighting using Monaco Editor
+- [x] Implement Inference Job configuration form
+- [x] Implement job creation and storage in SQLite
+- [x] Implement basic collections view with item listing and deletion
+- [x] Implement Bulk Action configuration form
+- [x] Implement pipelines view placeholder
+- [x] Implement Agent configuration form
