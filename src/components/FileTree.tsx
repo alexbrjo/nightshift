@@ -8,15 +8,36 @@ export interface FsNode {
   children?: FsNode[];
 }
 
+const TEXT_EXTENSIONS = new Set([
+  "js",
+  "json",
+  "jsonl",
+  "yaml",
+  "yml",
+  "csv",
+  "md",
+  "markdown",
+  "txt",
+  "jinja",
+  "jinja2",
+]);
+
+function isTextFile(filename: string): boolean {
+  const ext = filename.split(".").pop()?.toLowerCase();
+  return ext ? TEXT_EXTENSIONS.has(ext) : false;
+}
+
 function buildTree(files: File[]): FsNode[] {
+  const textFiles = files.filter((f) => isTextFile(f.name));
   const nodeMap = new Map<string, FsNode>();
 
-  for (const file of files) {
+  for (const file of textFiles) {
     const parts = file.webkitRelativePath.split("/");
 
     for (let i = 0; i < parts.length - 1; i++) {
       const currentPath =
-        (i === 0 ? "" : [...parts.slice(0, i).join("/"), "/"].join("")) + parts[i];
+        (i === 0 ? "" : [...parts.slice(0, i).join("/"), "/"].join("")) +
+        parts[i];
       if (!nodeMap.has(currentPath)) {
         nodeMap.set(currentPath, {
           name: parts[i],
@@ -118,7 +139,12 @@ function TreeNode({
         </button>
         {expanded &&
           node.children?.map((child) => (
-            <TreeNode key={child.path} node={child} depth={depth + 1} onFileClick={onFileClick} />
+            <TreeNode
+              key={child.path}
+              node={child}
+              depth={depth + 1}
+              onFileClick={onFileClick}
+            />
           ))}
       </div>
     );
@@ -129,8 +155,12 @@ function TreeNode({
 
 export default function FileTree({
   onFileOpen,
+  className = "",
+  style,
 }: {
   onFileOpen: (node: FsNode) => void;
+  className?: string;
+  style?: React.CSSProperties;
 }) {
   const [nodes, setNodes] = useState<FsNode[]>([]);
   const [rootName, setRootName] = useState("");
@@ -144,23 +174,28 @@ export default function FileTree({
     }
   }, []);
 
-  const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+  const handleFileChange = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
 
-    const fileList = Array.from(files);
-    const firstPath = fileList[0].webkitRelativePath;
-    setRootName(firstPath.split("/")[0]);
-    setNodes(buildTree(fileList));
-  }, []);
+      const fileList = Array.from(files);
+      const firstPath = fileList[0].webkitRelativePath;
+      setRootName(firstPath.split("/")[0]);
+      setNodes(buildTree(fileList));
+    },
+    [],
+  );
 
   return (
-    <div className="file-tree-panel">
+    <div className={`file-tree-panel ${className}`} style={style}>
       <input
         ref={inputRef}
         type="file"
         style={{ display: "none" }}
-        onChange={(e) => handleFileChange(e as unknown as React.ChangeEvent<HTMLInputElement>)}
+        onChange={(e) =>
+          handleFileChange(e as unknown as React.ChangeEvent<HTMLInputElement>)
+        }
       />
 
       {nodes.length === 0 ? (
@@ -177,7 +212,12 @@ export default function FileTree({
           <div className="tree-header">{rootName}</div>
           <div className="tree-content">
             {nodes.map((node) => (
-              <TreeNode key={node.path} node={node} depth={0} onFileClick={onFileOpen} />
+              <TreeNode
+                key={node.path}
+                node={node}
+                depth={0}
+                onFileClick={onFileOpen}
+              />
             ))}
           </div>
         </>
