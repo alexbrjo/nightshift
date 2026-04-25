@@ -81,7 +81,13 @@ export default function App() {
             setMessages((prev) => [...prev, userMsg]);
           }}
           onAiResponse={(content) => {
-            setMessages((prev) => [...prev, { role: "assistant", content }]);
+            setMessages((prev) => {
+              const last = prev[prev.length - 1];
+              if (last && last.role === "assistant") {
+                return [...prev.slice(0, -1), { ...last, content }];
+              }
+              return [...prev, { role: "assistant", content }];
+            });
           }}
         />
       </main>
