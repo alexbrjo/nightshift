@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "target": "ES2022",
+    "jsx": "preserve",
+    "outDir": "dist/server",
+    "rootDir": "src",
+    "paths": {
+      "@shared/*": ["src/shared/*"]
+    }
+  },
+  "include": ["src/server/**/*", "src/shared/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

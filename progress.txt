@@ -1,0 +1,15 @@
+Progress Tracker - Nightshift Implementation
+
+COMPLETED:
+1. Scaffold project (package.json, tsconfig, vite, tailwind, tests configs)
+2. Install dependencies
+3. Implement backend: database, project file ops, jobs runner, collections, actions sandbox, pipelines, agents
+4. Implement frontend: layout, file explorer, Monaco editor, job panel, collection view, pipeline editor, agent panel
+5. Add syntax highlighting and validation support for JS, JSON, JSONL, CSV, YAML, Jinja2 (via Monaco bundled workers)
+6. Implement streaming job status via SSE
+7. Write unit tests for backend modules (db, sandbox, jobs, actions)
+8. Write E2E tests for critical paths (job creation, editor save)
+9. Update DEVELOPER_GUIDE.md and USER_GUIDE.md
+10. Final build, lint, and test verification
+
+TODO: none remaining
