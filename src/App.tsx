@@ -1,96 +1,107 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import Editor from "./components/Editor";
-import ChatPanel from "./components/ChatPanel";
-import FileTabs from "./components/FileTabs";
-import type { FileTab, ChatMessage } from "./types";
+import FileTree, { type FsNode } from "./components/FileTree";
+import UnderConstruction from "./components/UnderConstruction";
 
-const DEFAULT_CODE = `// Welcome to Nightshift
-// Your dark-mode code editor with AI assistance
+type Section = "code-editor" | "collection-viewer" | "job-runner" | "experiment-designer";
 
-function fibonacci(n) {
-  if (n <= 1) return n;
-  return fibonacci(n - 1) + fibonacci(n - 2);
+const SECTION_LABELS: Record<Section, string> = {
+  "code-editor": "Code Editor",
+  "collection-viewer": "Collection Viewer",
+  "job-runner": "Job Runner",
+  "experiment-designer": "Experiment Designer",
+};
+
+function getLanguage(filename: string): string | undefined {
+  const ext = filename.split(".").pop()?.toLowerCase();
+  const map: Record<string, string> = {
+    js: "javascript",
+    ts: "typescript",
+    jsx: "javascript",
+    tsx: "typescript",
+    py: "python",
+    html: "html",
+    css: "css",
+    json: "json",
+    md: "markdown",
+  };
+  return ext ? map[ext] : undefined;
 }
 
-console.log(fibonacci(10)); // 55`;
-
 export default function App() {
-  const [chatOpen, setChatOpen] = useState(true);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      role: "assistant",
-      content:
-        "Welcome to **Nightshift**. I'm your AI coding assistant. Ask me anything about your code!",
-    },
-  ]);
-  const [fileTabs, setFileTabs] = useState<FileTab[]>([
-    { name: "index.js", path: "index.js", content: DEFAULT_CODE, language: "javascript" },
-  ]);
-  const [activeTab, setActiveTab] = useState(0);
+  const [activeSection, setActiveSection] = useState<Section>("code-editor");
+  const [activeFile, setActiveFile] = useState<{
+    path: string;
+    name: string;
+    content: string;
+    language?: string;
+  } | null>(null);
+
+  const sections: { id: Section; icon: string; label: string }[] = [
+    { id: "code-editor", icon: "&#9998;", label: "Code Editor" },
+    { id: "collection-viewer", icon: "&#128457;", label: "Collection Viewer" },
+    { id: "job-runner", icon: "&#9658;", label: "Job Runner" },
+    { id: "experiment-designer", icon: "&#9830;", label: "Experiment Designer" },
+  ];
+
+  const handleFileOpen = useCallback(async (node: FsNode) => {
+    if (!node.file) return;
+    try {
+      const content = await node.file.text();
+      setActiveFile({
+        path: node.path,
+        name: node.name,
+        content,
+        language: getLanguage(node.name),
+      });
+    } catch {
+      setActiveFile({
+        path: node.path,
+        name: node.name,
+        content: "// Unable to read file",
+        language: undefined,
+      });
+    }
+  }, []);
 
   return (
     <div className="app">
-      <header className="titlebar">
-        <div className="titlebar-left">
-          <span className="moon-icon">&#9789;</span>
-          <span className="app-title">Nightshift</span>
-        </div>
-        <div className="titlebar-center">
-          <button
-            className={`panel-toggle ${chatOpen ? "active" : ""}`}
-            onClick={() => setChatOpen(!chatOpen)}
-            title="Toggle AI Chat"
-          >
-            &#9881; Chat
-          </button>
-        </div>
-      </header>
+      <aside className="sidebar">
+        <div className="sidebar-logo">&#9789;</div>
+        <nav className="sidebar-nav">
+          {sections.map((section) => (
+            <button
+              key={section.id}
+              className={`sidebar-btn ${activeSection === section.id ? "active" : ""}`}
+              onClick={() => setActiveSection(section.id)}
+              title={section.label}
+            >
+              <span dangerouslySetInnerHTML={{ __html: section.icon }} />
+            </button>
+          ))}
+        </nav>
+      </aside>
 
-      <main className="workspace">
-        <div className={`editor-area ${chatOpen ? "with-chat" : ""}`}>
-          {fileTabs.length > 0 && (
-            <FileTabs
-              tabs={fileTabs}
-              activeIndex={activeTab}
-              onSelect={setActiveTab}
-              onClose={(idx) => {
-                const newTabs = fileTabs.filter((_, i) => i !== idx);
-                setFileTabs(newTabs.length === 0 ? [] : newTabs);
-                if (activeTab >= newTabs.length) setActiveTab(Math.max(0, newTabs.length - 1));
+      {activeSection === "code-editor" ? (
+        <main className="workspace">
+          <FileTree onFileOpen={handleFileOpen} />
+          {activeFile ? (
+            <Editor
+              code={activeFile.content}
+              language={activeFile.language}
+              onChange={(code) => {
+                setActiveFile((prev) => (prev ? { ...prev, content: code } : prev));
               }}
             />
+          ) : (
+            <div className="editor-placeholder">Open a folder and select a file to begin</div>
           )}
-          <Editor
-            code={fileTabs[activeTab]?.content ?? ""}
-            language={fileTabs[activeTab]?.language}
-            onChange={(code) => {
-              const updated = [...fileTabs];
-              if (updated[activeTab]) {
-                updated[activeTab] = { ...updated[activeTab], content: code, modified: true };
-                setFileTabs(updated);
-              }
-            }}
-          />
-        </div>
-
-        <ChatPanel
-          open={chatOpen}
-          messages={messages}
-          onSend={(content) => {
-            const userMsg: ChatMessage = { role: "user", content };
-            setMessages((prev) => [...prev, userMsg]);
-          }}
-          onAiResponse={(content) => {
-            setMessages((prev) => {
-              const last = prev[prev.length - 1];
-              if (last && last.role === "assistant") {
-                return [...prev.slice(0, -1), { ...last, content }];
-              }
-              return [...prev, { role: "assistant", content }];
-            });
-          }}
-        />
-      </main>
+        </main>
+      ) : (
+        <main className="workspace full-width">
+          <UnderConstruction title={SECTION_LABELS[activeSection]} />
+        </main>
+      )}
     </div>
   );
 }
