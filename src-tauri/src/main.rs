@@ -12,19 +12,39 @@ const TEXT_EXTENSIONS: &[&str] = &[
     "js", "json", "jsonl", "yaml", "yml", "csv", "md", "markdown", "txt", "jinja", "jinja2",
 ];
 
+const MAX_SCAN_DEPTH: u32 = 12;
+const MAX_ENTRIES_PER_DIR: usize = 1_000;
+
 fn is_text_file(filename: &str) -> bool {
     if let Some(ext) = filename.rsplit('.').next() {
         return TEXT_EXTENSIONS.contains(&ext.to_lowercase().as_str());
     }
-    // Include files with no extension that are common config files
-    let lower = filename.to_lowercase();
-    lower.contains("dockerfile")
-        || lower.contains("makefile")
-        || lower == ".env"
-        || lower.starts_with(".git")
+    return false;
 }
 
-fn scan_directory(dir: &Path) -> Result<Vec<serde_json::Value>, String> {
+fn sanitize_name(name: &str) -> Result<String, String> {
+    let sanitized = name.replace('\0', "");
+    if sanitized.contains("..") || sanitized != name && name.contains('\0') {
+        return Err("Invalid name: contains null bytes or \"..\" sequence".to_string());
+    }
+    if sanitized.is_empty() {
+        return Err("Invalid name: empty after sanitization".to_string());
+    }
+    Ok(sanitized)
+}
+
+fn scan_directory(
+    dir: &Path,
+    depth: u32,
+    file_count: &mut usize,
+) -> Result<Vec<serde_json::Value>, String> {
+    if depth > MAX_SCAN_DEPTH {
+        return Err(format!(
+            "Maximum directory scan depth ({}) exceeded",
+            MAX_SCAN_DEPTH
+        ));
+    }
+
     let mut entries = Vec::new();
 
     for entry in fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))? {
@@ -36,13 +56,20 @@ fn scan_directory(dir: &Path) -> Result<Vec<serde_json::Value>, String> {
         let name = entry.file_name().to_string_lossy().to_string();
 
         if metadata.is_dir() {
-            let children = scan_directory(&path)?;
+            let children = scan_directory(&path, depth + 1, file_count)?;
             entries.push(serde_json::json!({
                 "name": name,
                 "isDir": true,
                 "children": children,
             }));
         } else if is_text_file(&name) {
+            *file_count += 1;
+            if *file_count > MAX_ENTRIES_PER_DIR {
+                return Err(format!(
+                    "Too many files scanned (limit: {}). Directory may contain node_modules or similar.",
+                    MAX_ENTRIES_PER_DIR
+                ));
+            }
             entries.push(serde_json::json!({
                 "name": name,
                 "isDir": false,
@@ -80,7 +107,8 @@ fn scan_folder(state: State<AppState>, path: String) -> Result<serde_json::Value
     let mut root = state.root_path.lock().unwrap();
     *root = Some(path_buf.clone());
 
-    let children = scan_directory(&path_buf)?;
+    let mut file_count = 0usize;
+    let children = scan_directory(&path_buf, 0, &mut file_count)?;
     Ok(serde_json::json!({
         "name": path_buf.file_name().unwrap_or_default().to_string_lossy(),
         "children": children,
@@ -120,6 +148,7 @@ fn rename_path(
 ) -> Result<String, String> {
     let root = state.root_path.lock().unwrap();
     let root = root.as_ref().ok_or("No folder opened".to_string())?;
+    let new_name = sanitize_name(&new_name)?;
     let old_path = root.join(&relative_path);
     let parent = old_path
         .parent()
@@ -221,6 +250,8 @@ fn create_folder(
     let root = state.root_path.lock().unwrap();
     let root = root.as_ref().ok_or("No folder opened".to_string())?;
 
+    let folder_name = sanitize_name(&folder_name)?;
+
     let parent_path = if parent_relative_path.is_empty() {
         root.to_path_buf()
     } else {
@@ -255,6 +286,8 @@ fn create_file(
     let root = state.root_path.lock().unwrap();
     let root = root.as_ref().ok_or("No folder opened".to_string())?;
 
+    let file_name = sanitize_name(&file_name)?;
+
     let parent_path = if parent_relative_path.is_empty() {
         root.to_path_buf()
     } else {
@@ -282,25 +315,32 @@ fn create_file(
 
 #[tauri::command]
 fn save_last_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let col = app.path().app_data_dir()
+    let col = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
     fs::create_dir_all(&col).map_err(|e| format!("Failed to create app data dir: {}", e))?;
     let state_path = col.join("last_folder.json");
     let json = serde_json::json!({ "path": path });
-    fs::write(&state_path, json.to_string()).map_err(|e| format!("Failed to save last folder: {}", e))?;
+    fs::write(&state_path, json.to_string())
+        .map_err(|e| format!("Failed to save last folder: {}", e))?;
     Ok(())
 }
 
 #[tauri::command]
 fn load_last_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let col = app.path().app_data_dir()
+    let col = app
+        .path()
+        .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
     let state_path = col.join("last_folder.json");
     if !state_path.exists() {
         return Ok(None);
     }
-    let content = fs::read_to_string(&state_path).map_err(|e| format!("Failed to read last folder: {}", e))?;
-    let json: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("Failed to parse last folder: {}", e))?;
+    let content = fs::read_to_string(&state_path)
+        .map_err(|e| format!("Failed to read last folder: {}", e))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse last folder: {}", e))?;
     Ok(json["path"].as_str().map(|s| s.to_string()))
 }
 
@@ -311,10 +351,12 @@ fn save_expanded_state(root_path: String, paths: Vec<String>) -> Result<(), Stri
         return Err("Invalid root path".to_string());
     }
     let nightshift_dir = root.join(".nightshift");
-    fs::create_dir_all(&nightshift_dir).map_err(|e| format!("Failed to create .nightshift dir: {}", e))?;
+    fs::create_dir_all(&nightshift_dir)
+        .map_err(|e| format!("Failed to create .nightshift dir: {}", e))?;
     let state_path = nightshift_dir.join("state.json");
     let json = serde_json::json!({ "expandedFolders": paths });
-    fs::write(&state_path, json.to_string()).map_err(|e| format!("Failed to save expanded state: {}", e))?;
+    fs::write(&state_path, json.to_string())
+        .map_err(|e| format!("Failed to save expanded state: {}", e))?;
     Ok(())
 }
 
@@ -328,11 +370,17 @@ fn load_expanded_state(root_path: String) -> Result<Vec<String>, String> {
     if !state_path.exists() {
         return Ok(Vec::new());
     }
-    let content = fs::read_to_string(&state_path).map_err(|e| format!("Failed to read expanded state: {}", e))?;
-    let json: serde_json::Value = serde_json::from_str(&content).map_err(|e| format!("Failed to parse expanded state: {}", e))?;
+    let content = fs::read_to_string(&state_path)
+        .map_err(|e| format!("Failed to read expanded state: {}", e))?;
+    let json: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse expanded state: {}", e))?;
     let paths = json["expandedFolders"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
     Ok(paths)
 }
@@ -362,4 +410,89 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_name_rejects_null_bytes() {
+        assert!(sanitize_name("foo\0bar").is_err());
+    }
+
+    #[test]
+    fn sanitize_name_rejects_dotdot() {
+        assert!(sanitize_name("foo/../bar").is_err());
+        assert!(sanitize_name("..").is_err());
+        assert!(sanitize_name("foo..bar").is_ok()); // ".." not as path separator is fine
+    }
+
+    #[test]
+    fn sanitize_name_rejects_empty() {
+        assert!(sanitize_name("").is_err());
+    }
+
+    #[test]
+    fn sanitize_name_accepts_valid_names() {
+        assert_eq!(sanitize_name("valid_file.txt").unwrap(), "valid_file.txt");
+        assert_eq!(sanitize_name(".env").unwrap(), ".env");
+        assert_eq!(sanitize_name("folder-name").unwrap(), "folder-name");
+    }
+
+    #[test]
+    fn scan_directory_respects_depth_limit() {
+        let dir = std::env::temp_dir();
+        let deep_path = dir.join(format!("nightshift_depth_test_{}", std::process::id()));
+        let mut current = deep_path.clone();
+        for i in 0..=MAX_SCAN_DEPTH {
+            current = current.join(format!("level_{}", i));
+        }
+        fs::create_dir_all(&current).ok();
+
+        let result = scan_directory(&deep_path, 0, &mut 0usize);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Maximum directory scan depth"));
+
+        fs::remove_dir_all(&deep_path).ok();
+    }
+
+    #[test]
+    fn scan_directory_respects_file_count_limit() {
+        let dir = std::env::temp_dir();
+        let test_dir = dir.join(format!("nightshift_count_test_{}", std::process::id()));
+        fs::create_dir_all(&test_dir).ok();
+
+        for i in 0..=MAX_ENTRIES_PER_DIR {
+            fs::write(test_dir.join(format!("file_{}.txt", i)), "").ok();
+        }
+
+        let result = scan_directory(&test_dir, 0, &mut 0usize);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Too many files scanned"));
+
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn scan_directory_succeeds_within_limits() {
+        let dir = std::env::temp_dir();
+        let test_dir = dir.join(format!("nightshift_ok_test_{}", std::process::id()));
+        fs::create_dir_all(&test_dir).ok();
+
+        fs::write(test_dir.join("a.txt"), "").ok();
+        fs::write(test_dir.join("b.json"), "").ok();
+        fs::create_dir_all(test_dir.join("subdir")).ok();
+        fs::write(test_dir.join("subdir").join("c.md"), "").ok();
+
+        let mut count = 0usize;
+        let result = scan_directory(&test_dir, 0, &mut count);
+        assert!(result.is_ok());
+        let entries = result.unwrap();
+        assert_eq!(count, 3); // a.txt, b.json, subdir/c.md
+
+        fs::remove_dir_all(&test_dir).ok();
+    }
 }
