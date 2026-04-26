@@ -89,6 +89,7 @@ export default function App() {
       {/* FileTree always mounted so folder state persists across section switches */}
       <FileTree
         onFileOpen={handleFileOpen}
+        getActiveContent={() => activeFile?.content || ""}
         className={activeSection === "code-editor" ? "" : "hidden"}
       />
 
@@ -102,7 +103,6 @@ export default function App() {
                 setActiveFile((prev) =>
                   prev ? { ...prev, content: code } : prev,
                 );
-                (window as any).__nightshiftActiveContent = code;
               }}
             />
           ) : (

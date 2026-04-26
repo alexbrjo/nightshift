@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useCallback } from "react";
 import ContextMenu from "./ContextMenu";
 import InputDialog from "./InputDialog";
 
@@ -10,7 +10,18 @@ export interface FsNode {
   content?: string;
 }
 
-function buildPaths(nodes: any[], parentPath: string): FsNode[] {
+interface RawFsNode {
+  name: string;
+  isDir: boolean;
+  children?: RawFsNode[];
+}
+
+interface ScanFolderResult {
+  name: string;
+  children: RawFsNode[];
+}
+
+function buildPaths(nodes: RawFsNode[], parentPath: string): FsNode[] {
   return nodes.map((node) => ({
     name: node.name,
     path: parentPath ? `${parentPath}/${node.name}` : node.name,
@@ -85,12 +96,12 @@ type DialogType = "rename" | "newFile" | "newFolder";
 
 export default function FileTree({
   onFileOpen,
+  getActiveContent,
   className = "",
-  style,
 }: {
   onFileOpen: (node: FsNode) => void;
+  getActiveContent: () => string;
   className?: string;
-  style?: React.CSSProperties;
 }) {
   const [nodes, setNodes] = useState<FsNode[]>([]);
   const [rootName, setRootName] = useState("");
@@ -121,7 +132,7 @@ export default function FileTree({
       if (!path) return;
 
       const { invoke } = await import("@tauri-apps/api/core");
-      const result: any = await invoke("scan_folder", { path });
+      const result: ScanFolderResult = await invoke("scan_folder", { path });
 
       setRootName(result.name);
       setRootPath(path);
@@ -156,7 +167,7 @@ export default function FileTree({
     if (!rootPath) return;
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      const result: any = await invoke("scan_folder", { path: rootPath });
+      const result: ScanFolderResult = await invoke("scan_folder", { path: rootPath });
       setNodes(buildPaths(result.children, ""));
     } catch (err) {
       console.error("Failed to refresh tree:", err);
@@ -260,7 +271,7 @@ export default function FileTree({
       if (!rootPath || node.isDir) return;
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const content = (window as any).__nightshiftActiveContent;
+        const content = getActiveContent();
         if (content !== undefined) {
           await invoke("write_file", { relativePath: node.path, content });
         }
@@ -268,7 +279,7 @@ export default function FileTree({
         console.error("Failed to save:", err);
       }
     },
-    [rootPath],
+    [rootPath, getActiveContent],
   );
 
   const handleDialogSubmit = useCallback(
@@ -316,7 +327,7 @@ export default function FileTree({
   };
 
   return (
-    <div className={`file-tree-panel ${className}`} style={style}>
+    <div className={`file-tree-panel ${className}`}>
       {nodes.length === 0 ? (
         <div className="open-folder-prompt">
           <button className="open-folder-btn" onClick={openFolder}>

@@ -9,8 +9,6 @@ import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
 import { oneDark } from "@codemirror/theme-one-dark";
 
-const languageExtensions = [javascript, python, html, css, json, markdown];
-
 interface EditorProps {
   code: string;
   language?: string;

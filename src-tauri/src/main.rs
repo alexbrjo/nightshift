@@ -9,13 +9,7 @@ struct AppState {
 }
 
 const TEXT_EXTENSIONS: &[&str] = &[
-    "js", "ts", "tsx", "jsx", "json", "jsonl", "yaml", "yml",
-    "csv", "md", "markdown", "txt", "jinja", "jinja2",
-    "py", "rs", "toml", "html", "css", "scss", "less",
-    "xml", "sql", "sh", "bash", "zsh", "fish",
-    "rb", "go", "java", "c", "cpp", "h", "hpp",
-    "swift", "kt", "php", "lua", "r", "R",
-    "env", "gitignore", "dockerfile", "makefile",
+    "js", "json", "jsonl", "yaml", "yml", "csv", "md", "markdown", "txt", "jinja", "jinja2",
 ];
 
 fn is_text_file(filename: &str) -> bool {
@@ -24,7 +18,10 @@ fn is_text_file(filename: &str) -> bool {
     }
     // Include files with no extension that are common config files
     let lower = filename.to_lowercase();
-    lower.contains("dockerfile") || lower.contains("makefile") || lower == ".env" || lower.starts_with(".git")
+    lower.contains("dockerfile")
+        || lower.contains("makefile")
+        || lower == ".env"
+        || lower.starts_with(".git")
 }
 
 fn scan_directory(dir: &Path) -> Result<Vec<serde_json::Value>, String> {
@@ -33,7 +30,9 @@ fn scan_directory(dir: &Path) -> Result<Vec<serde_json::Value>, String> {
     for entry in fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))? {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let path = entry.path();
-        let metadata = entry.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|e| format!("Failed to read metadata: {}", e))?;
         let name = entry.file_name().to_string_lossy().to_string();
 
         if metadata.is_dir() {
@@ -56,9 +55,15 @@ fn scan_directory(dir: &Path) -> Result<Vec<serde_json::Value>, String> {
         let a_dir = a["isDir"].as_bool().unwrap_or(false);
         let b_dir = b["isDir"].as_bool().unwrap_or(false);
         if a_dir != b_dir {
-            return if a_dir { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
+            return if a_dir {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Greater
+            };
         }
-        a["name"].as_str().unwrap_or("")
+        a["name"]
+            .as_str()
+            .unwrap_or("")
             .cmp(b["name"].as_str().unwrap_or(""))
     });
 
@@ -104,26 +109,32 @@ fn read_file(state: State<AppState>, relative_path: String) -> Result<String, St
         return Err("Path outside root folder".to_string());
     }
 
-    fs::read_to_string(&target)
-        .map_err(|e| format!("Failed to read file: {}", e))
+    fs::read_to_string(&target).map_err(|e| format!("Failed to read file: {}", e))
 }
 
 #[tauri::command]
-fn rename_path(state: State<AppState>, relative_path: String, new_name: String) -> Result<String, String> {
+fn rename_path(
+    state: State<AppState>,
+    relative_path: String,
+    new_name: String,
+) -> Result<String, String> {
     let root = state.root_path.lock().unwrap();
     let root = root.as_ref().ok_or("No folder opened".to_string())?;
     let old_path = root.join(&relative_path);
-    let parent = old_path.parent().ok_or("Invalid path".to_string())?.to_path_buf();
+    let parent = old_path
+        .parent()
+        .ok_or("Invalid path".to_string())?
+        .to_path_buf();
     let new_path = parent.join(&new_name);
 
     if new_path.exists() {
         return Err(format!("{} already exists", new_name));
     }
 
-    fs::rename(&old_path, &new_path)
-        .map_err(|e| format!("Failed to rename: {}", e))?;
+    fs::rename(&old_path, &new_path).map_err(|e| format!("Failed to rename: {}", e))?;
 
-    Ok(new_path.strip_prefix(root)
+    Ok(new_path
+        .strip_prefix(root)
         .unwrap_or(&new_path)
         .to_string_lossy()
         .to_string())
@@ -140,11 +151,9 @@ fn delete_path(state: State<AppState>, relative_path: String) -> Result<(), Stri
     }
 
     if target.is_dir() {
-        fs::remove_dir_all(&target)
-            .map_err(|e| format!("Failed to delete folder: {}", e))?;
+        fs::remove_dir_all(&target).map_err(|e| format!("Failed to delete folder: {}", e))?;
     } else {
-        fs::remove_file(&target)
-            .map_err(|e| format!("Failed to delete file: {}", e))?;
+        fs::remove_file(&target).map_err(|e| format!("Failed to delete file: {}", e))?;
     }
 
     Ok(())
@@ -175,17 +184,21 @@ fn copy_file(state: State<AppState>, relative_path: String) -> Result<String, St
         return Err(format!("{} already exists", new_name));
     }
 
-    fs::copy(&source, &dest)
-        .map_err(|e| format!("Failed to copy: {}", e))?;
+    fs::copy(&source, &dest).map_err(|e| format!("Failed to copy: {}", e))?;
 
-    Ok(dest.strip_prefix(root)
+    Ok(dest
+        .strip_prefix(root)
         .unwrap_or(&dest)
         .to_string_lossy()
         .to_string())
 }
 
 #[tauri::command]
-fn write_file(state: State<AppState>, relative_path: String, content: String) -> Result<(), String> {
+fn write_file(
+    state: State<AppState>,
+    relative_path: String,
+    content: String,
+) -> Result<(), String> {
     let root = state.root_path.lock().unwrap();
     let root = root.as_ref().ok_or("No folder opened".to_string())?;
     let target = root.join(&relative_path);
@@ -194,14 +207,17 @@ fn write_file(state: State<AppState>, relative_path: String, content: String) ->
         return Err("Path outside root folder".to_string());
     }
 
-    fs::write(&target, content.as_bytes())
-        .map_err(|e| format!("Failed to write file: {}", e))?;
+    fs::write(&target, content.as_bytes()).map_err(|e| format!("Failed to write file: {}", e))?;
 
     Ok(())
 }
 
 #[tauri::command]
-fn create_folder(state: State<AppState>, parent_relative_path: String, folder_name: String) -> Result<String, String> {
+fn create_folder(
+    state: State<AppState>,
+    parent_relative_path: String,
+    folder_name: String,
+) -> Result<String, String> {
     let root = state.root_path.lock().unwrap();
     let root = root.as_ref().ok_or("No folder opened".to_string())?;
 
@@ -221,17 +237,21 @@ fn create_folder(state: State<AppState>, parent_relative_path: String, folder_na
         return Err(format!("{} already exists", folder_name));
     }
 
-    fs::create_dir_all(&new_folder)
-        .map_err(|e| format!("Failed to create folder: {}", e))?;
+    fs::create_dir_all(&new_folder).map_err(|e| format!("Failed to create folder: {}", e))?;
 
-    Ok(new_folder.strip_prefix(root)
+    Ok(new_folder
+        .strip_prefix(root)
         .unwrap_or(&new_folder)
         .to_string_lossy()
         .to_string())
 }
 
 #[tauri::command]
-fn create_file(state: State<AppState>, parent_relative_path: String, file_name: String) -> Result<String, String> {
+fn create_file(
+    state: State<AppState>,
+    parent_relative_path: String,
+    file_name: String,
+) -> Result<String, String> {
     let root = state.root_path.lock().unwrap();
     let root = root.as_ref().ok_or("No folder opened".to_string())?;
 
@@ -251,10 +271,10 @@ fn create_file(state: State<AppState>, parent_relative_path: String, file_name: 
         return Err(format!("{} already exists", file_name));
     }
 
-    fs::write(&new_file, "")
-        .map_err(|e| format!("Failed to create file: {}", e))?;
+    fs::write(&new_file, "").map_err(|e| format!("Failed to create file: {}", e))?;
 
-    Ok(new_file.strip_prefix(root)
+    Ok(new_file
+        .strip_prefix(root)
         .unwrap_or(&new_file)
         .to_string_lossy()
         .to_string())
