@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
 import ContextMenu from "./ContextMenu";
 import InputDialog from "./InputDialog";
+import { useToast } from "./Toast";
 
 export interface FsNode {
   name: string;
@@ -113,6 +114,7 @@ export default function FileTree({
   const [rootName, setRootName] = useState("");
   const [rootPath, setRootPath] = useState<string | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const { showToast } = useToast();
 
   const loadExpandedState = useCallback(async (path: string) => {
     try {
@@ -120,7 +122,7 @@ export default function FileTree({
       const paths: string[] = await invoke("load_expanded_state", { rootPath: path });
       setExpandedFolders(new Set(paths));
     } catch (err) {
-      console.error("Failed to load expanded state:", err);
+      showToast(`Failed to load expanded state: ${err}`);
     }
   }, []);
 
@@ -130,7 +132,7 @@ export default function FileTree({
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("save_expanded_state", { rootPath, paths });
     } catch (err) {
-      console.error("Failed to save expanded state:", err);
+      showToast(`Failed to save expanded state: ${err}`);
     }
   }, [rootPath]);
 
@@ -160,7 +162,7 @@ export default function FileTree({
         setNodes(buildPaths(result.children, ""));
         await loadExpandedState(lastPath);
       } catch (err) {
-        console.error("Failed to auto-open last folder:", err);
+        showToast(`Failed to open last folder: ${err}`);
       }
     }
     tryAutoOpen();
@@ -200,7 +202,7 @@ export default function FileTree({
       await invoke("save_last_folder", { path });
       await loadExpandedState(path);
     } catch (err) {
-      console.error("Failed to open folder:", err);
+      showToast(`Failed to open folder: ${err}`);
     }
   }, [loadExpandedState]);
 
@@ -215,7 +217,7 @@ export default function FileTree({
         });
         onFileOpen({ ...node, content });
       } catch (err) {
-        console.error("Failed to read file:", err);
+        showToast(`Failed to read file: ${err}`);
       }
     },
     [onFileOpen, rootPath],
@@ -232,7 +234,7 @@ export default function FileTree({
       const result: ScanFolderResult = await invoke("scan_folder", { path: rootPath });
       setNodes(buildPaths(result.children, ""));
     } catch (err) {
-      console.error("Failed to refresh tree:", err);
+      showToast(`Failed to refresh tree: ${err}`);
     }
   }, [rootPath]);
 
@@ -244,7 +246,7 @@ export default function FileTree({
         await invoke("rename_path", { relativePath: node.path, newName });
         await refreshTree();
       } catch (err) {
-        console.error("Failed to rename:", err);
+        showToast(`Failed to rename: ${err}`);
       }
     },
     [rootPath, refreshTree],
@@ -259,7 +261,7 @@ export default function FileTree({
         await invoke("create_file", { parentRelativePath: parentPath, fileName });
         await refreshTree();
       } catch (err) {
-        console.error("Failed to create file:", err);
+        showToast(`Failed to create file: ${err}`);
       }
     },
     [rootPath, refreshTree],
@@ -274,7 +276,7 @@ export default function FileTree({
         await invoke("create_folder", { parentRelativePath: parentPath, folderName });
         await refreshTree();
       } catch (err) {
-        console.error("Failed to create folder:", err);
+        showToast(`Failed to create folder: ${err}`);
       }
     },
     [rootPath, refreshTree],
@@ -308,7 +310,7 @@ export default function FileTree({
         await invoke("delete_path", { relativePath: node.path });
         await refreshTree();
       } catch (err) {
-        console.error("Failed to delete:", err);
+        showToast(`Failed to delete: ${err}`);
       }
     },
     [rootPath, refreshTree],
@@ -322,7 +324,7 @@ export default function FileTree({
         await invoke("copy_file", { relativePath: node.path });
         await refreshTree();
       } catch (err) {
-        console.error("Failed to copy:", err);
+        showToast(`Failed to copy: ${err}`);
       }
     },
     [rootPath, refreshTree],
@@ -338,7 +340,7 @@ export default function FileTree({
           await invoke("write_file", { relativePath: node.path, content });
         }
       } catch (err) {
-        console.error("Failed to save:", err);
+        showToast(`Failed to save: ${err}`);
       }
     },
     [rootPath, getActiveContent],

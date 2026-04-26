@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import Editor from "./components/Editor";
 import FileTree, { type FsNode } from "./components/FileTree";
 import UnderConstruction from "./components/UnderConstruction";
+import { ToastProvider } from "./components/Toast";
 
 type Section =
   | "code-editor"
@@ -69,53 +70,55 @@ export default function App() {
   }, []);
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="sidebar-logo">&#9789;</div>
-        <nav className="sidebar-nav">
-          {sections.map((section) => (
-            <button
-              key={section.id}
-              className={`sidebar-btn ${activeSection === section.id ? "active" : ""}`}
-              onClick={() => setActiveSection(section.id)}
-              title={section.label}
-            >
-              <span dangerouslySetInnerHTML={{ __html: section.icon }} />
-            </button>
-          ))}
-        </nav>
-      </aside>
+    <ToastProvider>
+      <div className="app">
+        <aside className="sidebar">
+          <div className="sidebar-logo">&#9789;</div>
+          <nav className="sidebar-nav">
+            {sections.map((section) => (
+              <button
+                key={section.id}
+                className={`sidebar-btn ${activeSection === section.id ? "active" : ""}`}
+                onClick={() => setActiveSection(section.id)}
+                title={section.label}
+              >
+                <span dangerouslySetInnerHTML={{ __html: section.icon }} />
+              </button>
+            ))}
+          </nav>
+        </aside>
 
-      {/* FileTree always mounted so folder state persists across section switches */}
-      <FileTree
-        onFileOpen={handleFileOpen}
-        getActiveContent={() => activeFile?.content || ""}
-        className={activeSection === "code-editor" ? "" : "hidden"}
-      />
+        {/* FileTree always mounted so folder state persists across section switches */}
+        <FileTree
+          onFileOpen={handleFileOpen}
+          getActiveContent={() => activeFile?.content || ""}
+          className={activeSection === "code-editor" ? "" : "hidden"}
+        />
 
-      {activeSection === "code-editor" ? (
-        <main className="workspace">
-          {activeFile ? (
-            <Editor
-              code={activeFile.content}
-              language={activeFile.language}
-              onChange={(code) => {
-                setActiveFile((prev) =>
-                  prev ? { ...prev, content: code } : prev,
-                );
-              }}
-            />
-          ) : (
-            <div className="editor-placeholder">
-              Open a folder and select a file to begin
-            </div>
-          )}
-        </main>
-      ) : (
-        <main className="workspace full-width">
-          <UnderConstruction title={SECTION_LABELS[activeSection]} />
-        </main>
-      )}
-    </div>
+        {activeSection === "code-editor" ? (
+          <main className="workspace">
+            {activeFile ? (
+              <Editor
+                code={activeFile.content}
+                language={activeFile.language}
+                onChange={(code) => {
+                  setActiveFile((prev) =>
+                    prev ? { ...prev, content: code } : prev,
+                  );
+                }}
+              />
+            ) : (
+              <div className="editor-placeholder">
+                Open a folder and select a file to begin
+              </div>
+            )}
+          </main>
+        ) : (
+          <main className="workspace full-width">
+            <UnderConstruction title={SECTION_LABELS[activeSection]} />
+          </main>
+        )}
+      </div>
+    </ToastProvider>
   );
 }
