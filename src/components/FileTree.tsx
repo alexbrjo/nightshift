@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import ContextMenu from "./ContextMenu";
 import InputDialog from "./InputDialog";
 
@@ -35,13 +35,17 @@ function TreeNode({
   depth,
   onFileClick,
   onContextMenu,
+  expandedFolders,
+  onToggleExpand,
 }: {
   node: FsNode;
   depth: number;
   onFileClick: (node: FsNode) => void;
   onContextMenu: (e: React.MouseEvent, node: FsNode) => void;
+  expandedFolders: Set<string>;
+  onToggleExpand: (path: string) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const expanded = node.isDir ? expandedFolders.has(node.path) : false;
 
   if (!node.isDir) {
     return (
@@ -66,7 +70,7 @@ function TreeNode({
       <button
         className="folder-header"
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
-        onClick={() => setExpanded(!expanded)}
+        onClick={() => onToggleExpand(node.path)}
         onContextMenu={(e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -86,6 +90,8 @@ function TreeNode({
             depth={depth + 1}
             onFileClick={onFileClick}
             onContextMenu={onContextMenu}
+            expandedFolders={expandedFolders}
+            onToggleExpand={onToggleExpand}
           />
         ))}
     </div>
@@ -106,6 +112,59 @@ export default function FileTree({
   const [nodes, setNodes] = useState<FsNode[]>([]);
   const [rootName, setRootName] = useState("");
   const [rootPath, setRootPath] = useState<string | null>(null);
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+
+  const loadExpandedState = useCallback(async (path: string) => {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const paths: string[] = await invoke("load_expanded_state", { rootPath: path });
+      setExpandedFolders(new Set(paths));
+    } catch (err) {
+      console.error("Failed to load expanded state:", err);
+    }
+  }, []);
+
+  const saveExpandedState = useCallback(async (paths: string[]) => {
+    if (!rootPath) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("save_expanded_state", { rootPath, paths });
+    } catch (err) {
+      console.error("Failed to save expanded state:", err);
+    }
+  }, [rootPath]);
+
+  const toggleExpand = useCallback(async (path: string) => {
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      saveExpandedState(Array.from(next));
+      return next;
+    });
+  }, [saveExpandedState]);
+
+  useEffect(() => {
+    async function tryAutoOpen() {
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const lastPath: string | null = await invoke("load_last_folder");
+        if (!lastPath) return;
+
+        const result: ScanFolderResult = await invoke("scan_folder", { path: lastPath });
+        setRootName(result.name);
+        setRootPath(lastPath);
+        setNodes(buildPaths(result.children, ""));
+        await loadExpandedState(lastPath);
+      } catch (err) {
+        console.error("Failed to auto-open last folder:", err);
+      }
+    }
+    tryAutoOpen();
+  }, [loadExpandedState]);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -137,10 +196,13 @@ export default function FileTree({
       setRootName(result.name);
       setRootPath(path);
       setNodes(buildPaths(result.children, ""));
+      setExpandedFolders(new Set());
+      await invoke("save_last_folder", { path });
+      await loadExpandedState(path);
     } catch (err) {
       console.error("Failed to open folder:", err);
     }
-  }, []);
+  }, [loadExpandedState]);
 
   const handleFileClick = useCallback(
     async (node: FsNode) => {
@@ -346,14 +408,16 @@ export default function FileTree({
             }}
           >
             {nodes.map((node) => (
-              <TreeNode
-                key={node.path}
-                node={node}
-                depth={0}
-                onFileClick={handleFileClick}
-                onContextMenu={handleContextMenu}
-              />
-            ))}
+               <TreeNode
+                 key={node.path}
+                 node={node}
+                 depth={0}
+                 onFileClick={handleFileClick}
+                 onContextMenu={handleContextMenu}
+                 expandedFolders={expandedFolders}
+                 onToggleExpand={toggleExpand}
+               />
+             ))}
           </div>
         </>
       )}
