@@ -20,12 +20,20 @@ function getLanguage(filename: string): string | undefined {
   const ext = filename.split(".").pop()?.toLowerCase();
   const map: Record<string, string> = {
     js: "javascript",
+    ts: "typescript",
+    jsx: "jsx",
+    tsx: "tsx",
     json: "json",
     jsonl: "json",
     md: "markdown",
     markdown: "markdown",
     yaml: "yaml",
     yml: "yaml",
+    py: "python",
+    rs: "rust",
+    html: "html",
+    css: "css",
+    sh: "bash",
   };
   return ext ? map[ext] : undefined;
 }
@@ -51,23 +59,13 @@ export default function App() {
   ];
 
   const handleFileOpen = useCallback(async (node: FsNode) => {
-    if (!node.file) return;
-    try {
-      const content = await node.file.text();
-      setActiveFile({
-        path: node.path,
-        name: node.name,
-        content,
-        language: getLanguage(node.name),
-      });
-    } catch {
-      setActiveFile({
-        path: node.path,
-        name: node.name,
-        content: "// Unable to read file",
-        language: undefined,
-      });
-    }
+    const content = node.content || "";
+    setActiveFile({
+      path: node.path,
+      name: node.name,
+      content,
+      language: getLanguage(node.name),
+    });
   }, []);
 
   return (
@@ -104,6 +102,7 @@ export default function App() {
                 setActiveFile((prev) =>
                   prev ? { ...prev, content: code } : prev,
                 );
+                (window as any).__nightshiftActiveContent = code;
               }}
             />
           ) : (

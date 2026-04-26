@@ -379,3 +379,124 @@ body {
 .hidden {
   display: none !important;
 }
+
+.context-menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 4px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(12px);
+}
+
+.context-menu-item {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  color: var(--text-secondary);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.12s ease;
+}
+
+.context-menu-item:hover {
+  color: var(--moon-glow);
+  background: var(--moon-glow-soft);
+}
+
+.context-menu-item.danger {
+  color: #e06b6b;
+}
+
+.context-menu-item.danger:hover {
+  background: rgba(224, 107, 107, 0.1);
+}
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.dialog-box {
+  width: 340px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+}
+
+.dialog-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 14px;
+}
+
+.dialog-label {
+  display: block;
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.dialog-input {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.dialog-input:focus {
+  border-color: var(--moon-glow-medium);
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.dialog-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: none;
+}
+
+.dialog-btn.cancel {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.dialog-btn.cancel:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.dialog-btn.primary {
+  color: var(--bg-deepest);
+  background: var(--moon-glow);
+}
+
+.dialog-btn.primary:hover {
+  background: var(--accent-dim);
+}

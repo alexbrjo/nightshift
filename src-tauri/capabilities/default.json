@@ -1,0 +1,10 @@
+{
+  "identifier": "default",
+  "description": "Default capabilities for dialog and core IPC",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-ask"
+  ]
+}
