@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import Editor from "./components/Editor";
 import FileTree, { type FsNode } from "./components/FileTree";
 import UnderConstruction from "./components/UnderConstruction";
@@ -47,6 +47,7 @@ export default function App() {
     content: string;
     language?: string;
   } | null>(null);
+  const fileContentsRef = useRef(new Map<string, string>());
 
   const sections: { id: Section; icon: string; label: string }[] = [
     { id: "code-editor", icon: "\u270E", label: "Code Editor" },
@@ -61,6 +62,7 @@ export default function App() {
 
   const handleFileOpen = useCallback(async (node: FsNode) => {
     const content = node.content || "";
+    fileContentsRef.current.set(node.path, content);
     setActiveFile({
       path: node.path,
       name: node.name,
@@ -91,7 +93,7 @@ export default function App() {
         {/* FileTree always mounted so folder state persists across section switches */}
         <FileTree
           onFileOpen={handleFileOpen}
-          getActiveContent={() => activeFile?.content || ""}
+          getActiveContent={(filePath) => fileContentsRef.current.get(filePath || activeFile?.path || "") ?? undefined}
           className={activeSection === "code-editor" ? "" : "hidden"}
         />
 
@@ -102,9 +104,13 @@ export default function App() {
                 code={activeFile.content}
                 language={activeFile.language}
                 onChange={(code) => {
-                  setActiveFile((prev) =>
-                    prev ? { ...prev, content: code } : prev,
-                  );
+                  setActiveFile((prev) => {
+                    if (prev) {
+                      fileContentsRef.current.set(prev.path, code);
+                      return { ...prev, content: code };
+                    }
+                    return prev;
+                  });
                 }}
               />
             ) : (

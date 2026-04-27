@@ -31,6 +31,10 @@ function buildPaths(nodes: RawFsNode[], parentPath: string): FsNode[] {
   }));
 }
 
+function getParentPath(node: FsNode): string {
+  return node.isDir ? node.path : (node.path.lastIndexOf("/") > 0 ? node.path.substring(0, node.path.lastIndexOf("/")) : "");
+}
+
 function TreeNode({
   node,
   depth,
@@ -107,7 +111,7 @@ export default function FileTree({
   className = "",
 }: {
   onFileOpen: (node: FsNode) => void;
-  getActiveContent: () => string;
+  getActiveContent: (filePath?: string) => string | undefined;
   className?: string;
 }) {
   const [nodes, setNodes] = useState<FsNode[]>([]);
@@ -211,6 +215,12 @@ export default function FileTree({
       if (node.isDir || !rootPath) return;
 
       try {
+        const inMemoryContent = getActiveContent(node.path);
+        if (inMemoryContent !== undefined) {
+          onFileOpen({ ...node, content: inMemoryContent });
+          return;
+        }
+
         const { invoke } = await import("@tauri-apps/api/core");
         const content: string = await invoke("read_file", {
           relativePath: node.path,
@@ -220,7 +230,7 @@ export default function FileTree({
         showToast(`Failed to read file: ${err}`);
       }
     },
-    [onFileOpen, rootPath],
+    [onFileOpen, rootPath, getActiveContent],
   );
 
   const handleContextMenu = useCallback((e: React.MouseEvent, node: FsNode) => {
@@ -257,7 +267,7 @@ export default function FileTree({
       if (!rootPath) return;
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const parentPath = node.isDir ? node.path : (node.path.lastIndexOf("/") > 0 ? node.path.substring(0, node.path.lastIndexOf("/")) : "");
+        const parentPath = getParentPath(node);
         await invoke("create_file", { parentRelativePath: parentPath, fileName });
         await refreshTree();
       } catch (err) {
@@ -272,7 +282,7 @@ export default function FileTree({
       if (!rootPath) return;
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const parentPath = node.isDir ? node.path : (node.path.lastIndexOf("/") > 0 ? node.path.substring(0, node.path.lastIndexOf("/")) : "");
+        const parentPath = getParentPath(node);
         await invoke("create_folder", { parentRelativePath: parentPath, folderName });
         await refreshTree();
       } catch (err) {
@@ -335,7 +345,7 @@ export default function FileTree({
       if (!rootPath || node.isDir) return;
       try {
         const { invoke } = await import("@tauri-apps/api/core");
-        const content = getActiveContent();
+        const content = getActiveContent(node.path);
         if (content !== undefined) {
           await invoke("write_file", { relativePath: node.path, content });
         }

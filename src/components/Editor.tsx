@@ -32,7 +32,9 @@ export default function Editor({ code, language, onChange }: EditorProps) {
   const viewRef = useRef<EditorView | null>(null);
 
   useEffect(() => {
-    if (!editorRef.current || viewRef.current) return;
+    if (!editorRef.current) return;
+
+    viewRef.current?.destroy();
 
     const startState = EditorState.create({
       doc: code,
@@ -60,7 +62,7 @@ export default function Editor({ code, language, onChange }: EditorProps) {
       viewRef.current?.destroy();
       viewRef.current = null;
     };
-  }, []);
+  }, [language]);
 
   useEffect(() => {
     if (viewRef.current && code !== viewRef.current.state.doc.toString()) {
