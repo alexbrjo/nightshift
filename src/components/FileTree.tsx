@@ -400,39 +400,53 @@ export default function FileTree({
     return items;
   };
 
-  return (
-    <div className={`file-tree-panel ${className}`}>
-      {nodes.length === 0 ? (
-        <div className="open-folder-prompt">
-          <button className="open-folder-btn" onClick={openFolder}>
-            Open Folder
-          </button>
-        </div>
-      ) : (
-        <>
-          <div className="tree-header">{rootName}</div>
-          <div
-            className="tree-content"
-            onContextMenu={(e) => {
-              if (e.target === e.currentTarget) {
-                e.preventDefault();
-              }
-            }}
-          >
-            {nodes.map((node) => (
-               <TreeNode
-                 key={node.path}
-                 node={node}
-                 depth={0}
-                 onFileClick={handleFileClick}
-                 onContextMenu={handleContextMenu}
-                 expandedFolders={expandedFolders}
-                 onToggleExpand={toggleExpand}
-               />
-             ))}
+    return (
+      <div className={`file-tree-panel ${className}`}>
+        {rootPath === null ? (
+          <div className="open-folder-prompt">
+            <button className="open-folder-btn" onClick={openFolder}>
+              Open Folder
+            </button>
           </div>
-        </>
-      )}
+        ) : (
+          <>
+            <div
+              className="tree-header"
+              onContextMenu={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const rootNode: FsNode = {
+                  name: rootName,
+                  path: rootPath ?? "",
+                  isDir: true,
+                };
+                handleContextMenu(e, rootNode);
+              }}
+            >
+              {rootName}
+            </div>
+            <div
+              className="tree-content"
+              onContextMenu={(e) => {
+                if (e.target === e.currentTarget) {
+                  e.preventDefault();
+                }
+              }}
+            >
+              {nodes.map((node) => (
+                <TreeNode
+                  key={node.path}
+                  node={node}
+                  depth={0}
+                  onFileClick={handleFileClick}
+                  onContextMenu={handleContextMenu}
+                  expandedFolders={expandedFolders}
+                  onToggleExpand={toggleExpand}
+                />
+              ))}
+            </div>
+          </>
+        )}
 
       {contextMenu && (
         <ContextMenu
