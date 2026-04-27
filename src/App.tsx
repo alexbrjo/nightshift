@@ -49,12 +49,12 @@ export default function App() {
   } | null>(null);
 
   const sections: { id: Section; icon: string; label: string }[] = [
-    { id: "code-editor", icon: "&#9998;", label: "Code Editor" },
-    { id: "collection-viewer", icon: "&#128457;", label: "Collection Viewer" },
-    { id: "job-runner", icon: "&#9658;", label: "Job Runner" },
+    { id: "code-editor", icon: "\u270E", label: "Code Editor" },
+    { id: "collection-viewer", icon: "\uD83D\uDCC1", label: "Collection Viewer" },
+    { id: "job-runner", icon: "\u25B6", label: "Job Runner" },
     {
       id: "experiment-designer",
-      icon: "&#9830;",
+      icon: "\u26FC",
       label: "Experiment Designer",
     },
   ];
@@ -73,7 +73,7 @@ export default function App() {
     <ToastProvider>
       <div className="app">
         <aside className="sidebar">
-          <div className="sidebar-logo">&#9789;</div>
+          <div className="sidebar-logo">{"\u2611"}</div>
           <nav className="sidebar-nav">
             {sections.map((section) => (
               <button
@@ -82,7 +82,7 @@ export default function App() {
                 onClick={() => setActiveSection(section.id)}
                 title={section.label}
               >
-                <span dangerouslySetInnerHTML={{ __html: section.icon }} />
+                <span>{section.icon}</span>
               </button>
             ))}
           </nav>
