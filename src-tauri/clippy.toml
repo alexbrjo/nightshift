@@ -1,0 +1,8 @@
+# Cognitive complexity threshold
+cognitive-complexity-threshold = 15
+
+# Too many arguments (Tauri commands often take State + params)
+too-many-arguments-threshold = 10
+
+# Type complexity threshold
+type-complexity-threshold = 250

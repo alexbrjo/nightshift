@@ -8,9 +8,8 @@ struct AppState {
     root_path: std::sync::Mutex<Option<PathBuf>>,
 }
 
-const TEXT_EXTENSIONS: &[&str] = &[
-    "js", "json", "jsonl", "yaml", "yml", "csv", "md", "markdown", "txt", "jinja", "jinja2",
-];
+const TEXT_EXTENSIONS: &[&str] =
+    &["js", "json", "jsonl", "yaml", "yml", "csv", "md", "markdown", "txt", "jinja", "jinja2"];
 
 const MAX_SCAN_DEPTH: u32 = 12;
 const MAX_ENTRIES_PER_DIR: usize = 1_000;
@@ -19,7 +18,7 @@ fn is_text_file(filename: &str) -> bool {
     if let Some(ext) = filename.rsplit('.').next() {
         return TEXT_EXTENSIONS.contains(&ext.to_lowercase().as_str());
     }
-    return false;
+    false
 }
 
 fn sanitize_name(name: &str) -> Result<String, String> {
@@ -39,10 +38,7 @@ fn scan_directory(
     file_count: &mut usize,
 ) -> Result<Vec<serde_json::Value>, String> {
     if depth > MAX_SCAN_DEPTH {
-        return Err(format!(
-            "Maximum directory scan depth ({}) exceeded",
-            MAX_SCAN_DEPTH
-        ));
+        return Err(format!("Maximum directory scan depth ({}) exceeded", MAX_SCAN_DEPTH));
     }
 
     let mut entries = Vec::new();
@@ -50,9 +46,7 @@ fn scan_directory(
     for entry in fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))? {
         let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
         let path = entry.path();
-        let metadata = entry
-            .metadata()
-            .map_err(|e| format!("Failed to read metadata: {}", e))?;
+        let metadata = entry.metadata().map_err(|e| format!("Failed to read metadata: {}", e))?;
         let name = entry.file_name().to_string_lossy().to_string();
 
         if metadata.is_dir() {
@@ -82,16 +76,9 @@ fn scan_directory(
         let a_dir = a["isDir"].as_bool().unwrap_or(false);
         let b_dir = b["isDir"].as_bool().unwrap_or(false);
         if a_dir != b_dir {
-            return if a_dir {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Greater
-            };
+            return if a_dir { std::cmp::Ordering::Less } else { std::cmp::Ordering::Greater };
         }
-        a["name"]
-            .as_str()
-            .unwrap_or("")
-            .cmp(b["name"].as_str().unwrap_or(""))
+        a["name"].as_str().unwrap_or("").cmp(b["name"].as_str().unwrap_or(""))
     });
 
     Ok(entries)
@@ -150,10 +137,7 @@ fn rename_path(
     let root = root.as_ref().ok_or("No folder opened".to_string())?;
     let new_name = sanitize_name(&new_name)?;
     let old_path = root.join(&relative_path);
-    let parent = old_path
-        .parent()
-        .ok_or("Invalid path".to_string())?
-        .to_path_buf();
+    let parent = old_path.parent().ok_or("Invalid path".to_string())?.to_path_buf();
     let new_path = parent.join(&new_name);
 
     if new_path.exists() {
@@ -162,11 +146,7 @@ fn rename_path(
 
     fs::rename(&old_path, &new_path).map_err(|e| format!("Failed to rename: {}", e))?;
 
-    Ok(new_path
-        .strip_prefix(root)
-        .unwrap_or(&new_path)
-        .to_string_lossy()
-        .to_string())
+    Ok(new_path.strip_prefix(root).unwrap_or(&new_path).to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -215,11 +195,7 @@ fn copy_file(state: State<AppState>, relative_path: String) -> Result<String, St
 
     fs::copy(&source, &dest).map_err(|e| format!("Failed to copy: {}", e))?;
 
-    Ok(dest
-        .strip_prefix(root)
-        .unwrap_or(&dest)
-        .to_string_lossy()
-        .to_string())
+    Ok(dest.strip_prefix(root).unwrap_or(&dest).to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -270,11 +246,7 @@ fn create_folder(
 
     fs::create_dir_all(&new_folder).map_err(|e| format!("Failed to create folder: {}", e))?;
 
-    Ok(new_folder
-        .strip_prefix(root)
-        .unwrap_or(&new_folder)
-        .to_string_lossy()
-        .to_string())
+    Ok(new_folder.strip_prefix(root).unwrap_or(&new_folder).to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -306,19 +278,13 @@ fn create_file(
 
     fs::write(&new_file, "").map_err(|e| format!("Failed to create file: {}", e))?;
 
-    Ok(new_file
-        .strip_prefix(root)
-        .unwrap_or(&new_file)
-        .to_string_lossy()
-        .to_string())
+    Ok(new_file.strip_prefix(root).unwrap_or(&new_file).to_string_lossy().to_string())
 }
 
 #[tauri::command]
 fn save_last_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
-    let col = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let col =
+        app.path().app_data_dir().map_err(|e| format!("Failed to get app data dir: {}", e))?;
     fs::create_dir_all(&col).map_err(|e| format!("Failed to create app data dir: {}", e))?;
     let state_path = col.join("last_folder.json");
     let json = serde_json::json!({ "path": path });
@@ -329,10 +295,8 @@ fn save_last_folder(app: tauri::AppHandle, path: String) -> Result<(), String> {
 
 #[tauri::command]
 fn load_last_folder(app: tauri::AppHandle) -> Result<Option<String>, String> {
-    let col = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    let col =
+        app.path().app_data_dir().map_err(|e| format!("Failed to get app data dir: {}", e))?;
     let state_path = col.join("last_folder.json");
     if !state_path.exists() {
         return Ok(None);
@@ -376,11 +340,7 @@ fn load_expanded_state(root_path: String) -> Result<Vec<String>, String> {
         .map_err(|e| format!("Failed to parse expanded state: {}", e))?;
     let paths = json["expandedFolders"]
         .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
+        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
         .unwrap_or_default();
     Ok(paths)
 }
@@ -389,9 +349,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState {
-            root_path: std::sync::Mutex::new(None),
-        })
+        .manage(AppState { root_path: std::sync::Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
             scan_folder,
             set_root_path,
@@ -425,7 +383,7 @@ mod tests {
     fn sanitize_name_rejects_dotdot() {
         assert!(sanitize_name("foo/../bar").is_err());
         assert!(sanitize_name("..").is_err());
-        assert!(sanitize_name("foo..bar").is_ok()); // ".." not as path separator is fine
+        assert!(sanitize_name("foo..bar").is_err()); // ".." anywhere is rejected
     }
 
     #[test]
@@ -490,8 +448,155 @@ mod tests {
         let mut count = 0usize;
         let result = scan_directory(&test_dir, 0, &mut count);
         assert!(result.is_ok());
-        let entries = result.unwrap();
+        let _entries = result.unwrap();
         assert_eq!(count, 3); // a.txt, b.json, subdir/c.md
+
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn is_text_file_returns_true_for_known_extensions() {
+        assert!(is_text_file("file.js"));
+        assert!(is_text_file("file.json"));
+        assert!(is_text_file("file.jsonl"));
+        assert!(is_text_file("file.yaml"));
+        assert!(is_text_file("file.yml"));
+        assert!(is_text_file("file.csv"));
+        assert!(is_text_file("file.md"));
+        assert!(is_text_file("file.markdown"));
+        assert!(is_text_file("file.txt"));
+        assert!(is_text_file("file.jinja"));
+        assert!(is_text_file("file.jinja2"));
+    }
+
+    #[test]
+    fn is_text_file_returns_false_for_binary_extensions() {
+        assert!(!is_text_file("file.png"));
+        assert!(!is_text_file("file.jpg"));
+        assert!(!is_text_file("file.exe"));
+        assert!(!is_text_file("file.zip"));
+        assert!(!is_text_file("file.pdf"));
+    }
+
+    #[test]
+    fn is_text_file_returns_false_for_no_extension() {
+        assert!(!is_text_file("README"));
+        assert!(!is_text_file(".gitignore"));
+    }
+
+    #[test]
+    fn is_text_file_handles_uppercase_extensions() {
+        assert!(is_text_file("file.TXT"));
+        assert!(is_text_file("file.JSON"));
+        assert!(is_text_file("file.MD"));
+    }
+
+    #[test]
+    fn is_text_file_handles_multiple_dots() {
+        assert!(is_text_file("file.test.js"));
+        assert!(is_text_file("data.backup.json"));
+    }
+
+    #[test]
+    fn sanitize_name_strips_null_bytes() {
+        let result = sanitize_name("foo\0bar");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn sanitize_name_handles_only_null_bytes() {
+        assert!(sanitize_name("\0\0").is_err());
+    }
+
+    #[test]
+    fn sanitize_name_handles_unicode() {
+        assert!(sanitize_name("файл.txt").is_ok());
+        assert!(sanitize_name("文件.md").is_ok());
+    }
+
+    #[test]
+    fn sanitize_name_handles_special_chars() {
+        assert!(sanitize_name("file-name.txt").is_ok());
+        assert!(sanitize_name("file_name.txt").is_ok());
+        assert!(sanitize_name(".hidden").is_ok());
+    }
+
+    #[test]
+    fn scan_directory_sorts_directories_first() {
+        let dir = std::env::temp_dir();
+        let test_dir = dir.join(format!("nightshift_sort_test_{}", std::process::id()));
+        fs::create_dir_all(&test_dir).ok();
+
+        fs::write(test_dir.join("b.txt"), "").ok();
+        fs::write(test_dir.join("a.txt"), "").ok();
+        fs::create_dir_all(test_dir.join("z_dir")).ok();
+        fs::create_dir_all(test_dir.join("a_dir")).ok();
+
+        let mut count = 0usize;
+        let result = scan_directory(&test_dir, 0, &mut count);
+        assert!(result.is_ok());
+        let entries = result.unwrap();
+
+        // Directories should come first, then files, both alphabetical
+        assert!(entries[0]["isDir"].as_bool().unwrap());
+        assert_eq!(entries[0]["name"].as_str().unwrap(), "a_dir");
+        assert!(entries[1]["isDir"].as_bool().unwrap());
+        assert_eq!(entries[1]["name"].as_str().unwrap(), "z_dir");
+        assert!(!entries[2]["isDir"].as_bool().unwrap());
+        assert_eq!(entries[2]["name"].as_str().unwrap(), "a.txt");
+
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn scan_directory_handles_empty_directory() {
+        let dir = std::env::temp_dir();
+        let test_dir = dir.join(format!("nightshift_empty_test_{}", std::process::id()));
+        fs::create_dir_all(&test_dir).ok();
+
+        let mut count = 0usize;
+        let result = scan_directory(&test_dir, 0, &mut count);
+        assert!(result.is_ok());
+        let entries = result.unwrap();
+        assert_eq!(entries.len(), 0);
+        assert_eq!(count, 0);
+
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn scan_directory_skips_binary_files() {
+        let dir = std::env::temp_dir();
+        let test_dir = dir.join(format!("nightshift_binary_test_{}", std::process::id()));
+        fs::create_dir_all(&test_dir).ok();
+
+        fs::write(test_dir.join("file.txt"), "").ok();
+        fs::write(test_dir.join("image.png"), "").ok();
+
+        let mut count = 0usize;
+        let result = scan_directory(&test_dir, 0, &mut count);
+        assert!(result.is_ok());
+        let entries = result.unwrap();
+        assert_eq!(entries.len(), 1); // Only .txt should appear
+        assert_eq!(count, 1);
+
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn scan_directory_handles_nested_directories() {
+        let dir = std::env::temp_dir();
+        let test_dir = dir.join(format!("nightshift_nested_test_{}", std::process::id()));
+        fs::create_dir_all(&test_dir).ok();
+
+        fs::create_dir_all(test_dir.join("a").join("b").join("c")).ok();
+        fs::write(test_dir.join("a").join("b").join("c").join("deep.txt"), "content").ok();
+
+        let mut count = 0usize;
+        let result = scan_directory(&test_dir, 0, &mut count);
+        assert!(result.is_ok());
+        let _entries = result.unwrap();
+        assert_eq!(count, 1);
 
         fs::remove_dir_all(&test_dir).ok();
     }
