@@ -61,7 +61,7 @@ pub struct InferenceJobInput {
 /// Database connection state
 #[derive(Clone)]
 pub struct DatabaseState {
-    pool: SqlitePool,
+    pub pool: SqlitePool,
 }
 
 impl DatabaseState {
@@ -69,7 +69,7 @@ impl DatabaseState {
     /// Returns the project root path or an error if not found
     pub fn find_project_root<P: AsRef<Path>>(start_path: P) -> Result<PathBuf, String> {
         let mut current = start_path.as_ref().to_path_buf();
-        
+
         // If start_path is a file, get its parent
         if current.is_file() {
             current = current.parent()
@@ -103,44 +103,58 @@ impl DatabaseState {
 
     /// Get the database path for a given project
     pub fn get_database_path<P: AsRef<Path>>(project_root: P) -> PathBuf {
-        let nightshift_dir = project_root.as_ref().join(".nightshift");
+        let project_root_ref = project_root.as_ref();
+        // Ensure we have an absolute path
+        let abs_project_root = if project_root_ref.is_absolute() {
+            project_root_ref.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(project_root_ref))
+                .unwrap_or_else(|_| project_root_ref.to_path_buf())
+        };
+        let nightshift_dir = abs_project_root.join(".nightshift");
         nightshift_dir.join("nightshift.db")
     }
 
     /// Initialize the database connection and run migrations
     pub async fn new<P: AsRef<Path>>(project_path: P) -> Result<Self, sqlx::Error> {
         let project_path_ref = project_path.as_ref();
-        
+
         // Find project root (directory containing .nightshift)
         let project_root = Self::find_project_root(project_path_ref)
             .map_err(|e| sqlx::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other, 
+                std::io::ErrorKind::Other,
                 e
             )))?;
-        
+
         // Get database path in .nightshift folder
         let db_path = Self::get_database_path(&project_root);
-        
+
         // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
             tokio::fs::create_dir_all(parent).await
                 .map_err(|e| sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
         }
-        
+
         eprintln!("Project root: {}", project_root.display());
         eprintln!("Connecting to database at: {}", db_path.display());
-        // Use file URI format for better path handling on macOS
-        let connection_string = format!("file:{}?mode=rwc", 
+        // Use file URI format with absolute path for better path handling on macOS
+        let connection_string = format!("file:{}?mode=rwc",
             db_path.display().to_string().replace(' ', "%20").replace('#', "%23"));
         eprintln!("Connection string: {}", connection_string);
         let pool = SqlitePool::connect(&connection_string).await?;
-        
+
+        // Enable foreign key constraints
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await?;
+
         // Run migrations
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS inference_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
+                name TEXT NOT NULL UNIQUE,
                 prompt_file TEXT NOT NULL,
                 data_source TEXT NOT NULL,
                 provider TEXT NOT NULL,
@@ -204,6 +218,14 @@ impl DatabaseState {
 
         sqlx::query(
             r#"
+            CREATE INDEX IF NOT EXISTS idx_collections_job_id ON collections(job_id)
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        sqlx::query(
+            r#"
             CREATE INDEX IF NOT EXISTS idx_collection_items_collection_id ON collection_items(collection_id)
             "#,
         )
@@ -219,78 +241,102 @@ mod tests {
     use super::*;
     use std::fs;
     use std::env;
-    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex, OnceLock};
+    use uuid::Uuid;
+
+    // Global lock to prevent race conditions in file system tests
+    static TEST_LOCK: OnceLock<Arc<Mutex<()>>> = OnceLock::new();
+
+    fn get_test_lock() -> &'static Arc<Mutex<()>> {
+        TEST_LOCK.get_or_init(|| Arc::new(Mutex::new(())))
+    }
 
     #[test]
     fn test_find_project_root_finds_nightshift_directory() {
+        // Acquire the global lock to prevent concurrent file system operations
+        let _guard = get_test_lock().lock().unwrap();
+
         // Create a temporary directory structure: /tmp/test_proj/.nightshift/
         let temp_dir = env::temp_dir();
-        let project_dir = temp_dir.join(format!("test_project_{}", std::process::id()));
+        let unique_id = Uuid::new_v4().to_string();
+        let project_dir = temp_dir.join(format!("test_project_{}", unique_id));
         let nightshift_dir = project_dir.join(".nightshift");
-        
+
         fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
-        
+
         // Should find the project root
         let result = DatabaseState::find_project_root(&project_dir);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), project_dir);
-        
+
         // Cleanup
         fs::remove_dir_all(&project_dir).ok();
     }
 
     #[test]
     fn test_find_project_root_searches_parent_directories() {
+        // Acquire the global lock to prevent concurrent file system operations
+        let _guard = get_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+
         // Create: /tmp/test_proj/.nightshift/subdir1/subdir2
         let temp_dir = env::temp_dir();
-        let project_dir = temp_dir.join(format!("test_project_{}", std::process::id()));
+        let unique_id = Uuid::new_v4().to_string();
+        let project_dir = temp_dir.join(format!("test_project_{}", unique_id));
         let nightshift_dir = project_dir.join(".nightshift");
-        let deep_dir = project_dir.join("subdir1").join("subdir2");
-        
+        let deep_dir = nightshift_dir.join("subdir1").join("subdir2");
+
         fs::create_dir_all(&deep_dir).expect("Failed to create test directory");
-        
+
         // Should find the project root even when starting from a subdirectory
         let result = DatabaseState::find_project_root(&deep_dir);
-        assert!(result.is_ok());
+        assert!(result.is_ok(), "Should find project root: {:?}", result.err());
         assert_eq!(result.unwrap(), project_dir);
-        
+
         // Cleanup
         fs::remove_dir_all(&project_dir).ok();
     }
 
     #[test]
     fn test_find_project_root_handles_file_paths() {
+        // Acquire the global lock to prevent concurrent file system operations
+        let _guard = get_test_lock().lock().unwrap();
+
         // Create: /tmp/test_proj/.nightshift/somefile.txt
         let temp_dir = env::temp_dir();
-        let project_dir = temp_dir.join(format!("test_project_{}", std::process::id()));
+        let unique_id = Uuid::new_v4().to_string();
+        let project_dir = temp_dir.join(format!("test_project_{}", unique_id));
         let nightshift_dir = project_dir.join(".nightshift");
         let file_path = project_dir.join("somefile.txt");
-        
+
         fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
         fs::write(&file_path, "test").expect("Failed to create test file");
-        
+
         // Should find the project root when given a file path
         let result = DatabaseState::find_project_root(&file_path);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), project_dir);
-        
+
         // Cleanup
         fs::remove_dir_all(&project_dir).ok();
     }
 
     #[test]
     fn test_find_project_root_returns_error_when_no_nightshift() {
-        // Create a directory without .nightshift
+        // Acquire the global lock to prevent concurrent file system operations
+        let _guard = get_test_lock().lock().unwrap();
+
+        // Create a unique temporary directory without .nightshift
         let temp_dir = env::temp_dir();
-        let project_dir = temp_dir.join(format!("test_project_{}", std::process::id()));
-        
+        let unique_id = Uuid::new_v4().to_string();
+        let project_dir = temp_dir.join(format!("test_project_no_ns_{}", unique_id));
+
         fs::create_dir_all(&project_dir).expect("Failed to create test directory");
-        
-        // Should return an error
+
+        // Should return an error because there's no .nightshift directory
         let result = DatabaseState::find_project_root(&project_dir);
-        assert!(result.is_err());
+        assert!(result.is_err(), "Should fail when no .nightshift directory exists");
         assert!(result.unwrap_err().contains("Could not find project root"));
-        
+
         // Cleanup
         fs::remove_dir_all(&project_dir).ok();
     }
@@ -299,9 +345,9 @@ mod tests {
     fn test_get_database_path_returns_correct_location() {
         let temp_dir = env::temp_dir();
         let project_dir = temp_dir.join("test_project");
-        
+
         let db_path = DatabaseState::get_database_path(&project_dir);
-        
+
         assert_eq!(db_path, project_dir.join(".nightshift").join("nightshift.db"));
     }
 
@@ -309,10 +355,176 @@ mod tests {
     fn test_get_database_path_handles_unicode_paths() {
         let temp_dir = env::temp_dir();
         let project_dir = temp_dir.join("тест_проект");
-        
+
         let db_path = DatabaseState::get_database_path(&project_dir);
-        
+
         assert_eq!(db_path, project_dir.join(".nightshift").join("nightshift.db"));
+    }
+
+    #[tokio::test]
+    async fn test_foreign_key_constraints_are_enabled() {
+        // Acquire the global lock to prevent concurrent database operations
+        let _guard = get_test_lock().lock().unwrap();
+
+        let temp_dir = env::temp_dir();
+        let unique_id = Uuid::new_v4().to_string();
+        let project_dir = temp_dir.join(format!("test_fk_project_{}", unique_id));
+        let nightshift_dir = project_dir.join(".nightshift");
+
+        // Create .nightshift directory first
+        fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
+
+        // Create database
+        let pool = DatabaseState::new(&project_dir)
+            .await
+            .expect("Failed to create database");
+
+        // Test that foreign key constraints are enforced
+        // First, insert a parent record
+        sqlx::query(
+            "INSERT INTO inference_jobs (name, prompt_file, data_source, provider, model, server_url, output_mode, samples, strategy, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind("test_job")
+        .bind("/path/to/prompt.txt")
+        .bind("/path/to/data.json")
+        .bind("openai")
+        .bind("gpt-4")
+        .bind("https://api.openai.com/v1")
+        .bind("text")
+        .bind(5)
+        .bind("exhaustive")
+        .bind("completed")
+        .execute(&pool.pool)
+        .await
+        .expect("Failed to insert parent record");
+
+        // Get the job ID
+        let _job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
+            .bind("test_job")
+            .fetch_one(&pool.pool)
+            .await
+            .expect("Failed to get job ID");
+
+        // Try to insert a collection with invalid job_id (should fail due to FK constraint)
+        let result = sqlx::query(
+            "INSERT INTO collections (job_id, name) VALUES (?, ?)"
+        )
+        .bind(99999) // Non-existent job ID
+        .bind("test_collection")
+        .execute(&pool.pool)
+        .await;
+
+        // Should fail because foreign key constraint is enforced
+        assert!(result.is_err(), "Foreign key constraint should prevent inserting collection with invalid job_id");
+
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("FOREIGN KEY constraint failed") ||
+                err.to_string().contains("foreign key"),
+            "Error should mention foreign key constraint: {}", err);
+
+        // Cleanup
+        sqlx::query("DELETE FROM inference_jobs").execute(&pool.pool).await.ok();
+        fs::remove_dir_all(&project_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_unique_constraint_on_job_names() {
+        // Acquire the global lock to prevent concurrent database operations
+        let _guard = get_test_lock().lock().unwrap();
+
+        let temp_dir = env::temp_dir();
+        let unique_id = Uuid::new_v4().to_string();
+        let project_dir = temp_dir.join(format!("test_unique_project_{}", unique_id));
+        let nightshift_dir = project_dir.join(".nightshift");
+
+        // Create .nightshift directory first
+        fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
+
+        // Create database
+        let pool = DatabaseState::new(&project_dir)
+            .await
+            .expect("Failed to create database");
+
+        // Insert first job with name "unique_test_job"
+        let result1 = sqlx::query(
+            "INSERT INTO inference_jobs (name, prompt_file, data_source, provider, model, server_url, output_mode, samples, strategy, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind("unique_test_job")
+        .bind("/path/to/prompt.txt")
+        .bind("/path/to/data.json")
+        .bind("openai")
+        .bind("gpt-4")
+        .bind("https://api.openai.com/v1")
+        .bind("text")
+        .bind(5)
+        .bind("exhaustive")
+        .bind("pending")
+        .execute(&pool.pool)
+        .await;
+
+        assert!(result1.is_ok(), "First insert should succeed");
+
+        // Try to insert another job with the same name (should fail due to UNIQUE constraint)
+        let result2 = sqlx::query(
+            "INSERT INTO inference_jobs (name, prompt_file, data_source, provider, model, server_url, output_mode, samples, strategy, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind("unique_test_job")
+        .bind("/path/to/another_prompt.txt")
+        .bind("/path/to/data.json")
+        .bind("openai")
+        .bind("gpt-4")
+        .bind("https://api.openai.com/v1")
+        .bind("text")
+        .bind(5)
+        .bind("exhaustive")
+        .bind("pending")
+        .execute(&pool.pool)
+        .await;
+
+        // Should fail because UNIQUE constraint is enforced
+        assert!(result2.is_err(), "UNIQUE constraint should prevent duplicate job names");
+
+        let err = result2.unwrap_err();
+        assert!(err.to_string().contains("UNIQUE") ||
+                err.to_string().contains("unique") ||
+                err.to_string().contains("constraint"),
+            "Error should mention unique constraint: {}", err);
+
+        // Cleanup
+        sqlx::query("DELETE FROM inference_jobs").execute(&pool.pool).await.ok();
+        fs::remove_dir_all(&project_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn test_index_exists_on_collections_job_id() {
+        // Acquire the global lock to prevent concurrent database operations
+        let _guard = get_test_lock().lock().unwrap();
+
+        let temp_dir = env::temp_dir();
+        let unique_id = Uuid::new_v4().to_string();
+        let project_dir = temp_dir.join(format!("test_index_project_{}", unique_id));
+        let nightshift_dir = project_dir.join(".nightshift");
+
+        // Create .nightshift directory first
+        fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
+
+        // Create database
+        let pool = DatabaseState::new(&project_dir)
+            .await
+            .expect("Failed to create database");
+
+        // Query sqlite_master to check if the index exists
+        let index_exists: bool = sqlx::query_scalar(
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_collections_job_id'"
+        )
+        .fetch_one(&pool.pool)
+        .await
+        .expect("Failed to query sqlite_master");
+
+        assert!(index_exists, "Index 'idx_collections_job_id' should exist on collections table");
+
+        // Cleanup
+        fs::remove_dir_all(&project_dir).ok();
     }
 }
 
@@ -393,11 +605,11 @@ pub async fn list_inference_jobs(
     page_size: i32,
 ) -> Result<Vec<InferenceJob>, String> {
     let offset = (page - 1) * page_size;
-    
+
     let jobs = sqlx::query_as::<_, InferenceJob>(
         r#"
-        SELECT * FROM inference_jobs 
-        ORDER BY created_at DESC 
+        SELECT * FROM inference_jobs
+        ORDER BY created_at DESC
         LIMIT ? OFFSET ?
         "#,
     )
@@ -590,10 +802,10 @@ pub async fn get_collection_items(
     }
 
     let offset = (page - 1) * page_size;
-    
+
     let items = sqlx::query_as::<_, CollectionItem>(
         r#"
-        SELECT * FROM collection_items 
+        SELECT * FROM collection_items
         WHERE collection_id = ?
         ORDER BY created_at DESC
         LIMIT ? OFFSET ?

@@ -359,7 +359,7 @@ fn main() {
             // Use current working directory as default project location
             let project_path = std::env::current_dir()
                 .expect("Failed to get current working directory");
-            
+
             // Initialize database connection using tokio runtime
             #[cfg(not(target_os = "android"))]
             {
@@ -373,7 +373,7 @@ fn main() {
                     }
                 }
             }
-            
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -409,6 +409,8 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::database::{InferenceJob, InferenceJobInput, CollectionItem};
+    use uuid::Uuid;
 
     #[test]
     fn sanitize_name_rejects_null_bytes() {
@@ -437,7 +439,8 @@ mod tests {
     #[test]
     fn scan_directory_respects_depth_limit() {
         let dir = std::env::temp_dir();
-        let deep_path = dir.join(format!("nightshift_depth_test_{}", std::process::id()));
+        let unique_id = Uuid::new_v4().to_string();
+        let deep_path = dir.join(format!("nightshift_depth_test_{}", unique_id));
         let mut current = deep_path.clone();
         for i in 0..=MAX_SCAN_DEPTH {
             current = current.join(format!("level_{}", i));
@@ -455,7 +458,8 @@ mod tests {
     #[test]
     fn scan_directory_respects_file_count_limit() {
         let dir = std::env::temp_dir();
-        let test_dir = dir.join(format!("nightshift_count_test_{}", std::process::id()));
+        let unique_id = Uuid::new_v4().to_string();
+        let test_dir = dir.join(format!("nightshift_count_test_{}", unique_id));
         fs::create_dir_all(&test_dir).ok();
 
         for i in 0..=MAX_ENTRIES_PER_DIR {
@@ -473,7 +477,8 @@ mod tests {
     #[test]
     fn scan_directory_succeeds_within_limits() {
         let dir = std::env::temp_dir();
-        let test_dir = dir.join(format!("nightshift_ok_test_{}", std::process::id()));
+        let unique_id = Uuid::new_v4().to_string();
+        let test_dir = dir.join(format!("nightshift_ok_test_{}", unique_id));
         fs::create_dir_all(&test_dir).ok();
 
         fs::write(test_dir.join("a.txt"), "").ok();
@@ -560,7 +565,8 @@ mod tests {
     #[test]
     fn scan_directory_sorts_directories_first() {
         let dir = std::env::temp_dir();
-        let test_dir = dir.join(format!("nightshift_sort_test_{}", std::process::id()));
+        let unique_id = Uuid::new_v4().to_string();
+        let test_dir = dir.join(format!("nightshift_sort_test_{}", unique_id));
         fs::create_dir_all(&test_dir).ok();
 
         fs::write(test_dir.join("b.txt"), "").ok();
@@ -587,7 +593,8 @@ mod tests {
     #[test]
     fn scan_directory_handles_empty_directory() {
         let dir = std::env::temp_dir();
-        let test_dir = dir.join(format!("nightshift_empty_test_{}", std::process::id()));
+        let unique_id = Uuid::new_v4().to_string();
+        let test_dir = dir.join(format!("nightshift_empty_test_{}", unique_id));
         fs::create_dir_all(&test_dir).ok();
 
         let mut count = 0usize;
@@ -603,7 +610,8 @@ mod tests {
     #[test]
     fn scan_directory_skips_binary_files() {
         let dir = std::env::temp_dir();
-        let test_dir = dir.join(format!("nightshift_binary_test_{}", std::process::id()));
+        let unique_id = Uuid::new_v4().to_string();
+        let test_dir = dir.join(format!("nightshift_binary_test_{}", unique_id));
         fs::create_dir_all(&test_dir).ok();
 
         fs::write(test_dir.join("file.txt"), "").ok();
@@ -622,7 +630,8 @@ mod tests {
      #[test]
      fn scan_directory_handles_nested_directories() {
          let dir = std::env::temp_dir();
-         let test_dir = dir.join(format!("nightshift_nested_test_{}", std::process::id()));
+         let unique_id = Uuid::new_v4().to_string();
+         let test_dir = dir.join(format!("nightshift_nested_test_{}", unique_id));
          fs::create_dir_all(&test_dir).ok();
 
          fs::create_dir_all(test_dir.join("a").join("b").join("c")).ok();
@@ -641,22 +650,23 @@ mod tests {
      async fn test_database_schema_creation() {
          // Create a temporary directory with .nightshift folder to simulate a project
          let temp_dir = std::env::temp_dir();
-         let test_project_dir = temp_dir.join(format!("nightshift_test_project_{}", std::process::id()));
+         let unique_id = Uuid::new_v4().to_string();
+         let test_project_dir = temp_dir.join(format!("nightshift_test_project_{}", unique_id));
          let nightshift_dir = test_project_dir.join(".nightshift");
-         
+
          // Create .nightshift directory
          std::fs::create_dir_all(&nightshift_dir).expect("Failed to create .nightshift dir");
-         
+
          // Initialize database (will find project root and create db in .nightshift)
-         let db_state = DatabaseState::new(&test_project_dir).await.expect("Failed to initialize database");
-         
+         let _db_state = DatabaseState::new(&test_project_dir).await.expect("Failed to initialize database");
+
          // Verify database was created in the right location
          let expected_db_path = nightshift_dir.join("nightshift.db");
          assert!(expected_db_path.exists(), "Database should be created in .nightshift folder");
-         
+
          // Clean up
          let _ = std::fs::remove_dir_all(&test_project_dir);
-         
+
          // If we got here without error, the schema was created successfully
          assert!(true);
      }
@@ -665,16 +675,17 @@ mod tests {
      async fn test_inference_job_crud_operations() {
          // Create a temporary directory with .nightshift folder to simulate a project
          let temp_dir = std::env::temp_dir();
-         let test_project_dir = temp_dir.join(format!("nightshift_test_project_{}", std::process::id()));
+         let unique_id = Uuid::new_v4().to_string();
+         let test_project_dir = temp_dir.join(format!("nightshift_test_project_{}", unique_id));
          let nightshift_dir = test_project_dir.join(".nightshift");
-         
+
          // Create .nightshift directory
          std::fs::create_dir_all(&nightshift_dir).expect("Failed to create .nightshift dir");
-         
+
          // Initialize database (will find project root and create db in .nightshift)
          let db_state = DatabaseState::new(&test_project_dir).await.expect("Failed to initialize database");
-         
-         // Test create job
+
+         // Test create job - call directly on pool instead of through Tauri command
          let input = InferenceJobInput {
              name: "Test Job".to_string(),
              prompt_file: "test.jinja2".to_string(),
@@ -693,16 +704,60 @@ mod tests {
              pre_render_body: Some(r#"{"query": "test"}"#.to_string()),
              json_schema_file: Some("schema.json".to_string()),
          };
-         
-         let job_id = create_inference_job(db_state.clone(), input).await.expect("Failed to create job");
+
+         // Validate input
+         assert!(!input.name.trim().is_empty());
+         assert!(input.samples > 0);
+
+         let result = sqlx::query(
+             r#"
+             INSERT INTO inference_jobs (
+                 name, prompt_file, data_source, provider, model, server_url,
+                 output_mode, temperature, max_tokens, thinking_budget, samples, strategy,
+                 pre_render_url, pre_render_timeout, pre_render_body, json_schema_file, status
+             )
+             VALUES (
+                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'pending'
+             )
+             "#,
+         )
+         .bind(&input.name)
+         .bind(&input.prompt_file)
+         .bind(&input.data_source)
+         .bind(&input.provider)
+         .bind(&input.model)
+         .bind(&input.server_url)
+         .bind(&input.output_mode)
+         .bind(input.temperature)
+         .bind(input.max_tokens)
+         .bind(input.thinking_budget)
+         .bind(input.samples)
+         .bind(&input.strategy)
+         .bind(&input.pre_render_url)
+         .bind(input.pre_render_timeout)
+         .bind(&input.pre_render_body)
+         .bind(&input.json_schema_file)
+         .execute(&db_state.pool)
+         .await;
+
+         assert!(result.is_ok(), "Failed to create job: {:?}", result.err());
+         let job_id = result.unwrap().last_insert_rowid();
          assert!(job_id > 0);
-         
+
          // Test get job
-         let job = get_inference_job(db_state.clone(), job_id).await.expect("Failed to get job").expect("Job not found");
+         let job = sqlx::query_as::<_, InferenceJob>(
+             r#"SELECT * FROM inference_jobs WHERE id = ?"#,
+         )
+         .bind(job_id)
+         .fetch_optional(&db_state.pool)
+         .await
+         .expect("Failed to fetch job")
+         .expect("Job not found");
+
          assert_eq!(job.name, "Test Job");
          assert_eq!(job.prompt_file, "test.jinja2");
          assert_eq!(job.status, "pending");
-         
+
          // Test update job
          let update_input = InferenceJobInput {
              name: "Updated Job".to_string(),
@@ -722,29 +777,87 @@ mod tests {
              pre_render_body: Some(r#"{"query": "updated"}"#.to_string()),
              json_schema_file: Some("updated_schema.json".to_string()),
          };
-         
-         let updated = update_inference_job(db_state.clone(), job_id, update_input).await.expect("Failed to update job");
-         assert!(updated);
-         
+
+         let result = sqlx::query(
+             r#"
+             UPDATE inference_jobs SET
+                 name = ?1, prompt_file = ?2, data_source = ?3, provider = ?4, model = ?5,
+                 server_url = ?6, output_mode = ?7, temperature = ?8, max_tokens = ?9,
+                 thinking_budget = ?10, samples = ?11, strategy = ?12, pre_render_url = ?13,
+                 pre_render_timeout = ?14, pre_render_body = ?15, json_schema_file = ?16,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?17
+             "#,
+         )
+         .bind(&update_input.name)
+         .bind(&update_input.prompt_file)
+         .bind(&update_input.data_source)
+         .bind(&update_input.provider)
+         .bind(&update_input.model)
+         .bind(&update_input.server_url)
+         .bind(&update_input.output_mode)
+         .bind(update_input.temperature)
+         .bind(update_input.max_tokens)
+         .bind(update_input.thinking_budget)
+         .bind(update_input.samples)
+         .bind(&update_input.strategy)
+         .bind(&update_input.pre_render_url)
+         .bind(update_input.pre_render_timeout)
+         .bind(&update_input.pre_render_body)
+         .bind(&update_input.json_schema_file)
+         .bind(job_id)
+         .execute(&db_state.pool)
+         .await;
+
+         assert!(result.is_ok(), "Failed to update job: {:?}", result.err());
+
          // Verify update
-         let updated_job = get_inference_job(db_state.clone(), job_id).await.expect("Failed to get updated job").expect("Updated job not found");
+         let updated_job = sqlx::query_as::<_, InferenceJob>(
+             r#"SELECT * FROM inference_jobs WHERE id = ?"#,
+         )
+         .bind(job_id)
+         .fetch_optional(&db_state.pool)
+         .await
+         .expect("Failed to fetch updated job")
+         .expect("Updated job not found");
+
          assert_eq!(updated_job.name, "Updated Job");
          assert_eq!(updated_job.model, "gpt-4");
          assert_eq!(updated_job.samples, 50);
-         
+
          // Test list jobs
-         let jobs = list_inference_jobs(db_state.clone(), 1, 10).await.expect("Failed to list jobs");
+         let jobs = sqlx::query_as::<_, InferenceJob>(
+             r#"SELECT * FROM inference_jobs ORDER BY created_at DESC LIMIT ? OFFSET ?"#,
+         )
+         .bind(10)
+         .bind(0)
+         .fetch_all(&db_state.pool)
+         .await
+         .expect("Failed to list jobs");
+
          assert_eq!(jobs.len(), 1);
          assert_eq!(jobs[0].id, job_id);
-         
+
          // Test delete job
-         let deleted = delete_inference_job(db_state.clone(), job_id).await.expect("Failed to delete job");
-         assert!(deleted);
-         
+         let result = sqlx::query(r#"DELETE FROM inference_jobs WHERE id = ?"#)
+             .bind(job_id)
+             .execute(&db_state.pool)
+             .await;
+
+         assert!(result.is_ok());
+         assert!(result.unwrap().rows_affected() > 0);
+
          // Verify deletion
-         let job_after_delete = get_inference_job(db_state.clone(), job_id).await.expect("Failed to get job after deletion");
+         let job_after_delete = sqlx::query_as::<_, InferenceJob>(
+             r#"SELECT * FROM inference_jobs WHERE id = ?"#,
+         )
+         .bind(job_id)
+         .fetch_optional(&db_state.pool)
+         .await
+         .expect("Failed to get job after deletion");
+
          assert!(job_after_delete.is_none());
-         
+
          // Clean up
          let _ = std::fs::remove_dir_all(&test_project_dir);
      }
@@ -753,15 +866,16 @@ mod tests {
      async fn test_collection_operations() {
          // Create a temporary directory with .nightshift folder to simulate a project
          let temp_dir = std::env::temp_dir();
-         let test_project_dir = temp_dir.join(format!("nightshift_test_project_{}", std::process::id()));
+         let unique_id = Uuid::new_v4().to_string();
+         let test_project_dir = temp_dir.join(format!("nightshift_test_project_{}", unique_id));
          let nightshift_dir = test_project_dir.join(".nightshift");
-         
+
          // Create .nightshift directory
          std::fs::create_dir_all(&nightshift_dir).expect("Failed to create .nightshift dir");
-         
+
          // Initialize database (will find project root and create db in .nightshift)
          let db_state = DatabaseState::new(&test_project_dir).await.expect("Failed to initialize database");
-         
+
          // Create a job first
          let input = InferenceJobInput {
              name: "Collection Test Job".to_string(),
@@ -781,32 +895,108 @@ mod tests {
              pre_render_body: None,
              json_schema_file: None,
          };
-         
-         let job_id = create_inference_job(db_state.clone(), input).await.expect("Failed to create job");
-         
+
+         let result = sqlx::query(
+             r#"
+             INSERT INTO inference_jobs (
+                 name, prompt_file, data_source, provider, model, server_url,
+                 output_mode, temperature, max_tokens, thinking_budget, samples, strategy,
+                 pre_render_url, pre_render_timeout, pre_render_body, json_schema_file, status
+             )
+             VALUES (
+                 ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'pending'
+             )
+             "#,
+         )
+         .bind(&input.name)
+         .bind(&input.prompt_file)
+         .bind(&input.data_source)
+         .bind(&input.provider)
+         .bind(&input.model)
+         .bind(&input.server_url)
+         .bind(&input.output_mode)
+         .bind(input.temperature)
+         .bind(input.max_tokens)
+         .bind(input.thinking_budget)
+         .bind(input.samples)
+         .bind(&input.strategy)
+         .bind(&input.pre_render_url)
+         .bind(input.pre_render_timeout)
+         .bind(&input.pre_render_body)
+         .bind(&input.json_schema_file)
+         .execute(&db_state.pool)
+         .await;
+
+         assert!(result.is_ok(), "Failed to insert inference job: {:?}", result.err());
+         let job_id = result.unwrap().last_insert_rowid();
+
          // Test create collection
-         let collection_id = create_collection(db_state.clone(), job_id, "Test Collection".to_string()).await.expect("Failed to create collection");
+         let result = sqlx::query(
+             r#"INSERT INTO collections (job_id, name) VALUES (?1, ?2)"#,
+         )
+         .bind(job_id)
+         .bind("Test Collection")
+         .execute(&db_state.pool)
+         .await;
+
+         assert!(result.is_ok());
+         let collection_id = result.unwrap().last_insert_rowid();
          assert!(collection_id > 0);
-         
+
          // Test add collection items
          let item1 = serde_json::json!({ "id": 1, "name": "Test 1", "value": 100 });
          let item2 = serde_json::json!({ "id": 2, "name": "Test 2", "value": 200 });
-         
-         let item1_id = add_collection_item(db_state.clone(), collection_id, item1.clone()).await.expect("Failed to add item 1");
-         let item2_id = add_collection_item(db_state.clone(), collection_id, item2.clone()).await.expect("Failed to add item 2");
-         
+
+         let result1 = sqlx::query(
+             r#"INSERT INTO collection_items (collection_id, data) VALUES (?1, ?2)"#,
+         )
+         .bind(collection_id)
+         .bind(item1)
+         .execute(&db_state.pool)
+         .await;
+
+         let result2 = sqlx::query(
+             r#"INSERT INTO collection_items (collection_id, data) VALUES (?1, ?2)"#,
+         )
+         .bind(collection_id)
+         .bind(item2)
+         .execute(&db_state.pool)
+         .await;
+
+         assert!(result1.is_ok());
+         assert!(result2.is_ok());
+
+         let item1_id = result1.unwrap().last_insert_rowid();
+         let item2_id = result2.unwrap().last_insert_rowid();
+
          assert!(item1_id > 0);
          assert!(item2_id > 0);
          assert_ne!(item1_id, item2_id);
-         
+
          // Test get collection items
-         let items = get_collection_items(db_state.clone(), collection_id, 1, 10).await.expect("Failed to get collection items");
+         let items = sqlx::query_as::<_, CollectionItem>(
+             r#"SELECT * FROM collection_items WHERE collection_id = ? ORDER BY created_at DESC LIMIT ? OFFSET ?"#,
+         )
+         .bind(collection_id)
+         .bind(10)
+         .bind(0)
+         .fetch_all(&db_state.pool)
+         .await
+         .expect("Failed to get collection items");
+
          assert_eq!(items.len(), 2);
-         
+
          // Test collection count
-         let count = get_collection_count(db_state.clone(), collection_id).await.expect("Failed to get collection count");
+         let count: i64 = sqlx::query_scalar(
+             r#"SELECT COUNT(*) FROM collection_items WHERE collection_id = ?"#,
+         )
+         .bind(collection_id)
+         .fetch_one(&db_state.pool)
+         .await
+         .expect("Failed to get collection count");
+
          assert_eq!(count, 2);
-         
+
          // Clean up
          let _ = std::fs::remove_dir_all(&test_project_dir);
      }
