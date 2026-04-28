@@ -355,18 +355,20 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { root_path: std::sync::Mutex::new(None) })
         .setup(|app| {
-            // Initialize database connection
-            // Use /tmp for development - guaranteed to be writable
-            let db_path = PathBuf::from("/tmp/nightshift.db");
+            // Initialize database connection with project-based path
+            // Use current working directory as default project location
+            let project_path = std::env::current_dir()
+                .expect("Failed to get current working directory");
             
             // Initialize database connection using tokio runtime
             #[cfg(not(target_os = "android"))]
             {
                 let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-                match rt.block_on(DatabaseState::new(&db_path)) {
+                match rt.block_on(DatabaseState::new(&project_path)) {
                     Ok(db_state) => { app.manage(db_state); }
                     Err(e) => {
-                        eprintln!("Failed to initialize database at {:?}: {}", db_path, e);
+                        eprintln!("Failed to initialize database for project at {:?}: {}", project_path, e);
+                        eprintln!("Make sure the project has a .nightshift directory or create one.");
                         std::process::exit(1);
                     }
                 }
@@ -637,15 +639,23 @@ mod tests {
 
      #[tokio::test]
      async fn test_database_schema_creation() {
-         // Create a temporary database file
+         // Create a temporary directory with .nightshift folder to simulate a project
          let temp_dir = std::env::temp_dir();
-         let db_path = temp_dir.join(format!("test_db_{}.db", std::process::id()));
+         let test_project_dir = temp_dir.join(format!("nightshift_test_project_{}", std::process::id()));
+         let nightshift_dir = test_project_dir.join(".nightshift");
          
-         // Initialize database
-         let db_state = DatabaseState::new(&db_path).await.expect("Failed to initialize database");
+         // Create .nightshift directory
+         std::fs::create_dir_all(&nightshift_dir).expect("Failed to create .nightshift dir");
+         
+         // Initialize database (will find project root and create db in .nightshift)
+         let db_state = DatabaseState::new(&test_project_dir).await.expect("Failed to initialize database");
+         
+         // Verify database was created in the right location
+         let expected_db_path = nightshift_dir.join("nightshift.db");
+         assert!(expected_db_path.exists(), "Database should be created in .nightshift folder");
          
          // Clean up
-         let _ = std::fs::remove_file(db_path);
+         let _ = std::fs::remove_dir_all(&test_project_dir);
          
          // If we got here without error, the schema was created successfully
          assert!(true);
@@ -653,12 +663,16 @@ mod tests {
 
      #[tokio::test]
      async fn test_inference_job_crud_operations() {
-         // Create a temporary database file
+         // Create a temporary directory with .nightshift folder to simulate a project
          let temp_dir = std::env::temp_dir();
-         let db_path = temp_dir.join(format!("test_db_{}.db", std::process::id()));
+         let test_project_dir = temp_dir.join(format!("nightshift_test_project_{}", std::process::id()));
+         let nightshift_dir = test_project_dir.join(".nightshift");
          
-         // Initialize database
-         let db_state = DatabaseState::new(&db_path).await.expect("Failed to initialize database");
+         // Create .nightshift directory
+         std::fs::create_dir_all(&nightshift_dir).expect("Failed to create .nightshift dir");
+         
+         // Initialize database (will find project root and create db in .nightshift)
+         let db_state = DatabaseState::new(&test_project_dir).await.expect("Failed to initialize database");
          
          // Test create job
          let input = InferenceJobInput {
@@ -732,17 +746,21 @@ mod tests {
          assert!(job_after_delete.is_none());
          
          // Clean up
-         let _ = std::fs::remove_file(db_path);
+         let _ = std::fs::remove_dir_all(&test_project_dir);
      }
 
      #[tokio::test]
      async fn test_collection_operations() {
-         // Create a temporary database file
+         // Create a temporary directory with .nightshift folder to simulate a project
          let temp_dir = std::env::temp_dir();
-         let db_path = temp_dir.join(format!("test_db_{}.db", std::process::id()));
+         let test_project_dir = temp_dir.join(format!("nightshift_test_project_{}", std::process::id()));
+         let nightshift_dir = test_project_dir.join(".nightshift");
          
-         // Initialize database
-         let db_state = DatabaseState::new(&db_path).await.expect("Failed to initialize database");
+         // Create .nightshift directory
+         std::fs::create_dir_all(&nightshift_dir).expect("Failed to create .nightshift dir");
+         
+         // Initialize database (will find project root and create db in .nightshift)
+         let db_state = DatabaseState::new(&test_project_dir).await.expect("Failed to initialize database");
          
          // Create a job first
          let input = InferenceJobInput {
@@ -790,6 +808,6 @@ mod tests {
          assert_eq!(count, 2);
          
          // Clean up
-         let _ = std::fs::remove_file(db_path);
+         let _ = std::fs::remove_dir_all(&test_project_dir);
      }
  }

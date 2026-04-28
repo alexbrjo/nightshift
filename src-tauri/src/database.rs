@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::State;
 
 /// Represents an inference job configuration
@@ -65,20 +65,73 @@ pub struct DatabaseState {
 }
 
 impl DatabaseState {
+    /// Find the project root by looking for .nightshift directory
+    /// Returns the project root path or an error if not found
+    pub fn find_project_root<P: AsRef<Path>>(start_path: P) -> Result<PathBuf, String> {
+        let mut current = start_path.as_ref().to_path_buf();
+        
+        // If start_path is a file, get its parent
+        if current.is_file() {
+            current = current.parent()
+                .ok_or("Path has no parent directory")?
+                .to_path_buf();
+        }
+
+        // Walk up the directory tree looking for .nightshift
+        loop {
+            let nightshift_dir = current.join(".nightshift");
+            if nightshift_dir.exists() && nightshift_dir.is_dir() {
+                return Ok(current);
+            }
+
+            // Check if we've reached the filesystem root
+            if let Some(parent) = current.parent() {
+                if parent == current {
+                    break; // Reached root
+                }
+                current = parent.to_path_buf();
+            } else {
+                break;
+            }
+        }
+
+        Err(format!(
+            "Could not find project root (no .nightshift directory found starting from {})",
+            start_path.as_ref().display()
+        ))
+    }
+
+    /// Get the database path for a given project
+    pub fn get_database_path<P: AsRef<Path>>(project_root: P) -> PathBuf {
+        let nightshift_dir = project_root.as_ref().join(".nightshift");
+        nightshift_dir.join("nightshift.db")
+    }
+
     /// Initialize the database connection and run migrations
-    pub async fn new<P: AsRef<Path>>(db_path: P) -> Result<Self, sqlx::Error> {
-        let db_path_ref = db_path.as_ref();
+    pub async fn new<P: AsRef<Path>>(project_path: P) -> Result<Self, sqlx::Error> {
+        let project_path_ref = project_path.as_ref();
+        
+        // Find project root (directory containing .nightshift)
+        let project_root = Self::find_project_root(project_path_ref)
+            .map_err(|e| sqlx::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::Other, 
+                e
+            )))?;
+        
+        // Get database path in .nightshift folder
+        let db_path = Self::get_database_path(&project_root);
         
         // Ensure parent directory exists
-        if let Some(parent) = db_path_ref.parent() {
+        if let Some(parent) = db_path.parent() {
             tokio::fs::create_dir_all(parent).await
                 .map_err(|e| sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
         }
         
-        eprintln!("Connecting to database at: {}", db_path_ref.display());
+        eprintln!("Project root: {}", project_root.display());
+        eprintln!("Connecting to database at: {}", db_path.display());
         // Use file URI format for better path handling on macOS
         let connection_string = format!("file:{}?mode=rwc", 
-            db_path_ref.display().to_string().replace(' ', "%20").replace('#', "%23"));
+            db_path.display().to_string().replace(' ', "%20").replace('#', "%23"));
         eprintln!("Connection string: {}", connection_string);
         let pool = SqlitePool::connect(&connection_string).await?;
         
@@ -159,6 +212,108 @@ impl DatabaseState {
 
           Ok(Self { pool })
       }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::env;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_find_project_root_finds_nightshift_directory() {
+        // Create a temporary directory structure: /tmp/test_proj/.nightshift/
+        let temp_dir = env::temp_dir();
+        let project_dir = temp_dir.join(format!("test_project_{}", std::process::id()));
+        let nightshift_dir = project_dir.join(".nightshift");
+        
+        fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
+        
+        // Should find the project root
+        let result = DatabaseState::find_project_root(&project_dir);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), project_dir);
+        
+        // Cleanup
+        fs::remove_dir_all(&project_dir).ok();
+    }
+
+    #[test]
+    fn test_find_project_root_searches_parent_directories() {
+        // Create: /tmp/test_proj/.nightshift/subdir1/subdir2
+        let temp_dir = env::temp_dir();
+        let project_dir = temp_dir.join(format!("test_project_{}", std::process::id()));
+        let nightshift_dir = project_dir.join(".nightshift");
+        let deep_dir = project_dir.join("subdir1").join("subdir2");
+        
+        fs::create_dir_all(&deep_dir).expect("Failed to create test directory");
+        
+        // Should find the project root even when starting from a subdirectory
+        let result = DatabaseState::find_project_root(&deep_dir);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), project_dir);
+        
+        // Cleanup
+        fs::remove_dir_all(&project_dir).ok();
+    }
+
+    #[test]
+    fn test_find_project_root_handles_file_paths() {
+        // Create: /tmp/test_proj/.nightshift/somefile.txt
+        let temp_dir = env::temp_dir();
+        let project_dir = temp_dir.join(format!("test_project_{}", std::process::id()));
+        let nightshift_dir = project_dir.join(".nightshift");
+        let file_path = project_dir.join("somefile.txt");
+        
+        fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
+        fs::write(&file_path, "test").expect("Failed to create test file");
+        
+        // Should find the project root when given a file path
+        let result = DatabaseState::find_project_root(&file_path);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), project_dir);
+        
+        // Cleanup
+        fs::remove_dir_all(&project_dir).ok();
+    }
+
+    #[test]
+    fn test_find_project_root_returns_error_when_no_nightshift() {
+        // Create a directory without .nightshift
+        let temp_dir = env::temp_dir();
+        let project_dir = temp_dir.join(format!("test_project_{}", std::process::id()));
+        
+        fs::create_dir_all(&project_dir).expect("Failed to create test directory");
+        
+        // Should return an error
+        let result = DatabaseState::find_project_root(&project_dir);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Could not find project root"));
+        
+        // Cleanup
+        fs::remove_dir_all(&project_dir).ok();
+    }
+
+    #[test]
+    fn test_get_database_path_returns_correct_location() {
+        let temp_dir = env::temp_dir();
+        let project_dir = temp_dir.join("test_project");
+        
+        let db_path = DatabaseState::get_database_path(&project_dir);
+        
+        assert_eq!(db_path, project_dir.join(".nightshift").join("nightshift.db"));
+    }
+
+    #[test]
+    fn test_get_database_path_handles_unicode_paths() {
+        let temp_dir = env::temp_dir();
+        let project_dir = temp_dir.join("тест_проект");
+        
+        let db_path = DatabaseState::get_database_path(&project_dir);
+        
+        assert_eq!(db_path, project_dir.join(".nightshift").join("nightshift.db"));
+    }
 }
 
 /// Tauri command to create a new inference job
