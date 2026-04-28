@@ -18,10 +18,7 @@ interface EditorProps {
 function getLanguageExtension(lang?: string) {
   if (!lang) return [];
   const l = lang.toLowerCase();
-  if (["javascript", "typescript", "js", "ts", "jsx", "tsx"].includes(l)) return [javascript()];
-  if (["python", "py"].includes(l)) return [python()];
-  if (["html", "htm", "jsx", "tsx", "vue"].includes(l)) return [html()];
-  if (["css", "scss", "sass", "less"].includes(l)) return [css()];
+  if (["js"].includes(l)) return [javascript()];
   if (["json"].includes(l)) return [json()];
   if (["markdown", "md", "mdx"].includes(l)) return [markdown()];
   return [];
@@ -67,7 +64,11 @@ export default function Editor({ code, language, onChange }: EditorProps) {
   useEffect(() => {
     if (viewRef.current && code !== viewRef.current.state.doc.toString()) {
       const transaction = viewRef.current.state.update({
-        changes: { from: 0, to: viewRef.current.state.doc.length, insert: code },
+        changes: {
+          from: 0,
+          to: viewRef.current.state.doc.length,
+          insert: code,
+        },
       });
       viewRef.current.dispatch(transaction);
     }

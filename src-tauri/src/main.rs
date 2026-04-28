@@ -2,10 +2,14 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use tauri::{Manager, State};
 
+mod database;
+use database::{DatabaseState, create_inference_job, get_inference_job, list_inference_jobs, update_inference_job, delete_inference_job, create_collection, add_collection_item, get_collection_items, get_collection_count};
+
 struct AppState {
-    root_path: std::sync::Mutex<Option<PathBuf>>,
+    root_path: Mutex<Option<PathBuf>>,
 }
 
 const TEXT_EXTENSIONS: &[&str] =
@@ -350,6 +354,26 @@ fn main() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { root_path: std::sync::Mutex::new(None) })
+        .setup(|app| {
+            // Initialize database connection
+            // Use /tmp for development - guaranteed to be writable
+            let db_path = PathBuf::from("/tmp/nightshift.db");
+            
+            // Initialize database connection using tokio runtime
+            #[cfg(not(target_os = "android"))]
+            {
+                let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+                match rt.block_on(DatabaseState::new(&db_path)) {
+                    Ok(db_state) => { app.manage(db_state); }
+                    Err(e) => {
+                        eprintln!("Failed to initialize database at {:?}: {}", db_path, e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             scan_folder,
             set_root_path,
@@ -365,6 +389,16 @@ fn main() {
             load_last_folder,
             save_expanded_state,
             load_expanded_state,
+            // Database commands
+            create_inference_job,
+            get_inference_job,
+            list_inference_jobs,
+            update_inference_job,
+            delete_inference_job,
+            create_collection,
+            add_collection_item,
+            get_collection_items,
+            get_collection_count,
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");
@@ -583,21 +617,179 @@ mod tests {
         fs::remove_dir_all(&test_dir).ok();
     }
 
-    #[test]
-    fn scan_directory_handles_nested_directories() {
-        let dir = std::env::temp_dir();
-        let test_dir = dir.join(format!("nightshift_nested_test_{}", std::process::id()));
-        fs::create_dir_all(&test_dir).ok();
+     #[test]
+     fn scan_directory_handles_nested_directories() {
+         let dir = std::env::temp_dir();
+         let test_dir = dir.join(format!("nightshift_nested_test_{}", std::process::id()));
+         fs::create_dir_all(&test_dir).ok();
 
-        fs::create_dir_all(test_dir.join("a").join("b").join("c")).ok();
-        fs::write(test_dir.join("a").join("b").join("c").join("deep.txt"), "content").ok();
+         fs::create_dir_all(test_dir.join("a").join("b").join("c")).ok();
+         fs::write(test_dir.join("a").join("b").join("c").join("deep.txt"), "content").ok();
 
-        let mut count = 0usize;
-        let result = scan_directory(&test_dir, 0, &mut count);
-        assert!(result.is_ok());
-        let _entries = result.unwrap();
-        assert_eq!(count, 1);
+         let mut count = 0usize;
+         let result = scan_directory(&test_dir, 0, &mut count);
+         assert!(result.is_ok());
+         let _entries = result.unwrap();
+         assert_eq!(count, 1);
 
-        fs::remove_dir_all(&test_dir).ok();
-    }
-}
+         fs::remove_dir_all(&test_dir).ok();
+     }
+
+     #[tokio::test]
+     async fn test_database_schema_creation() {
+         // Create a temporary database file
+         let temp_dir = std::env::temp_dir();
+         let db_path = temp_dir.join(format!("test_db_{}.db", std::process::id()));
+         
+         // Initialize database
+         let db_state = DatabaseState::new(&db_path).await.expect("Failed to initialize database");
+         
+         // Clean up
+         let _ = std::fs::remove_file(db_path);
+         
+         // If we got here without error, the schema was created successfully
+         assert!(true);
+     }
+
+     #[tokio::test]
+     async fn test_inference_job_crud_operations() {
+         // Create a temporary database file
+         let temp_dir = std::env::temp_dir();
+         let db_path = temp_dir.join(format!("test_db_{}.db", std::process::id()));
+         
+         // Initialize database
+         let db_state = DatabaseState::new(&db_path).await.expect("Failed to initialize database");
+         
+         // Test create job
+         let input = InferenceJobInput {
+             name: "Test Job".to_string(),
+             prompt_file: "test.jinja2".to_string(),
+             data_source: "data.jsonl".to_string(),
+             provider: "Local".to_string(),
+             model: "test-model".to_string(),
+             server_url: "http://localhost:8000".to_string(),
+             output_mode: "JSON".to_string(),
+             temperature: Some(0.7),
+             max_tokens: Some(1000),
+             thinking_budget: Some(500),
+             samples: 10,
+             strategy: "random".to_string(),
+             pre_render_url: Some("http://example.com/api".to_string()),
+             pre_render_timeout: Some(30),
+             pre_render_body: Some(r#"{"query": "test"}"#.to_string()),
+             json_schema_file: Some("schema.json".to_string()),
+         };
+         
+         let job_id = create_inference_job(db_state.clone(), input).await.expect("Failed to create job");
+         assert!(job_id > 0);
+         
+         // Test get job
+         let job = get_inference_job(db_state.clone(), job_id).await.expect("Failed to get job").expect("Job not found");
+         assert_eq!(job.name, "Test Job");
+         assert_eq!(job.prompt_file, "test.jinja2");
+         assert_eq!(job.status, "pending");
+         
+         // Test update job
+         let update_input = InferenceJobInput {
+             name: "Updated Job".to_string(),
+             prompt_file: "updated.jinja2".to_string(),
+             data_source: "updated_data.jsonl".to_string(),
+             provider: "OpenAI".to_string(),
+             model: "gpt-4".to_string(),
+             server_url: "https://api.openai.com/v1".to_string(),
+             output_mode: "JSON Schema".to_string(),
+             temperature: Some(0.3),
+             max_tokens: Some(2000),
+             thinking_budget: Some(1000),
+             samples: 50,
+             strategy: "exhaustive".to_string(),
+             pre_render_url: Some("http://updated-example.com/api".to_string()),
+             pre_render_timeout: Some(60),
+             pre_render_body: Some(r#"{"query": "updated"}"#.to_string()),
+             json_schema_file: Some("updated_schema.json".to_string()),
+         };
+         
+         let updated = update_inference_job(db_state.clone(), job_id, update_input).await.expect("Failed to update job");
+         assert!(updated);
+         
+         // Verify update
+         let updated_job = get_inference_job(db_state.clone(), job_id).await.expect("Failed to get updated job").expect("Updated job not found");
+         assert_eq!(updated_job.name, "Updated Job");
+         assert_eq!(updated_job.model, "gpt-4");
+         assert_eq!(updated_job.samples, 50);
+         
+         // Test list jobs
+         let jobs = list_inference_jobs(db_state.clone(), 1, 10).await.expect("Failed to list jobs");
+         assert_eq!(jobs.len(), 1);
+         assert_eq!(jobs[0].id, job_id);
+         
+         // Test delete job
+         let deleted = delete_inference_job(db_state.clone(), job_id).await.expect("Failed to delete job");
+         assert!(deleted);
+         
+         // Verify deletion
+         let job_after_delete = get_inference_job(db_state.clone(), job_id).await.expect("Failed to get job after deletion");
+         assert!(job_after_delete.is_none());
+         
+         // Clean up
+         let _ = std::fs::remove_file(db_path);
+     }
+
+     #[tokio::test]
+     async fn test_collection_operations() {
+         // Create a temporary database file
+         let temp_dir = std::env::temp_dir();
+         let db_path = temp_dir.join(format!("test_db_{}.db", std::process::id()));
+         
+         // Initialize database
+         let db_state = DatabaseState::new(&db_path).await.expect("Failed to initialize database");
+         
+         // Create a job first
+         let input = InferenceJobInput {
+             name: "Collection Test Job".to_string(),
+             prompt_file: "test.jinja2".to_string(),
+             data_source: "data.jsonl".to_string(),
+             provider: "Local".to_string(),
+             model: "test-model".to_string(),
+             server_url: "http://localhost:8000".to_string(),
+             output_mode: "JSON".to_string(),
+             temperature: None,
+             max_tokens: None,
+             thinking_budget: None,
+             samples: 5,
+             strategy: "single".to_string(),
+             pre_render_url: None,
+             pre_render_timeout: None,
+             pre_render_body: None,
+             json_schema_file: None,
+         };
+         
+         let job_id = create_inference_job(db_state.clone(), input).await.expect("Failed to create job");
+         
+         // Test create collection
+         let collection_id = create_collection(db_state.clone(), job_id, "Test Collection".to_string()).await.expect("Failed to create collection");
+         assert!(collection_id > 0);
+         
+         // Test add collection items
+         let item1 = serde_json::json!({ "id": 1, "name": "Test 1", "value": 100 });
+         let item2 = serde_json::json!({ "id": 2, "name": "Test 2", "value": 200 });
+         
+         let item1_id = add_collection_item(db_state.clone(), collection_id, item1.clone()).await.expect("Failed to add item 1");
+         let item2_id = add_collection_item(db_state.clone(), collection_id, item2.clone()).await.expect("Failed to add item 2");
+         
+         assert!(item1_id > 0);
+         assert!(item2_id > 0);
+         assert_ne!(item1_id, item2_id);
+         
+         // Test get collection items
+         let items = get_collection_items(db_state.clone(), collection_id, 1, 10).await.expect("Failed to get collection items");
+         assert_eq!(items.len(), 2);
+         
+         // Test collection count
+         let count = get_collection_count(db_state.clone(), collection_id).await.expect("Failed to get collection count");
+         assert_eq!(count, 2);
+         
+         // Clean up
+         let _ = std::fs::remove_file(db_path);
+     }
+ }
