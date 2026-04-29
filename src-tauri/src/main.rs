@@ -3,13 +3,22 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{Emitter, Manager, State};
 
 mod database;
 use database::{DatabaseState, create_inference_job, get_inference_job, list_inference_jobs, update_inference_job, delete_inference_job, create_collection, add_collection_item, get_collection_items, get_collection_count};
 
+mod job_executor;
+use job_executor::{JobExecutor, JobEvent, WorkerConfig};
+
+use tokio::sync::Mutex as TokioMutex;
+
 struct AppState {
     root_path: Mutex<Option<PathBuf>>,
+}
+
+struct JobManager {
+    executor: TokioMutex<Option<JobExecutor>>,
 }
 
 const TEXT_EXTENSIONS: &[&str] =
@@ -349,11 +358,118 @@ fn load_expanded_state(root_path: String) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
+#[tauri::command]
+async fn start_inference_job(
+    job_manager: State<'_, JobManager>,
+    db: State<'_, DatabaseState>,
+    job_id: i64,
+) -> Result<(), String> {
+    // Initialize executor if not already done
+    let mut executor_opt = job_manager.executor.lock().await;
+    if executor_opt.is_none() {
+        *executor_opt = Some(JobExecutor::new(db.clone()));
+    }
+    
+    let executor = executor_opt.as_ref().unwrap();
+    
+    // Start the job
+    executor.start_job(job_id).await?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn cancel_inference_job(
+    job_manager: State<'_, JobManager>,
+    db: State<'_, DatabaseState>,
+    job_id: i64,
+) -> Result<bool, String> {
+    // Initialize executor if not already done
+    let mut executor_opt = job_manager.executor.lock().await;
+    if executor_opt.is_none() {
+        *executor_opt = Some(JobExecutor::new(db.clone()));
+    }
+    
+    let executor = executor_opt.as_ref().unwrap();
+    
+    // Cancel the job
+    let cancelled = executor.cancel_job(job_id).await?;
+    
+    Ok(cancelled)
+}
+
+#[tauri::command]
+async fn subscribe_to_job_status(
+    app: tauri::AppHandle,
+    job_manager: State<'_, JobManager>,
+    db: State<'_, DatabaseState>,
+    job_id: i64,
+) -> Result<(), String> {
+    use tokio::sync::mpsc;
+
+    // Initialize executor if not already done
+    let mut executor_opt = job_manager.executor.lock().await;
+    if executor_opt.is_none() {
+        *executor_opt = Some(JobExecutor::new(db.clone()));
+    }
+    
+    let executor = executor_opt.as_ref().unwrap();
+    
+    // Get job config
+    let job = crate::database::get_inference_job(db.clone(), job_id).await
+        .map_err(|e| format!("Failed to get job: {}", e))?;
+    
+    let job = job.ok_or("Job not found")?;
+    let config = WorkerConfig::from_job(job);
+    
+    // Create channel for events
+    let (tx, mut rx) = mpsc::channel::<JobEvent>(100);
+    
+    // Clone app for event emission
+    let app_clone = app.clone();
+    
+    // Spawn task to receive and broadcast events
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let event_name = match &event {
+                JobEvent::Started { .. } => "job-started",
+                JobEvent::SampleStarted { .. } => "sample-started",
+                JobEvent::SampleCompleted { .. } => "sample-completed",
+                JobEvent::SampleFailed { .. } => "sample-failed",
+                JobEvent::ProgressUpdate(_) => "job-progress",
+                JobEvent::Completed { .. } => "job-completed",
+                JobEvent::Failed { .. } => "job-failed",
+                JobEvent::Cancelled { .. } => "job-cancelled",
+            };
+            
+            if let Err(e) = app_clone.emit(event_name, event) {
+                tracing::warn!("Failed to emit job event: {}", e);
+            }
+        }
+    });
+    
+    // Start execution in background
+    let executor_clone = executor.clone();
+    tokio::spawn(async move {
+        if let Err(e) = executor_clone.execute_job(config, tx).await {
+            tracing::error!("Job execution failed: {}", e);
+        }
+    });
+    
+    Ok(())
+}
+
 fn main() {
+    // Initialize tracing subscriber
+    tracing_subscriber::fmt::init();
+    
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { root_path: std::sync::Mutex::new(None) })
+        .manage(JobManager {
+            executor: TokioMutex::new(None),
+        })
         .setup(|app| {
             // Initialize database connection with project-based path
             // Use current working directory as default project location
@@ -401,6 +517,10 @@ fn main() {
             add_collection_item,
             get_collection_items,
             get_collection_count,
+            // Job execution commands
+            start_inference_job,
+            cancel_inference_job,
+            subscribe_to_job_status,
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");

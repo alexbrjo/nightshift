@@ -543,6 +543,18 @@ pub async fn create_inference_job(
         return Err("Number of samples must be greater than 0".to_string());
     }
 
+    // Validate server_url
+    if url::Url::parse(&input.server_url).is_err() {
+        return Err(format!("Invalid server URL: {}", input.server_url));
+    }
+
+    // Validate pre_render_url if present
+    if let Some(ref pre_render_url) = input.pre_render_url {
+        if url::Url::parse(pre_render_url).is_err() {
+            return Err(format!("Invalid pre-render URL: {}", pre_render_url));
+        }
+    }
+
     let result = sqlx::query(
         r#"
         INSERT INTO inference_jobs (
@@ -578,10 +590,9 @@ pub async fn create_inference_job(
     Ok(result.last_insert_rowid())
 }
 
-/// Tauri command to get an inference job by ID
-#[tauri::command]
-pub async fn get_inference_job(
-    state: State<'_, DatabaseState>,
+/// Internal helper to get an inference job by ID (works with SqlitePool directly)
+pub async fn get_inference_job_by_id(
+    pool: &SqlitePool,
     id: i64,
 ) -> Result<Option<InferenceJob>, String> {
     let job = sqlx::query_as::<_, InferenceJob>(
@@ -590,11 +601,20 @@ pub async fn get_inference_job(
         "#,
     )
     .bind(id)
-    .fetch_optional(&state.pool)
+    .fetch_optional(pool)
     .await
     .map_err(|e| format!("Failed to fetch inference job: {}", e))?;
 
     Ok(job)
+}
+
+/// Tauri command to get an inference job by ID
+#[tauri::command]
+pub async fn get_inference_job(
+    state: State<'_, DatabaseState>,
+    id: i64,
+) -> Result<Option<InferenceJob>, String> {
+    get_inference_job_by_id(&state.pool, id).await
 }
 
 /// Tauri command to list all inference jobs with pagination
@@ -622,10 +642,9 @@ pub async fn list_inference_jobs(
     Ok(jobs)
 }
 
-/// Tauri command to update an inference job
-#[tauri::command]
-pub async fn update_inference_job(
-    state: State<'_, DatabaseState>,
+/// Internal helper to update an inference job (works with SqlitePool directly)
+pub async fn update_inference_job_by_id(
+    pool: &SqlitePool,
     id: i64,
     input: InferenceJobInput,
 ) -> Result<bool, String> {
@@ -678,11 +697,21 @@ pub async fn update_inference_job(
     .bind(&input.pre_render_body)
     .bind(&input.json_schema_file)
     .bind(id)
-    .execute(&state.pool)
+    .execute(pool)
     .await
     .map_err(|e| format!("Failed to update inference job: {}", e))?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Tauri command to update an inference job
+#[tauri::command]
+pub async fn update_inference_job(
+    state: State<'_, DatabaseState>,
+    id: i64,
+    input: InferenceJobInput,
+) -> Result<bool, String> {
+    update_inference_job_by_id(&state.pool, id, input).await
 }
 
 /// Tauri command to delete an inference job
