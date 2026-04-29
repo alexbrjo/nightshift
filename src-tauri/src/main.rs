@@ -98,14 +98,22 @@ fn scan_directory(
 }
 
 #[tauri::command]
-fn scan_folder(state: State<AppState>, path: String) -> Result<serde_json::Value, String> {
+fn scan_folder(
+    app_state: State<AppState>,
+    db_state: State<DatabaseState>,
+    path: String,
+) -> Result<serde_json::Value, String> {
     let path_buf = PathBuf::from(&path);
     if !path_buf.is_dir() {
         return Err("Not a valid directory".to_string());
     }
 
-    let mut root = state.root_path.lock().unwrap();
-    *root = Some(path_buf.clone());
+    // Update both the UI root path and the database project root
+    {
+        let mut root = app_state.root_path.lock().unwrap();
+        *root = Some(path_buf.clone());
+    }
+    db_state.set_project_root(&path_buf);
 
     let mut file_count = 0usize;
     let children = scan_directory(&path_buf, 0, &mut file_count)?;
@@ -116,9 +124,14 @@ fn scan_folder(state: State<AppState>, path: String) -> Result<serde_json::Value
 }
 
 #[tauri::command]
-fn set_root_path(state: State<AppState>, path: String) {
-    let mut root = state.root_path.lock().unwrap();
-    *root = Some(PathBuf::from(path));
+fn set_root_path(
+    app_state: State<AppState>,
+    db_state: State<DatabaseState>,
+    path: String,
+) {
+    let mut root = app_state.root_path.lock().unwrap();
+    *root = Some(PathBuf::from(path.clone()));
+    db_state.set_project_root(&path);
 }
 
 #[tauri::command]
@@ -367,7 +380,7 @@ async fn start_inference_job(
     // Initialize executor if not already done
     let mut executor_opt = job_manager.executor.lock().await;
     if executor_opt.is_none() {
-        *executor_opt = Some(JobExecutor::new(db.clone()));
+        *executor_opt = Some(JobExecutor::new(db.clone())?);
     }
     
     let executor = executor_opt.as_ref().unwrap();
@@ -387,7 +400,7 @@ async fn cancel_inference_job(
     // Initialize executor if not already done
     let mut executor_opt = job_manager.executor.lock().await;
     if executor_opt.is_none() {
-        *executor_opt = Some(JobExecutor::new(db.clone()));
+        *executor_opt = Some(JobExecutor::new(db.clone())?);
     }
     
     let executor = executor_opt.as_ref().unwrap();
@@ -410,10 +423,13 @@ async fn subscribe_to_job_status(
     // Initialize executor if not already done
     let mut executor_opt = job_manager.executor.lock().await;
     if executor_opt.is_none() {
-        *executor_opt = Some(JobExecutor::new(db.clone()));
+        *executor_opt = Some(JobExecutor::new(db.clone())?);
     }
     
     let executor = executor_opt.as_ref().unwrap();
+    
+    // Start the job (this creates the cancellation token and updates DB status)
+    executor.start_job(job_id).await?;
     
     // Get job config
     let job = crate::database::get_inference_job(db.clone(), job_id).await
@@ -425,8 +441,9 @@ async fn subscribe_to_job_status(
     // Create channel for events
     let (tx, mut rx) = mpsc::channel::<JobEvent>(100);
     
-    // Clone app for event emission
+    // Clone app and db pool for event emission
     let app_clone = app.clone();
+    let pool = db.pool.clone();
     
     // Spawn task to receive and broadcast events
     tokio::spawn(async move {
@@ -441,6 +458,35 @@ async fn subscribe_to_job_status(
                 JobEvent::Failed { .. } => "job-failed",
                 JobEvent::Cancelled { .. } => "job-cancelled",
             };
+            
+            // Update database status for terminal events
+            match &event {
+                JobEvent::Completed { job_id, success_count, failure_count } => {
+                    tracing::info!("Job {} completed: {} successful, {} failed", job_id, success_count, failure_count);
+                    if let Err(e) = crate::database::update_job_status(&pool, *job_id, "completed").await {
+                        tracing::error!("Failed to update job {} status to completed: {}", job_id, e);
+                    } else {
+                        tracing::info!("Job {} status updated to 'completed' in database", job_id);
+                    }
+                }
+                JobEvent::Failed { job_id, error } => {
+                    tracing::error!("Job {} failed: {}", job_id, error);
+                    if let Err(e) = crate::database::update_job_status_with_error(&pool, *job_id, &format!("Failed: {}", error)).await {
+                        tracing::error!("Failed to update job {} status to failed: {}", job_id, e);
+                    } else {
+                        tracing::info!("Job {} status updated to 'failed' in database", job_id);
+                    }
+                }
+                JobEvent::Cancelled { job_id, .. } => {
+                    tracing::info!("Job {} cancelled", job_id);
+                    if let Err(e) = crate::database::update_job_status(&pool, *job_id, "cancelled").await {
+                        tracing::error!("Failed to update job {} status to cancelled: {}", job_id, e);
+                    } else {
+                        tracing::info!("Job {} status updated to 'cancelled' in database", job_id);
+                    }
+                }
+                _ => {}
+            }
             
             if let Err(e) = app_clone.emit(event_name, event) {
                 tracing::warn!("Failed to emit job event: {}", e);
@@ -457,6 +503,134 @@ async fn subscribe_to_job_status(
     });
     
     Ok(())
+}
+
+#[tauri::command]
+async fn export_job_to_yaml(
+    db: State<'_, DatabaseState>,
+    job_id: i64,
+) -> Result<String, String> {
+    // Get job from database
+    let job = crate::database::get_inference_job(db.clone(), job_id).await
+        .map_err(|e| format!("Failed to get job: {}", e))?;
+    
+    let job = job.ok_or("Job not found")?;
+    
+    // Convert to a serializable format
+    #[derive(serde::Serialize)]
+    struct JobConfig {
+        name: String,
+        prompt_file: String,
+        data_source: String,
+        provider: String,
+        model: String,
+        server_url: String,
+        output_mode: String,
+        temperature: Option<f32>,
+        max_tokens: Option<i32>,
+        thinking_budget: Option<i32>,
+        samples: i32,
+        strategy: String,
+        pre_render: Option<PreRenderConfig>,
+        json_schema_file: Option<String>,
+    }
+
+    #[derive(serde::Serialize)]
+    struct PreRenderConfig {
+        url: String,
+        timeout: Option<i32>,
+        body: Option<String>,
+    }
+
+    let pre_render = if job.pre_render_url.is_some() {
+        Some(PreRenderConfig {
+            url: job.pre_render_url.unwrap_or_default(),
+            timeout: job.pre_render_timeout,
+            body: job.pre_render_body,
+        })
+    } else {
+        None
+    };
+
+    let config = JobConfig {
+        name: job.name,
+        prompt_file: job.prompt_file,
+        data_source: job.data_source,
+        provider: job.provider,
+        model: job.model,
+        server_url: job.server_url,
+        output_mode: job.output_mode,
+        temperature: job.temperature,
+        max_tokens: job.max_tokens,
+        thinking_budget: job.thinking_budget,
+        samples: job.samples,
+        strategy: job.strategy,
+        pre_render,
+        json_schema_file: job.json_schema_file,
+    };
+
+    // Serialize to YAML
+    serde_yaml::to_string(&config)
+        .map_err(|e| format!("Failed to serialize to YAML: {}", e))
+}
+
+#[tauri::command]
+async fn list_prompt_files(
+    base_path: String,
+) -> Result<Vec<String>, String> {
+    use std::path::PathBuf;
+    
+    let mut prompt_files = Vec::new();
+    let base = PathBuf::from(&base_path);
+    
+    // Walk the directory tree looking for .jinja2 and .prompt files
+    fn walk_dir(dir: &std::path::Path, prompts: &mut Vec<String>, base: &std::path::Path) -> Result<(), String> {
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        
+        let entries = std::fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
+        
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            let path = entry.path();
+            
+            if path.is_dir() {
+                // Skip hidden directories and common non-code directories
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.') || 
+                       name == "node_modules" || 
+                       name == ".git" || 
+                       name == "target" ||
+                       name == "dist" {
+                        continue;
+                    }
+                }
+                walk_dir(&path, prompts, base)?;
+            } else if path.is_file() {
+                // Check for prompt file extensions
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if ext == "jinja2" || ext == "prompt" || ext == "j2" {
+                        // Convert to relative path from base
+                        if let Ok(relative) = path.strip_prefix(base) {
+                            if let Some(path_str) = relative.to_str() {
+                                prompts.push(path_str.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        Ok(())
+    }
+    
+    walk_dir(&base, &mut prompt_files, &base)?;
+    
+    // Sort alphabetically
+    prompt_files.sort();
+    
+    Ok(prompt_files)
 }
 
 fn main() {
@@ -521,6 +695,8 @@ fn main() {
             start_inference_job,
             cancel_inference_job,
             subscribe_to_job_status,
+            export_job_to_yaml,
+            list_prompt_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");

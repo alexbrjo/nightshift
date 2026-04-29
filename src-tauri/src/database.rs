@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use tauri::State;
 
 /// Represents an inference job configuration
@@ -39,22 +40,33 @@ pub struct CollectionItem {
 
 /// Input parameters for creating/updating an inference job
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InferenceJobInput {
     pub name: String,
+    #[serde(rename = "promptFile")]
     pub prompt_file: String,
+    #[serde(rename = "dataSource")]
     pub data_source: String,
     pub provider: String,
     pub model: String,
+    #[serde(rename = "serverUrl")]
     pub server_url: String,
+    #[serde(rename = "outputMode")]
     pub output_mode: String,
     pub temperature: Option<f32>,
+    #[serde(rename = "maxTokens")]
     pub max_tokens: Option<i32>,
+    #[serde(rename = "thinkingBudget")]
     pub thinking_budget: Option<i32>,
     pub samples: i32,
     pub strategy: String,
+    #[serde(rename = "preRenderUrl")]
     pub pre_render_url: Option<String>,
+    #[serde(rename = "preRenderTimeout")]
     pub pre_render_timeout: Option<i32>,
+    #[serde(rename = "preRenderBody")]
     pub pre_render_body: Option<String>,
+    #[serde(rename = "jsonSchemaFile")]
     pub json_schema_file: Option<String>,
 }
 
@@ -62,6 +74,7 @@ pub struct InferenceJobInput {
 #[derive(Clone)]
 pub struct DatabaseState {
     pub pool: SqlitePool,
+    pub project_root: Arc<Mutex<PathBuf>>,
 }
 
 impl DatabaseState {
@@ -232,8 +245,19 @@ impl DatabaseState {
         .execute(&pool)
         .await?;
 
-          Ok(Self { pool })
+          Ok(Self { pool, project_root: Arc::new(Mutex::new(project_root)) })
       }
+
+    /// Update the project root path (called when user opens a new folder)
+    pub fn set_project_root<P: AsRef<Path>>(&self, path: P) {
+        let mut root = self.project_root.lock().unwrap();
+        *root = path.as_ref().to_path_buf();
+    }
+
+    /// Get the current project root path
+    pub fn get_project_root(&self) -> PathBuf {
+        self.project_root.lock().unwrap().clone()
+    }
 }
 
 #[cfg(test)]
@@ -555,6 +579,8 @@ pub async fn create_inference_job(
         }
     }
 
+    tracing::info!("Creating inference job: {} with prompt file: {}", input.name, input.prompt_file);
+
     let result = sqlx::query(
         r#"
         INSERT INTO inference_jobs (
@@ -584,10 +610,25 @@ pub async fn create_inference_job(
     .bind(&input.pre_render_body)
     .bind(&input.json_schema_file)
     .execute(&state.pool)
-    .await
-    .map_err(|e| format!("Failed to create inference job: {}", e))?;
+    .await;
 
-    Ok(result.last_insert_rowid())
+    match result {
+        Ok(result) => {
+            tracing::info!("Successfully created inference job with ID: {}", result.last_insert_rowid());
+            Ok(result.last_insert_rowid())
+        }
+        Err(e) => {
+            let error_msg = format!("Failed to create inference job: {}", e);
+            tracing::error!("{}", error_msg);
+            
+            // Check for unique constraint violation
+            if e.to_string().contains("UNIQUE constraint failed") {
+                return Err(format!("A job with the name '{}' already exists. Please choose a different name.", input.name));
+            }
+            
+            Err(error_msg)
+        }
+    }
 }
 
 /// Internal helper to get an inference job by ID (works with SqlitePool directly)
@@ -712,6 +753,41 @@ pub async fn update_inference_job(
     input: InferenceJobInput,
 ) -> Result<bool, String> {
     update_inference_job_by_id(&state.pool, id, input).await
+}
+
+/// Update just the job status (internal helper)
+pub async fn update_job_status(pool: &SqlitePool, id: i64, status: &str) -> Result<bool, String> {
+    let result = sqlx::query(
+        r#"
+        UPDATE inference_jobs 
+        SET status = ?, updated_at = datetime('now')
+        WHERE id = ?
+        "#
+    )
+    .bind(status)
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update job status: {}", e))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Update job status with error message (internal helper)
+pub async fn update_job_status_with_error(pool: &SqlitePool, id: i64, _error: &str) -> Result<bool, String> {
+    let result = sqlx::query(
+        r#"
+        UPDATE inference_jobs 
+        SET status = 'failed', updated_at = datetime('now')
+        WHERE id = ?
+        "#
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to update job status: {}", e))?;
+
+    Ok(result.rows_affected() > 0)
 }
 
 /// Tauri command to delete an inference job

@@ -186,8 +186,8 @@ impl CancellationToken {
         }
     }
 
-    pub fn cancel(&self) {
-        let mut cancelled = self.inner.blocking_lock();
+    pub async fn cancel(&self) {
+        let mut cancelled = self.inner.lock().await;
         *cancelled = true;
     }
 
@@ -288,8 +288,8 @@ impl JobQueue {
         matches!(jobs.get(&job_id), Some(JobStatus::Running))
     }
 
-    pub fn get_cancellation_token(&self, job_id: i64) -> Option<CancellationToken> {
-        let cancellations = self.cancellations.blocking_read();
+    pub async fn get_cancellation_token(&self, job_id: i64) -> Option<CancellationToken> {
+        let cancellations = self.cancellations.read().await;
         cancellations.get(&job_id).cloned()
     }
 }
@@ -342,16 +342,18 @@ pub struct JobExecutor {
 }
 
 impl JobExecutor {
-    pub fn new(db: State<'_, DatabaseState>) -> Self {
+    pub fn new(db: State<'_, DatabaseState>) -> Result<Self, String> {
         let db_state = (*db).clone();
-        JobExecutor {
+        let client = Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        Ok(JobExecutor {
             db: db_state,
             queue: Arc::new(JobQueue::new()),
-            client: Client::builder()
-                .timeout(Duration::from_secs(60))
-                .build()
-                .expect("Failed to create HTTP client"),
-        }
+            client,
+        })
     }
 
     /// Start an inference job asynchronously
@@ -451,16 +453,23 @@ impl JobExecutor {
         config: WorkerConfig,
         tx: mpsc::Sender<JobEvent>,
     ) -> Result<(), String> {
-        let cancellation = self.queue.get_cancellation_token(config.job_id)
+        let cancellation = self.queue.get_cancellation_token(config.job_id).await
             .ok_or("Cancellation token not found")?;
 
         info!("Starting job execution for {} with {} samples", config.name, config.samples);
 
         // Load data from source
         let samples = self.load_samples(&config).await?;
+        info!("Loaded {} samples from {}", samples.len(), config.data_source);
 
         if samples.is_empty() {
             warn!("No samples loaded for job {}", config.job_id);
+            let _ = tx.send(JobEvent::Completed { 
+                job_id: config.job_id, 
+                success_count: 0, 
+                failure_count: 0 
+            }).await;
+            self.queue.complete(config.job_id).await;
             return Ok(());
         }
 
@@ -470,6 +479,7 @@ impl JobExecutor {
 
         // Create or get collection for this job
         let collection_id = self.ensure_collection(&config).await?;
+        info!("Using collection {} for job {}", collection_id, config.job_id);
 
         // Send started event
         if tx.send(JobEvent::Started {
@@ -507,6 +517,7 @@ impl JobExecutor {
             match self.process_sample(&config, index, &sample, &cancellation, &tx).await {
                 Ok(output) => {
                     completed_count += 1;
+                    info!("Sample {} succeeded for job {} (progress: {}/{})", index, config.job_id, completed_count, total_samples);
 
                     // Save output to collection
                     if let Err(e) = self.save_to_collection(collection_id, &output).await {
@@ -523,6 +534,7 @@ impl JobExecutor {
                 }
                 Err(e) => {
                     failed_count += 1;
+                    error!("Sample {} failed for job {}: {} (progress: {}/{})", index, config.job_id, e, completed_count, total_samples);
 
                     if tx.send(JobEvent::SampleFailed {
                         sample_index: index,
@@ -532,8 +544,6 @@ impl JobExecutor {
                     }).await.is_err() {
                         warn!("Failed to send sample failed event");
                     }
-
-                    error!("Sample {} failed for job {}: {}", index, config.job_id, e);
                 }
             }
 
@@ -555,12 +565,14 @@ impl JobExecutor {
         }
 
         // Send completion event
+        info!("Sending completion event for job {}", config.job_id);
         let _ = tx.send(JobEvent::Completed {
             job_id: config.job_id,
             success_count: completed_count,
             failure_count: failed_count,
         }).await;
 
+        info!("Marking job {} as complete in queue", config.job_id);
         self.queue.complete(config.job_id).await;
 
         info!("Job {} completed: {} successful, {} failed",
@@ -670,12 +682,15 @@ impl JobExecutor {
         let max_retries = 3;
         let base_delay = Duration::from_secs(1);
 
+        info!("Processing sample {}/{} for job {}", sample_index + 1, config.samples, config.job_id);
+
         for attempt in 0..=max_retries {
             // Check cancellation before each attempt
             if cancellation.is_cancelled().await {
                 return Err("Cancelled".to_string());
             }
 
+            debug!("Attempting LLM call for sample {} (attempt {}/{})", sample_index, attempt + 1, max_retries + 1);
             match self.attempt_llm_call(config, sample).await {
                 Ok(output) => return Ok(output),
                 Err(e) => {
@@ -736,11 +751,20 @@ impl JobExecutor {
             max_tokens: config.max_tokens,
         };
 
-        debug!("Calling LLM API at {}", config.server_url);
+        // Build the full endpoint URL (base URL + /v1/chat/completions)
+        let endpoint_url = if config.server_url.ends_with("/v1") {
+            format!("{}/chat/completions", config.server_url)
+        } else if config.server_url.ends_with('/') {
+            format!("{}v1/chat/completions", config.server_url)
+        } else {
+            format!("{}/v1/chat/completions", config.server_url)
+        };
+
+        debug!("Calling LLM API at {}", endpoint_url);
 
         // Call LLM API
         let response = self.client
-            .post(&config.server_url)
+            .post(&endpoint_url)
             .json(&request)
             .send()
             .await
@@ -751,14 +775,19 @@ impl JobExecutor {
             return Err("Rate limit exceeded (429)".to_string());
         }
 
-        let response = response
-            .error_for_status()
-            .map_err(|e| format!("API error: {}", e))?;
+        // Check status code first
+        if !response.status().is_success() {
+            let status = response.status();
+            let body_text = response.text().await.unwrap_or_default();
+            return Err(format!("API returned status {}: {}", status, body_text));
+        }
 
-        let llm_response: LlmResponse = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        // Try to parse as JSON, but also capture raw text for debugging
+        let response_text = response.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
+        debug!("LLM response body: {}", &response_text);
+        
+        let llm_response: LlmResponse = serde_json::from_str(&response_text)
+            .map_err(|e| format!("Failed to parse response JSON ({}): {}", e, response_text))?;
 
         // Extract content from response
         if let Some(choice) = llm_response.choices.first() {
@@ -774,9 +803,10 @@ impl JobExecutor {
 
     /// Load prompt from file
     async fn load_prompt_file(&self, path: &str) -> Result<String, String> {
-        // In a real implementation, this would read from the filesystem
-        // For now, return a default template
-        tokio::fs::read_to_string(path)
+        // Resolve the path relative to the project root
+        let full_path = self.db.get_project_root().join(path);
+        
+        tokio::fs::read_to_string(&full_path)
             .await
             .map_err(|e| format!("Failed to read prompt file {}: {}", path, e))
     }

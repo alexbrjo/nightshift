@@ -2,6 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import Editor from "./components/Editor";
 import FileTree, { type FsNode } from "./components/FileTree";
 import UnderConstruction from "./components/UnderConstruction";
+import JobRunnerPage from "./components/JobRunnerPage";
 import { ToastProvider } from "./components/Toast";
 
 type Section =
@@ -118,6 +119,10 @@ export default function App() {
                 Open a folder and select a file to begin
               </div>
             )}
+          </main>
+        ) : activeSection === "job-runner" ? (
+          <main className="workspace job-runner-workspace full-width">
+            <JobRunnerPage />
           </main>
         ) : (
           <main className="workspace full-width">

@@ -38,11 +38,19 @@ describe("App", () => {
     expect(screen.getByText("Collection Viewer")).toBeDefined();
   });
 
-  it("switches to job-runner section", () => {
+  it("switches to job-runner section", async () => {
+    // Mock invoke to return empty array for jobs
+    const { invoke } = await import("@tauri-apps/api/core");
+    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
+    
     fireEvent.click(buttons[2]);
-    expect(screen.getByText("Job Runner")).toBeDefined();
+    
+    // Wait for the component to update and show Job Runner content
+    await screen.findByText(/Job Runner|No inference jobs yet/i);
+    expect(screen.getByText(/Job Runner|No inference jobs yet/i)).toBeDefined();
   });
 
   it("switches to experiment-designer section", () => {
