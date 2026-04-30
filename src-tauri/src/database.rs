@@ -25,6 +25,7 @@ pub struct InferenceJob {
     pub pre_render_body: Option<String>,
     pub json_schema_file: Option<String>,
     pub status: String,
+    pub error_message: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -184,6 +185,7 @@ impl DatabaseState {
                 pre_render_body TEXT,
                 json_schema_file TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
+                error_message TEXT,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
@@ -192,11 +194,23 @@ impl DatabaseState {
         .execute(&pool)
         .await?;
 
+        // Add error_message column to existing databases that predate it.
+        // SQLite has no IF NOT EXISTS for ALTER TABLE — swallow the duplicate-column error.
+        if let Err(e) = sqlx::query("ALTER TABLE inference_jobs ADD COLUMN error_message TEXT")
+            .execute(&pool)
+            .await
+        {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(e);
+            }
+        }
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS collections (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id INTEGER NOT NULL,
+                job_id INTEGER NOT NULL UNIQUE,
                 name TEXT NOT NULL,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (job_id) REFERENCES inference_jobs(id) ON DELETE CASCADE
@@ -229,9 +243,15 @@ impl DatabaseState {
         .execute(&pool)
         .await?;
 
+        // Unique index enforces one collection per job (idempotent for new DBs;
+        // for existing DBs predating the UNIQUE constraint the legacy index is
+        // dropped first so this can succeed).
+        sqlx::query("DROP INDEX IF EXISTS idx_collections_job_id")
+            .execute(&pool)
+            .await?;
         sqlx::query(
             r#"
-            CREATE INDEX IF NOT EXISTS idx_collections_job_id ON collections(job_id)
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_job_id ON collections(job_id)
             "#,
         )
         .execute(&pool)
@@ -778,14 +798,15 @@ pub async fn update_job_status(pool: &SqlitePool, id: i64, status: &str) -> Resu
 }
 
 /// Update job status with error message (internal helper)
-pub async fn update_job_status_with_error(pool: &SqlitePool, id: i64, _error: &str) -> Result<bool, String> {
+pub async fn update_job_status_with_error(pool: &SqlitePool, id: i64, error: &str) -> Result<bool, String> {
     let result = sqlx::query(
         r#"
-        UPDATE inference_jobs 
-        SET status = 'failed', updated_at = datetime('now')
+        UPDATE inference_jobs
+        SET status = 'failed', error_message = ?, updated_at = datetime('now')
         WHERE id = ?
         "#
     )
+    .bind(error)
     .bind(id)
     .execute(pool)
     .await
@@ -854,7 +875,7 @@ pub async fn create_collection(
 #[tauri::command]
 pub async fn get_collections_for_job(
     state: State<'_, DatabaseState>,
-    jobId: i64,
+    job_id: i64,
 ) -> Result<Vec<Collection>, String> {
     sqlx::query_as::<_, Collection>(
         r#"
@@ -864,7 +885,7 @@ pub async fn get_collections_for_job(
         ORDER BY created_at ASC
         "#,
     )
-    .bind(jobId)
+    .bind(job_id)
     .fetch_all(&state.pool)
     .await
     .map_err(|e| format!("Failed to get collections: {}", e))

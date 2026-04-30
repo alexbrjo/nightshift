@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { InferenceJob, Collection } from "../database";
+import { formatLongDateTime } from "../utils/date";
 
 interface JobViewPageProps {
   jobId: number;
@@ -85,11 +86,19 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
             if (event.payload.job_id !== jobId) return;
             setIsStreaming(false);
             loadJob();
+            loadCollections();
           }),
           listen<{ job_id: number }>("job-cancelled", (event) => {
             if (event.payload.job_id !== jobId) return;
             setIsStreaming(false);
             loadJob();
+            loadCollections();
+          }),
+          listen<{ job_id: number }>("job-failed", (event) => {
+            if (event.payload.job_id !== jobId) return;
+            setIsStreaming(false);
+            loadJob();
+            loadCollections();
           }),
         ]);
 
@@ -327,8 +336,8 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
         </div>
 
         <div className="timestamps">
-          <span>Created: {new Date(job.created_at).toLocaleString()}</span>
-          <span>Last Updated: {new Date(job.updated_at).toLocaleString()}</span>
+          <span>Created: {formatLongDateTime(job.created_at)}</span>
+          <span>Last Updated: {formatLongDateTime(job.updated_at)}</span>
         </div>
       </div>
 

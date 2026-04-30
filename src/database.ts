@@ -17,6 +17,7 @@ export interface InferenceJob {
   pre_render_body?: string;
   json_schema_file?: string;
   status: string;
+  error_message?: string;
   created_at: string;
   updated_at: string;
 }

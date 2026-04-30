@@ -29,11 +29,13 @@ impl Default for JobStatus {
     }
 }
 
-/// Sampling strategy for job execution
+/// Sampling strategy for job execution. The number of samples is taken from
+/// `WorkerConfig::samples` rather than carried inline so the user's chosen
+/// `samples` value flows through every strategy uniformly.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SamplingStrategy {
     Single,
-    Random(usize),
+    Random,
     Exhaustive,
 }
 
@@ -43,7 +45,7 @@ impl std::str::FromStr for SamplingStrategy {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "single" => Ok(SamplingStrategy::Single),
-            "random" | "random_samples" => Ok(SamplingStrategy::Random(10)), // default 10
+            "random" | "random_samples" => Ok(SamplingStrategy::Random),
             "exhaustive" | "all" => Ok(SamplingStrategy::Exhaustive),
             _ => Err(format!("Unknown sampling strategy: {}", s)),
         }
@@ -540,24 +542,13 @@ impl JobExecutor {
         Ok(())
     }
 
-    /// Ensure collection exists for job
+    /// Ensure collection exists for job. The UNIQUE(job_id) constraint on the
+    /// collections table makes this race-safe even under concurrent calls:
+    /// `INSERT OR IGNORE` either creates the row or no-ops if another caller
+    /// already did, then the SELECT returns the unique row.
     async fn ensure_collection(&self, config: &WorkerConfig) -> Result<i64, String> {
-        // Check if collection already exists
-        let existing: Option<(i64,)> = sqlx::query_as(
-            r#"SELECT id FROM collections WHERE job_id = ? LIMIT 1"#
-        )
-        .bind(config.job_id)
-        .fetch_optional(&self.db.pool)
-        .await
-        .map_err(|e| format!("Failed to check collection: {}", e))?;
-
-        if let Some((collection_id,)) = existing {
-            return Ok(collection_id);
-        }
-
-        // Create new collection
         sqlx::query(
-            r#"INSERT INTO collections (job_id, name) VALUES (?, ?)"#
+            r#"INSERT OR IGNORE INTO collections (job_id, name) VALUES (?, ?)"#
         )
         .bind(config.job_id)
         .bind(format!("{} outputs", config.name))
@@ -565,9 +556,8 @@ impl JobExecutor {
         .await
         .map_err(|e| format!("Failed to create collection: {}", e))?;
 
-        // Get the new collection ID
         let result: (i64,) = sqlx::query_as(
-            r#"SELECT id FROM collections WHERE job_id = ? LIMIT 1"#
+            r#"SELECT id FROM collections WHERE job_id = ?"#
         )
         .bind(config.job_id)
         .fetch_one(&self.db.pool)
@@ -671,23 +661,23 @@ impl JobExecutor {
                 // Return first sample only
                 Ok(samples.into_iter().next().map(|s| vec![s]).unwrap_or_default())
             }
-            SamplingStrategy::Random(n) => {
-                // Return random samples
-                let count = (*n).min(samples.len());
+            SamplingStrategy::Random => {
+                // Return up to `config.samples` randomly selected, without replacement.
+                let count = (config.samples.max(0) as usize).min(samples.len());
                 if count == 0 || samples.is_empty() {
                     return Ok(Vec::new());
                 }
-                
+
                 let mut rng = rand::rng();
                 let mut indices: Vec<usize> = (0..samples.len()).collect();
                 indices.shuffle(&mut rng);
-                
+
                 let selected: Vec<serde_json::Value> = indices
                     .into_iter()
                     .take(count)
                     .map(|i| samples[i].clone())
                     .collect();
-                
+
                 Ok(selected)
             }
             SamplingStrategy::Exhaustive => {

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { InferenceJob } from "../database";
+import { formatDateTime } from "../utils/date";
 
 interface JobListSidebarProps {
   selectedId?: number | null;
@@ -25,19 +26,6 @@ function getStatusClass(status: string): string {
     default:
       return "";
   }
-}
-
-function formatDate(dateStr?: string): string {
-  if (!dateStr) return "";
-  const normalized = dateStr.includes("T") ? dateStr : dateStr.replace(" ", "T") + "Z";
-  const d = new Date(normalized);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 export default function JobListSidebar({
@@ -90,7 +78,7 @@ export default function JobListSidebar({
       ) : (
         <ul className="job-list">
           {jobs.map((job) => {
-            const date = formatDate(job.created_at);
+            const date = formatDateTime(job.created_at);
             return (
               <li
                 key={job.id}

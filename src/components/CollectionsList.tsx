@@ -1,23 +1,12 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type { Collection } from "../database";
+import { formatDate } from "../utils/date";
 
 interface CollectionsListProps {
   selectedId: number | null;
   onSelectCollection: (collectionId: number) => void;
-}
-
-function formatDate(dateStr?: string): string {
-  if (!dateStr) return "";
-  // SQLite returns "YYYY-MM-DD HH:MM:SS" (no T); some browsers fail to parse it.
-  const normalized = dateStr.includes("T") ? dateStr : dateStr.replace(" ", "T") + "Z";
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
 }
 
 export default function CollectionsList({ selectedId, onSelectCollection }: CollectionsListProps) {
@@ -37,6 +26,35 @@ export default function CollectionsList({ selectedId, onSelectCollection }: Coll
 
   useEffect(() => {
     loadCollections();
+
+    // Refresh when any job emits a terminal event — that's when new collections
+    // appear (or a partial collection's item count grows). job-started also
+    // matters because the executor creates the empty collection eagerly.
+    let cancelled = false;
+    const unlistens: Array<() => void> = [];
+
+    (async () => {
+      try {
+        const fns = await Promise.all([
+          listen("job-started", () => loadCollections()),
+          listen("job-completed", () => loadCollections()),
+          listen("job-cancelled", () => loadCollections()),
+          listen("job-failed", () => loadCollections()),
+        ]);
+        if (cancelled) {
+          fns.forEach((fn) => fn());
+        } else {
+          unlistens.push(...fns);
+        }
+      } catch (err) {
+        console.error("Failed to register collection list listeners:", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      unlistens.forEach((fn) => fn());
+    };
   }, [loadCollections]);
 
   return (

@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 
 export interface JobConfig {
   name: string;
@@ -31,18 +32,22 @@ const OUTPUT_MODES = ["Unstructured", "Plain JSON", "JSON Schema"];
 const STRATEGIES = ["Single", "Random", "Exhaustive"];
 const THINKING_OPTIONS = ["Off", "Low", "Medium", "High"];
 
+const DEFAULT_SERVER_URL = "http://localhost:1234";
+
+const INITIAL_FORM_STATE: JobConfig = {
+  name: "",
+  promptFile: "",
+  dataSource: "",
+  provider: "Local",
+  model: "bonsai-8b",
+  serverUrl: DEFAULT_SERVER_URL,
+  outputMode: "Unstructured",
+  samples: 1,
+  strategy: "Single",
+};
+
 export default function InferenceJobForm({ isOpen, onClose, onSuccess }: InferenceJobFormProps) {
-  const [formData, setFormData] = useState<JobConfig>({
-    name: "",
-    promptFile: "",
-    dataSource: "",
-    provider: "Local",
-    model: "",
-    serverUrl: "http://localhost:8000",
-    outputMode: "Unstructured",
-    samples: 1,
-    strategy: "Single",
-  });
+  const [formData, setFormData] = useState<JobConfig>(INITIAL_FORM_STATE);
 
   const [promptFiles, setPromptFiles] = useState<string[]>([]);
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false);
@@ -80,20 +85,55 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
   // Reset form when opened using useEffect to avoid infinite re-renders
   useEffect(() => {
     if (isOpen) {
-      setFormData({
-        name: "",
-        promptFile: "",
-        dataSource: "",
-        provider: "Local",
-        model: "bonsai-8b",
-        serverUrl: "http://localhost:1234",
-        outputMode: "Unstructured",
-        samples: 1,
-        strategy: "Single",
-      });
+      setFormData(INITIAL_FORM_STATE);
       setErrors({});
     }
   }, [isOpen]);
+
+  const pickFile = useCallback(async (
+    filters: Array<{ name: string; extensions: string[] }>,
+  ): Promise<string | null> => {
+    try {
+      const selected = await open({ multiple: false, directory: false, filters });
+      if (typeof selected !== "string") return null;
+      const root = await invoke<string | null>("get_root_path");
+      if (root) {
+        // Relativize the path if it's inside the project root (executor only
+        // accepts relative paths and rejects "..").
+        const sep = selected.includes("\\") && !selected.includes("/") ? "\\" : "/";
+        const prefix = root.endsWith(sep) ? root : root + sep;
+        if (selected.startsWith(prefix)) {
+          return selected.slice(prefix.length);
+        }
+        // Outside project root — surface as an error rather than letting the
+        // job fail later with a confusing message from the path resolver.
+        setErrors((prev) => ({
+          ...prev,
+          submit: `Selected file is outside the project root: ${selected}`,
+        }));
+        return null;
+      }
+      return selected;
+    } catch (err) {
+      console.error("File picker failed:", err);
+      return null;
+    }
+  }, []);
+
+  const handleBrowseDataSource = useCallback(async () => {
+    const path = await pickFile([
+      { name: "JSON / JSONL", extensions: ["json", "jsonl", "ndjson"] },
+      { name: "All files", extensions: ["*"] },
+    ]);
+    if (path) updateField("dataSource", path);
+  }, [pickFile]);
+
+  const handleBrowseSchemaFile = useCallback(async () => {
+    const path = await pickFile([
+      { name: "JSON Schema", extensions: ["json"] },
+    ]);
+    if (path) updateField("jsonSchemaFile", path);
+  }, [pickFile]);
 
   const validateForm = (): boolean => {
     const newErrors: Record<string, string> = {};
@@ -292,7 +332,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
               type="text"
               value={formData.serverUrl}
               onChange={(e) => updateField("serverUrl", e.target.value)}
-              placeholder="http://localhost:8000 (base URL, /v1/chat/completions appended automatically)"
+              placeholder="http://localhost:1234 (base URL, /v1/chat/completions appended automatically)"
               className={errors.serverUrl ? "error" : ""}
             />
             {errors.serverUrl && <span className="error-message">{errors.serverUrl}</span>}
@@ -371,7 +411,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
                   onChange={(e) => updateField("jsonSchemaFile", e.target.value)}
                   placeholder="path/to/schema.json"
                 />
-                <button type="button" className="btn-secondary" onClick={() => {}}>
+                <button type="button" className="btn-secondary" onClick={handleBrowseSchemaFile}>
                   Browse
                 </button>
               </div>
@@ -423,7 +463,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
                 placeholder="path/to/data.jsonl"
                 className={errors.dataSource ? "error" : ""}
               />
-              <button type="button" className="btn-secondary" onClick={() => {}}>
+              <button type="button" className="btn-secondary" onClick={handleBrowseDataSource}>
                 Browse
               </button>
             </div>
