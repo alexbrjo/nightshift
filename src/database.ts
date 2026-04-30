@@ -27,3 +27,10 @@ export interface CollectionItem {
   data: Record<string, unknown>;
   created_at: string;
 }
+
+export interface Collection {
+  id: number;
+  job_id: number;
+  name: string;
+  created_at: string;
+}

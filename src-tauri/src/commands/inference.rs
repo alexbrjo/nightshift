@@ -5,24 +5,83 @@ use crate::database::{self, DatabaseState};
 use crate::job_executor::{JobEvent, JobExecutor, WorkerConfig};
 use crate::state::JobManager;
 
-/// Start an inference job asynchronously
+/// Spawn the event-broadcast and execution tasks for a job whose queue entry
+/// has already been marked Running via `executor.start_job`.
+fn spawn_job_execution(executor: &JobExecutor, app: AppHandle, config: WorkerConfig) {
+    let (tx, mut rx) = mpsc::channel::<JobEvent>(100);
+    let app_clone = app.clone();
+    let pool = executor.db.pool.clone();
+
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            let event_name = match &event {
+                JobEvent::Started { .. } => "job-started",
+                JobEvent::SampleStarted { .. } => "sample-started",
+                JobEvent::SampleCompleted { .. } => "sample-completed",
+                JobEvent::SampleFailed { .. } => "sample-failed",
+                JobEvent::ProgressUpdate(_) => "job-progress",
+                JobEvent::Completed { .. } => "job-completed",
+                JobEvent::Failed { .. } => "job-failed",
+                JobEvent::Cancelled { .. } => "job-cancelled",
+            };
+
+            match &event {
+                JobEvent::Completed { job_id, success_count, failure_count } => {
+                    tracing::info!("Job {} completed: {} successful, {} failed", job_id, success_count, failure_count);
+                    if let Err(e) = database::update_job_status(&pool, *job_id, "completed").await {
+                        tracing::error!("Failed to update job {} status to completed: {}", job_id, e);
+                    }
+                }
+                JobEvent::Failed { job_id, error } => {
+                    tracing::error!("Job {} failed: {}", job_id, error);
+                    if let Err(e) = database::update_job_status_with_error(&pool, *job_id, &format!("Failed: {}", error)).await {
+                        tracing::error!("Failed to update job {} status to failed: {}", job_id, e);
+                    }
+                }
+                JobEvent::Cancelled { job_id, .. } => {
+                    if let Err(e) = database::update_job_status(&pool, *job_id, "cancelled").await {
+                        tracing::error!("Failed to update job {} status to cancelled: {}", job_id, e);
+                    }
+                }
+                _ => {}
+            }
+
+            if let Err(e) = app_clone.emit(event_name, event) {
+                tracing::warn!("Failed to emit job event: {}", e);
+            }
+        }
+    });
+
+    let executor_clone = executor.clone();
+    tokio::spawn(async move {
+        if let Err(e) = executor_clone.execute_job(config, tx).await {
+            tracing::error!("Job execution failed: {}", e);
+        }
+    });
+}
+
+/// Start an inference job asynchronously, emitting progress events to the frontend.
 #[tauri::command]
 pub async fn start_inference_job(
+    app: AppHandle,
     job_manager: State<'_, JobManager>,
     db: State<'_, DatabaseState>,
     job_id: i64,
 ) -> Result<(), String> {
-    // Initialize executor if not already done
     let mut executor_opt = job_manager.executor.lock().await;
     if executor_opt.is_none() {
         *executor_opt = Some(JobExecutor::new(db.clone())?);
     }
-    
     let executor = executor_opt.as_ref().unwrap();
-    
-    // Start the job
+
     executor.start_job(job_id).await?;
-    
+
+    let job = database::get_inference_job(db.clone(), job_id).await
+        .map_err(|e| format!("Failed to get job: {}", e))?
+        .ok_or("Job not found")?;
+    let config = WorkerConfig::from_job(job);
+
+    spawn_job_execution(executor, app, config);
     Ok(())
 }
 
@@ -47,7 +106,8 @@ pub async fn cancel_inference_job(
     Ok(cancelled)
 }
 
-/// Subscribe to job status updates and emit events to the frontend
+/// Start a job and subscribe to its status updates. Equivalent to `start_inference_job`;
+/// kept as a separate command for the existing frontend wiring.
 #[tauri::command]
 pub async fn subscribe_to_job_status(
     app: AppHandle,
@@ -55,89 +115,7 @@ pub async fn subscribe_to_job_status(
     db: State<'_, DatabaseState>,
     job_id: i64,
 ) -> Result<(), String> {
-    // Initialize executor if not already done
-    let mut executor_opt = job_manager.executor.lock().await;
-    if executor_opt.is_none() {
-        *executor_opt = Some(JobExecutor::new(db.clone())?);
-    }
-    
-    let executor = executor_opt.as_ref().unwrap();
-    
-    // Start the job (this creates the cancellation token and updates DB status)
-    executor.start_job(job_id).await?;
-    
-    // Get job config
-    let job = database::get_inference_job(db.clone(), job_id).await
-        .map_err(|e| format!("Failed to get job: {}", e))?;
-    
-    let job = job.ok_or("Job not found")?;
-    let config = WorkerConfig::from_job(job);
-    
-    // Create channel for events
-    let (tx, mut rx) = mpsc::channel::<JobEvent>(100);
-    
-    // Clone app and db pool for event emission
-    let app_clone = app.clone();
-    let pool = db.pool.clone();
-    
-    // Spawn task to receive and broadcast events
-    tokio::spawn(async move {
-        while let Some(event) = rx.recv().await {
-            let event_name = match &event {
-                JobEvent::Started { .. } => "job-started",
-                JobEvent::SampleStarted { .. } => "sample-started",
-                JobEvent::SampleCompleted { .. } => "sample-completed",
-                JobEvent::SampleFailed { .. } => "sample-failed",
-                JobEvent::ProgressUpdate(_) => "job-progress",
-                JobEvent::Completed { .. } => "job-completed",
-                JobEvent::Failed { .. } => "job-failed",
-                JobEvent::Cancelled { .. } => "job-cancelled",
-            };
-            
-            // Update database status for terminal events
-            match &event {
-                JobEvent::Completed { job_id, success_count, failure_count } => {
-                    tracing::info!("Job {} completed: {} successful, {} failed", job_id, success_count, failure_count);
-                    if let Err(e) = database::update_job_status(&pool, *job_id, "completed").await {
-                        tracing::error!("Failed to update job {} status to completed: {}", job_id, e);
-                    } else {
-                        tracing::info!("Job {} status updated to 'completed' in database", job_id);
-                    }
-                }
-                JobEvent::Failed { job_id, error } => {
-                    tracing::error!("Job {} failed: {}", job_id, error);
-                    if let Err(e) = database::update_job_status_with_error(&pool, *job_id, &format!("Failed: {}", error)).await {
-                        tracing::error!("Failed to update job {} status to failed: {}", job_id, e);
-                    } else {
-                        tracing::info!("Job {} status updated to 'failed' in database", job_id);
-                    }
-                }
-                JobEvent::Cancelled { job_id, .. } => {
-                    tracing::info!("Job {} cancelled", job_id);
-                    if let Err(e) = database::update_job_status(&pool, *job_id, "cancelled").await {
-                        tracing::error!("Failed to update job {} status to cancelled: {}", job_id, e);
-                    } else {
-                        tracing::info!("Job {} status updated to 'cancelled' in database", job_id);
-                    }
-                }
-                _ => {}
-            }
-            
-            if let Err(e) = app_clone.emit(event_name, event) {
-                tracing::warn!("Failed to emit job event: {}", e);
-            }
-        }
-    });
-    
-    // Start execution in background
-    let executor_clone = executor.clone();
-    tokio::spawn(async move {
-        if let Err(e) = executor_clone.execute_job(config, tx).await {
-            tracing::error!("Job execution failed: {}", e);
-        }
-    });
-    
-    Ok(())
+    start_inference_job(app, job_manager, db, job_id).await
 }
 
 /// Export a job configuration to YAML format

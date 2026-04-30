@@ -1,4 +1,5 @@
 use minijinja::{Environment, context};
+use rand::prelude::SliceRandom;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -632,39 +633,97 @@ impl JobExecutor {
         Ok(())
     }
 
-    /// Load samples based on strategy
+    /// Load samples from data source file
     async fn load_samples(&self, config: &WorkerConfig) -> Result<Vec<serde_json::Value>, String> {
-        // For now, we'll read from a JSON file or use the data_source as sample data
-        // In a real implementation, this would query the database collections
+        debug!("Loading samples from data source: {} with strategy: {:?}", config.data_source, config.strategy);
 
-        debug!("Loading samples with strategy: {:?}", config.strategy);
+        // Resolve the data source path - use as-is if absolute, otherwise relative to project root
+        let full_path = if std::path::Path::new(&config.data_source).is_absolute() {
+            std::path::PathBuf::from(&config.data_source)
+        } else {
+            self.db.get_project_root().join(&config.data_source)
+        };
+        
+        debug!("Full data source path: {}", full_path.display());
+        
+        // Check if file exists
+        if !full_path.exists() {
+            return Err(format!("Data source file does not exist: {}", full_path.display()));
+        }
+        
+        // Read the file content
+        let content = tokio::fs::read_to_string(&full_path)
+            .await
+            .map_err(|e| format!("Failed to read data source {}: {}", config.data_source, e))?;
 
+        // Parse based on format (JSONL or JSON array)
+        let mut samples: Vec<serde_json::Value> = Vec::new();
+        
+        if content.trim().starts_with('[') {
+            // JSON array format
+            let parsed: Vec<serde_json::Value> = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse JSON array from {}: {}", config.data_source, e))?;
+            samples = parsed;
+        } else {
+            // JSONL format (one JSON object per line)
+            for (line_num, line) in content.lines().enumerate() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue; // Skip empty lines and comments
+                }
+                
+                match serde_json::from_str(trimmed) {
+                    Ok(obj) => samples.push(obj),
+                    Err(e) => {
+                        warn!("Failed to parse line {} in {}: {}", line_num + 1, config.data_source, e);
+                    }
+                }
+            }
+        }
+
+        debug!("Loaded {} samples from {}", samples.len(), config.data_source);
+        
+        // Log first sample for debugging
+        if let Some(first) = samples.first() {
+            debug!("First sample keys: {:?}", first.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+            debug!("First sample content: {:?}", first);
+        } else {
+            warn!("No samples loaded from data source!");
+        }
+
+        // Apply sampling strategy
         match &config.strategy {
             SamplingStrategy::Single => {
                 // Return first sample only
-                Ok(vec![serde_json::json!({ "index": 0 })])
+                Ok(samples.into_iter().next().map(|s| vec![s]).unwrap_or_default())
             }
             SamplingStrategy::Random(n) => {
-                // Generate random samples
-                let count = (*n).min(config.samples as usize);
-                let mut samples = Vec::with_capacity(count);
-
-                for i in 0..count {
-                    samples.push(serde_json::json!({ "index": i, "random": true }));
+                // Return random samples
+                let count = (*n).min(samples.len());
+                if count == 0 || samples.is_empty() {
+                    return Ok(Vec::new());
                 }
-
-                Ok(samples)
+                
+                let mut rng = rand::rng();
+                let mut indices: Vec<usize> = (0..samples.len()).collect();
+                indices.shuffle(&mut rng);
+                
+                let selected: Vec<serde_json::Value> = indices
+                    .into_iter()
+                    .take(count)
+                    .map(|i| samples[i].clone())
+                    .collect();
+                
+                Ok(selected)
             }
             SamplingStrategy::Exhaustive => {
-                // Return all samples up to config.samples
-                let count = config.samples as usize;
-                let mut samples = Vec::with_capacity(count);
-
-                for i in 0..count {
-                    samples.push(serde_json::json!({ "index": i }));
-                }
-
-                Ok(samples)
+                // Return all samples (up to config.samples limit if specified)
+                let count = if config.samples > 0 {
+                    config.samples as usize
+                } else {
+                    samples.len()
+                };
+                Ok(samples.into_iter().take(count).collect())
             }
         }
     }
@@ -690,8 +749,8 @@ impl JobExecutor {
                 return Err("Cancelled".to_string());
             }
 
-            debug!("Attempting LLM call for sample {} (attempt {}/{})", sample_index, attempt + 1, max_retries + 1);
-            match self.attempt_llm_call(config, sample).await {
+            debug!("Attempting LLM call for sample {} (attempt {}/{})", sample_index + 1, attempt + 1, max_retries + 1);
+            match self.attempt_llm_call(config, sample_index, sample).await {
                 Ok(output) => return Ok(output),
                 Err(e) => {
                     let is_rate_limit = e.contains("429") || e.contains("rate limit");
@@ -727,6 +786,7 @@ impl JobExecutor {
     async fn attempt_llm_call(
         &self,
         config: &WorkerConfig,
+        sample_index: usize,
         sample: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         // Validate server URL
@@ -794,7 +854,7 @@ impl JobExecutor {
             Ok(serde_json::json!({
                 "content": choice.message.content,
                 "model": config.model,
-                "sample_index": sample.get("index").unwrap_or(&serde_json::Value::Null),
+                "sample_index": sample_index as i64,
             }))
         } else {
             Err("No choices in response".to_string())
@@ -803,12 +863,26 @@ impl JobExecutor {
 
     /// Load prompt from file
     async fn load_prompt_file(&self, path: &str) -> Result<String, String> {
-        // Resolve the path relative to the project root
-        let full_path = self.db.get_project_root().join(path);
+        // Resolve the path - use as-is if absolute, otherwise relative to project root
+        let full_path = if std::path::Path::new(path).is_absolute() {
+            std::path::PathBuf::from(path)
+        } else {
+            self.db.get_project_root().join(path)
+        };
         
-        tokio::fs::read_to_string(&full_path)
+        debug!("Loading prompt from: {} (resolved to: {})", path, full_path.display());
+        debug!("File exists: {}", full_path.exists());
+        
+        if !full_path.exists() {
+            return Err(format!("Prompt file does not exist: {}", full_path.display()));
+        }
+        
+        let content = tokio::fs::read_to_string(&full_path)
             .await
-            .map_err(|e| format!("Failed to read prompt file {}: {}", path, e))
+            .map_err(|e| format!("Failed to read prompt file {}: {}", path, e))?;
+        
+        debug!("Prompt file loaded successfully ({} bytes)", content.len());
+        Ok(content)
     }
 
     /// Render Jinja2 prompt with sample data
@@ -820,10 +894,18 @@ impl JobExecutor {
             data => sample,
         };
 
+        debug!("Template content (first 300 chars): {}", &template.chars().take(300).collect::<String>());
+        debug!("Sample data: {:?}", sample);
+
         env.add_template("prompt", template)
             .map_err(|e| format!("Failed to parse template: {}", e))?;
 
-        env.render_str("prompt", &ctx)
-            .map_err(|e| format!("Failed to render template: {}", e))
+        let rendered = env.get_template("prompt")
+            .map_err(|e| format!("Failed to load template: {}", e))?
+            .render(&ctx)
+            .map_err(|e| format!("Failed to render template: {}", e))?;
+        
+        debug!("Rendered prompt (first 500 chars): {}", &rendered.chars().take(500).collect::<String>());
+        Ok(rendered)
     }
 }

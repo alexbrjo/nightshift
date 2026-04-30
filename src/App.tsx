@@ -3,19 +3,21 @@ import Editor from "./components/Editor";
 import FileTree, { type FsNode } from "./components/FileTree";
 import UnderConstruction from "./components/UnderConstruction";
 import JobRunnerPage from "./components/JobRunnerPage";
+import CollectionViewer from "./components/CollectionViewer";
+import CollectionsList from "./components/CollectionsList";
 import { ToastProvider } from "./components/Toast";
 
 type Section =
   | "code-editor"
-  | "collection-viewer"
   | "job-runner"
-  | "experiment-designer";
+  | "experiment-designer"
+  | "collection-viewer";
 
 const SECTION_LABELS: Record<Section, string> = {
   "code-editor": "Code Editor",
-  "collection-viewer": "Collection Viewer",
   "job-runner": "Job Runner",
   "experiment-designer": "Experiment Designer",
+  "collection-viewer": "Collection Viewer",
 };
 
 function getLanguage(filename: string): string | undefined {
@@ -48,6 +50,7 @@ export default function App() {
     content: string;
     language?: string;
   } | null>(null);
+  const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
   const fileContentsRef = useRef(new Map<string, string>());
 
   const sections: { id: Section; icon: string; label: string }[] = [
@@ -123,6 +126,17 @@ export default function App() {
         ) : activeSection === "job-runner" ? (
           <main className="workspace job-runner-workspace full-width">
             <JobRunnerPage />
+          </main>
+        ) : activeSection === "collection-viewer" ? (
+          <main className="workspace full-width">
+            {selectedCollectionId ? (
+              <CollectionViewer
+                collectionId={selectedCollectionId}
+                onBack={() => setSelectedCollectionId(null)}
+              />
+            ) : (
+              <CollectionsList onSelectCollection={setSelectedCollectionId} />
+            )}
           </main>
         ) : (
           <main className="workspace full-width">

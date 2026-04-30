@@ -1,7 +1,8 @@
 import { useState, useCallback } from "react";
-import InferenceJobForm, { type JobConfig } from "./InferenceJobForm";
+import InferenceJobForm from "./InferenceJobForm";
 import JobListSidebar from "./JobListSidebar";
 import JobViewPage from "./JobViewPage";
+import CollectionViewer from "./CollectionViewer";
 
 interface JobRunnerPageProps {
   onBack?: () => void;
@@ -9,6 +10,7 @@ interface JobRunnerPageProps {
 
 export default function JobRunnerPage({ onBack }: JobRunnerPageProps) {
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
+  const [viewingCollectionId, setViewingCollectionId] = useState<number | null>(null);
 
   const handleJobCreated = useCallback((jobId: number) => {
     // Optionally auto-select the newly created job
@@ -21,11 +23,25 @@ export default function JobRunnerPage({ onBack }: JobRunnerPageProps) {
 
   const handleBackToJobList = useCallback(() => {
     setSelectedJobId(null);
+    setViewingCollectionId(null);
   }, []);
+
+  const handleViewCollection = useCallback((collectionId: number) => {
+    setViewingCollectionId(collectionId);
+  }, []);
+
+  const handleBackFromCollection = useCallback(() => {
+    setViewingCollectionId(null);
+  }, []);
+
+  // If viewing a collection, show the collection viewer
+  if (viewingCollectionId) {
+    return <CollectionViewer collectionId={viewingCollectionId} onBack={handleBackFromCollection} />;
+  }
 
   // If viewing a specific job, show the job details page
   if (selectedJobId) {
-    return <JobViewPage jobId={selectedJobId} onBack={handleBackToJobList} />;
+    return <JobViewPage jobId={selectedJobId} onBack={handleBackToJobList} onViewCollection={handleViewCollection} />;
   }
 
   return (

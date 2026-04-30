@@ -11,8 +11,10 @@ use tauri::Manager;
 use crate::commands::*;
 use crate::database::{
     DatabaseState, create_inference_job, get_inference_job, list_inference_jobs,
-    update_inference_job, delete_inference_job, create_collection, add_collection_item,
-    get_collection_items, get_collection_count,
+    update_inference_job, delete_inference_job, create_collection, get_collections_for_job,
+    add_collection_item,
+    get_collection_items, get_collection_count, delete_collection_item, export_collection_jsonl,
+    export_collection_csv, list_all_collections,
 };
 use crate::state::{AppState, JobManager};
 use tokio::sync::Mutex as TokioMutex;
@@ -74,9 +76,14 @@ fn main() {
             update_inference_job,
             delete_inference_job,
             create_collection,
+            get_collections_for_job,
+            list_all_collections,
             add_collection_item,
             get_collection_items,
             get_collection_count,
+            delete_collection_item,
+            export_collection_jsonl,
+            export_collection_csv,
             // Job execution commands
             start_inference_job,
             cancel_inference_job,

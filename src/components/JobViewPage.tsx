@@ -1,15 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { InferenceJob } from "../database";
+import type { InferenceJob, Collection } from "../database";
 
 interface JobViewPageProps {
   jobId: number;
   onBack: () => void;
+  onViewCollection?: (collectionId: number) => void;
 }
 
-export default function JobViewPage({ jobId, onBack }: JobViewPageProps) {
+export default function JobViewPage({ jobId, onBack, onViewCollection }: JobViewPageProps) {
   const [job, setJob] = useState<InferenceJob | null>(null);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [progress, setProgress] = useState({
     currentSample: 0,
@@ -31,20 +33,29 @@ export default function JobViewPage({ jobId, onBack }: JobViewPageProps) {
       });
     } catch (error) {
       console.error("Failed to load job:", error);
-    } finally {
-      setIsLoading(false);
+    }
+  }, [jobId]);
+
+  const loadCollections = useCallback(async () => {
+    try {
+      const collectionsData = await invoke<Collection[]>("get_collections_for_job", { jobId });
+      setCollections(collectionsData);
+    } catch (error) {
+      console.error("Failed to load collections:", error);
     }
   }, [jobId]);
 
   useEffect(() => {
+    setIsLoading(true);
     loadJob();
+    loadCollections();
 
     // Listen for job status events
     const unlistenStarted = listen("job-started", (event) => {
       setIsStreaming(true);
       setProgress((prev) => ({
         ...prev,
-        totalSamples: event.payload.total_samples || prev.totalSamples,
+        totalSamples: (event.payload as any).total_samples || prev.totalSamples,
       }));
     });
 
@@ -79,7 +90,11 @@ export default function JobViewPage({ jobId, onBack }: JobViewPageProps) {
       unlistenCompleted.then((fn) => fn());
       unlistenCancelled.then((fn) => fn());
     };
-  }, [loadJob, jobId]);
+  }, [loadJob, loadCollections, jobId]);
+
+  useEffect(() => {
+    setIsLoading(false);
+  }, [job]);
 
   const handleStartJob = async () => {
     try {
@@ -116,6 +131,13 @@ export default function JobViewPage({ jobId, onBack }: JobViewPageProps) {
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Failed to export YAML:", error);
+    }
+  };
+
+  const handleViewCollection = () => {
+    if (collections.length > 0 && onViewCollection) {
+      // Use the first collection (or could show a selection dialog for multiple)
+      onViewCollection(collections[0].id);
     }
   };
 
@@ -305,10 +327,16 @@ export default function JobViewPage({ jobId, onBack }: JobViewPageProps) {
         <p>
           Job output will be saved to a collection once the job completes.
         </p>
-        {job.status === "completed" && (
-          <button className="btn-primary" onClick={() => {}}>
-            View Collection
+        {job.status === "completed" && collections.length > 0 ? (
+          <button className="btn-primary" onClick={handleViewCollection}>
+            View Collection ({collections.length})
           </button>
+        ) : job.status === "completed" ? (
+          <button className="btn-secondary" disabled title="No collections yet">
+            View Collection (No data)
+          </button>
+        ) : (
+          <p className="info-text">Run the job to generate collection data.</p>
         )}
       </div>
     </div>

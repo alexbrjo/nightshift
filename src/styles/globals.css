@@ -1212,3 +1212,90 @@ legend {
   cursor: not-allowed;
   transform: none !important;
 }
+
+/* ========================================
+   Collections List Styles
+   ======================================== */
+
+.collections-list {
+  padding: 24px;
+  height: 100%;
+  overflow-y: auto;
+}
+
+.collection-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.collection-item {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.collection-item:hover {
+  border-color: var(--moon-glow-medium);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.collection-icon {
+  font-size: 32px;
+  flex-shrink: 0;
+}
+
+.collection-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.collection-name {
+  font-weight: 600;
+  font-size: 16px;
+  color: var(--text-primary);
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.collection-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.collection-id,
+.collection-job {
+  padding: 2px 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.collection-date {
+  opacity: 0.7;
+}
+
+.collection-arrow {
+  font-size: 18px;
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+}
+
+.collection-item:hover .collection-arrow {
+  color: var(--moon-glow);
+  transform: translateX(4px);
+}

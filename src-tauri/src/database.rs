@@ -260,6 +260,10 @@ impl DatabaseState {
     }
 }
 
+// Include collection command tests
+#[path = "database_collection_tests.rs"]
+mod collection_commands_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -846,6 +850,53 @@ pub async fn create_collection(
     Ok(result.last_insert_rowid())
 }
 
+/// Tauri command to get all collections for a job
+#[tauri::command]
+pub async fn get_collections_for_job(
+    state: State<'_, DatabaseState>,
+    jobId: i64,
+) -> Result<Vec<Collection>, String> {
+    sqlx::query_as::<_, Collection>(
+        r#"
+        SELECT id, job_id, name, created_at
+        FROM collections
+        WHERE job_id = ?
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(jobId)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to get collections: {}", e))
+}
+
+/// Tauri command to list all collections
+#[tauri::command]
+pub async fn list_all_collections(
+    state: State<'_, DatabaseState>,
+) -> Result<Vec<Collection>, String> {
+    sqlx::query_as::<_, Collection>(
+        r#"
+        SELECT id, job_id, name, created_at
+        FROM collections
+        ORDER BY created_at DESC
+        "#,
+    )
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to list collections: {}", e))
+}
+
+/// Collection representation
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct Collection {
+    pub id: i64,
+    pub job_id: i64,
+    pub name: String,
+    pub created_at: String,
+}
+
 /// Tauri command to add an item to a collection
 #[tauri::command]
 pub async fn add_collection_item(
@@ -943,4 +994,192 @@ pub async fn get_collection_count(
     .map_err(|e| format!("Failed to get collection count: {}", e))?;
 
     Ok(count)
+}
+
+/// Tauri command to delete a collection item
+#[tauri::command]
+pub async fn delete_collection_item(
+    state: State<'_, DatabaseState>,
+    item_id: i64,
+) -> Result<bool, String> {
+    let result = sqlx::query(
+        r#"
+        DELETE FROM collection_items WHERE id = ?
+        "#
+    )
+    .bind(item_id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to delete collection item: {}", e))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Export format for collection items
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CollectionItemExport {
+    pub id: i64,
+    pub data: serde_json::Value,
+    pub created_at: String,
+}
+
+/// Tauri command to export collection items as JSONL
+#[tauri::command]
+pub async fn export_collection_jsonl(
+    state: State<'_, DatabaseState>,
+    collection_id: i64,
+) -> Result<String, String> {
+    // Verify collection exists
+    let collection_exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?)
+        "#
+    )
+    .bind(collection_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to check collection existence: {}", e))?;
+
+    if !collection_exists {
+        return Err("Collection not found".to_string());
+    }
+
+    let items = sqlx::query_as::<_, CollectionItem>(
+        r#"
+        SELECT * FROM collection_items
+        WHERE collection_id = ?
+        ORDER BY created_at ASC
+        "#
+    )
+    .bind(collection_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
+
+    // Convert to export format and serialize as JSONL
+    let export_items: Vec<CollectionItemExport> = items
+        .into_iter()
+        .map(|item| CollectionItemExport {
+            id: item.id,
+            data: item.data,
+            created_at: item.created_at,
+        })
+        .collect();
+
+    let jsonl_lines: Result<Vec<String>, _> = export_items
+        .iter()
+        .map(|item| serde_json::to_string(item))
+        .collect();
+
+    let jsonl_content = jsonl_lines
+        .map_err(|e| format!("Failed to serialize items to JSONL: {}", e))?
+        .join("\n");
+
+    Ok(jsonl_content)
+}
+
+/// Tauri command to export collection items as CSV
+#[tauri::command]
+pub async fn export_collection_csv(
+    state: State<'_, DatabaseState>,
+    collection_id: i64,
+) -> Result<String, String> {
+    // Verify collection exists
+    let collection_exists = sqlx::query_scalar::<_, bool>(
+        r#"
+        SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?)
+        "#
+    )
+    .bind(collection_id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to check collection existence: {}", e))?;
+
+    if !collection_exists {
+        return Err("Collection not found".to_string());
+    }
+
+    let items = sqlx::query_as::<_, CollectionItem>(
+        r#"
+        SELECT * FROM collection_items
+        WHERE collection_id = ?
+        ORDER BY created_at ASC
+        "#
+    )
+    .bind(collection_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
+
+    if items.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Auto-detect columns from the first item's data
+    let all_keys: std::collections::BTreeSet<String> = items
+        .iter()
+        .flat_map(|item| {
+            if let serde_json::Value::Object(map) = &item.data {
+                Box::new(map.keys().cloned()) as Box<dyn Iterator<Item = String>>
+            } else {
+                Box::new(std::iter::empty()) as Box<dyn Iterator<Item = String>>
+            }
+        })
+        .collect();
+
+    if all_keys.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Build CSV header
+    let mut csv_lines = Vec::new();
+    let headers: Vec<String> = all_keys.into_iter().collect();
+    csv_lines.push(format!("id,{}", headers.join(",")));
+
+    // Build CSV rows
+    for item in items {
+        let row_values: Vec<String> = headers
+            .iter()
+            .map(|key| {
+                if let serde_json::Value::Object(map) = &item.data {
+                    map.get(key)
+                        .map(|v| format_csv_value(v))
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                }
+            })
+            .collect();
+        csv_lines.push(format!("{},{}", item.id, row_values.join(",")));
+    }
+
+    Ok(csv_lines.join("\n"))
+}
+
+/// Helper function to format a JSON value as a CSV-safe string
+pub fn format_csv_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => String::new(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => {
+            // Escape quotes and wrap in quotes if contains comma, quote, or newline
+            let escaped = s.replace('"', "\"\"");
+            if escaped.contains(',') || escaped.contains('"') || escaped.contains('\n') {
+                format!("\"{}\"", escaped)
+            } else {
+                escaped
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            // Convert arrays to JSON string representation
+            let arr_str = serde_json::to_string(arr).unwrap_or_default();
+            format!("\"{}\"", arr_str.replace('"', "\"\""))
+        }
+        serde_json::Value::Object(obj) => {
+            // Convert objects to JSON string representation
+            let obj_str = serde_json::to_string(obj).unwrap_or_default();
+            format!("\"{}\"", obj_str.replace('"', "\"\""))
+        }
+    }
 }
