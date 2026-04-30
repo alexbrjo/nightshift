@@ -3,17 +3,31 @@ import { invoke } from "@tauri-apps/api/core";
 import type { Collection } from "../database";
 
 interface CollectionsListProps {
+  selectedId: number | null;
   onSelectCollection: (collectionId: number) => void;
 }
 
-export default function CollectionsList({ onSelectCollection }: CollectionsListProps) {
+function formatDate(dateStr?: string): string {
+  if (!dateStr) return "";
+  // SQLite returns "YYYY-MM-DD HH:MM:SS" (no T); some browsers fail to parse it.
+  const normalized = dateStr.includes("T") ? dateStr : dateStr.replace(" ", "T") + "Z";
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+export default function CollectionsList({ selectedId, onSelectCollection }: CollectionsListProps) {
   const [collections, setCollections] = useState<Collection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const loadCollections = useCallback(async () => {
     try {
       const data = await invoke<Collection[]>("list_all_collections");
-      setCollections(data);
+      setCollections(Array.isArray(data) ? data : []);
     } catch (error) {
       console.error("Failed to load collections:", error);
     } finally {
@@ -25,68 +39,41 @@ export default function CollectionsList({ onSelectCollection }: CollectionsListP
     loadCollections();
   }, [loadCollections]);
 
-  const formatDate = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  if (isLoading) {
-    return (
-      <div className="collections-list">
-        <div className="page-header">
-          <h1>Collections</h1>
-        </div>
-        <div className="loading-indicator">Loading collections...</div>
-      </div>
-    );
-  }
-
-  if (collections.length === 0) {
-    return (
-      <div className="collections-list">
-        <div className="page-header">
-          <h1>Collections</h1>
-        </div>
-        <div className="empty-state">
-          <p>No collections found.</p>
-          <p>Collections are created when inference jobs complete and produce output.</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div className="collections-list">
-      <div className="page-header">
-        <h1>Collections</h1>
-      </div>
+    <aside className="collections-sidebar">
+      <header className="collections-sidebar-header">
+        <h2>Collections</h2>
+        <span className="collections-count">{collections.length}</span>
+      </header>
 
-      <ul className="collection-list">
-        {collections.map((collection) => (
-          <li
-            key={collection.id}
-            className="collection-item"
-            onClick={() => onSelectCollection(collection.id)}
-          >
-            <div className="collection-icon">📁</div>
-            <div className="collection-info">
-              <div className="collection-name">{collection.name}</div>
-              <div className="collection-meta">
-                <span className="collection-id">ID: {collection.id}</span>
-                <span className="collection-date">{formatDate(collection.created_at)}</span>
-                <span className="collection-job">Job #{collection.job_id}</span>
-              </div>
-            </div>
-            <div className="collection-arrow">→</div>
-          </li>
-        ))}
-      </ul>
-    </div>
+      {isLoading ? (
+        <div className="loading-indicator">Loading…</div>
+      ) : collections.length === 0 ? (
+        <div className="collections-empty">
+          <p>No collections yet.</p>
+          <p>Run an inference job to generate one.</p>
+        </div>
+      ) : (
+        <ul className="collection-list">
+          {collections.map((c) => {
+            const date = formatDate(c.created_at);
+            return (
+              <li
+                key={c.id}
+                className={`collection-item${selectedId === c.id ? " selected" : ""}`}
+                onClick={() => onSelectCollection(c.id)}
+              >
+                <div className="collection-name">{c.name}</div>
+                <div className="collection-meta">
+                  <span>#{c.id}</span>
+                  <span>Job {c.job_id}</span>
+                  {date && <span>{date}</span>}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </aside>
   );
 }

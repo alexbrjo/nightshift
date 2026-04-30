@@ -114,7 +114,7 @@ describe("CollectionViewer", () => {
 
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockJsonlContent);
 
-    const exportJsonlButton = screen.getByText(/📥 Export JSONL/i);
+    const exportJsonlButton = screen.getByText(/Export JSONL/i);
     fireEvent.click(exportJsonlButton);
 
     expect(invoke).toHaveBeenCalledWith("export_collection_jsonl", { collectionId: mockCollectionId });
@@ -135,7 +135,7 @@ describe("CollectionViewer", () => {
 
     (invoke as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockCsvContent);
 
-    const exportCsvButton = screen.getByText(/📥 Export CSV/i);
+    const exportCsvButton = screen.getByText(/Export CSV/i);
     fireEvent.click(exportCsvButton);
 
     expect(invoke).toHaveBeenCalledWith("export_collection_csv", { collectionId: mockCollectionId });
@@ -183,14 +183,14 @@ describe("CollectionViewer", () => {
 
     // Should show pagination controls
     expect(screen.getByText("Previous")).toBeInTheDocument();
-    expect(screen.getByText("Next →")).toBeInTheDocument();
+    expect(screen.getByText("Next")).toBeInTheDocument();
 
     // Previous should be disabled on page 1
     const prevButton = screen.getByText("Previous");
     expect(prevButton).toBeDisabled();
 
     // Next should be enabled
-    const nextButton = screen.getByText("Next →");
+    const nextButton = screen.getByText("Next");
     expect(nextButton).not.toBeDisabled();
   });
 

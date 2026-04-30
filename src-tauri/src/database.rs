@@ -889,7 +889,6 @@ pub async fn list_all_collections(
 
 /// Collection representation
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-#[serde(rename_all = "camelCase")]
 pub struct Collection {
     pub id: i64,
     pub job_id: i64,

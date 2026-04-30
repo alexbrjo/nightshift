@@ -128,14 +128,17 @@ export default function App() {
             <JobRunnerPage />
           </main>
         ) : activeSection === "collection-viewer" ? (
-          <main className="workspace full-width">
+          <main className="workspace full-width collections-page">
+            <CollectionsList
+              selectedId={selectedCollectionId}
+              onSelectCollection={setSelectedCollectionId}
+            />
             {selectedCollectionId ? (
-              <CollectionViewer
-                collectionId={selectedCollectionId}
-                onBack={() => setSelectedCollectionId(null)}
-              />
+              <CollectionViewer collectionId={selectedCollectionId} />
             ) : (
-              <CollectionsList onSelectCollection={setSelectedCollectionId} />
+              <div className="collections-placeholder">
+                <p>Select a collection to view its items.</p>
+              </div>
             )}
           </main>
         ) : (

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo, Fragment } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { CollectionItem } from "../database";
 
@@ -7,9 +7,58 @@ interface CollectionViewerProps {
   onBack?: () => void;
 }
 
-interface ColumnConfig {
-  key: string;
-  label: string;
+type FlatRecord = Record<string, unknown>;
+
+interface FlatItem {
+  id: number;
+  flat: FlatRecord;
+}
+
+const CELL_TRUNCATE_LENGTH = 80;
+
+// LLM outputs are often `{...}` or wrapped in ```json fences. Extract a parsable object if possible.
+function tryParseEmbeddedJson(value: unknown): FlatRecord | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
+  const candidate = fenceMatch ? fenceMatch[1] : trimmed;
+  if (!candidate.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(candidate);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as FlatRecord;
+    }
+  } catch {
+    // not JSON
+  }
+  return null;
+}
+
+function flattenItem(item: CollectionItem): FlatItem {
+  const data = item.data;
+  if (data === null || typeof data !== "object" || Array.isArray(data)) {
+    return { id: item.id, flat: { value: data } };
+  }
+  const record = data as FlatRecord;
+  const inner = tryParseEmbeddedJson(record.content);
+  if (inner) {
+    const { content: _content, ...rest } = record;
+    return { id: item.id, flat: { ...inner, ...rest } };
+  }
+  return { id: item.id, flat: record };
+}
+
+function formatCell(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function formatExpanded(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") return JSON.stringify(value, null, 2);
+  return String(value);
 }
 
 export default function CollectionViewer({ collectionId, onBack }: CollectionViewerProps) {
@@ -19,31 +68,8 @@ export default function CollectionViewer({ collectionId, onBack }: CollectionVie
   const [pageSize] = useState(25);
   const [isLoading, setIsLoading] = useState(true);
   const [searchFilter, setSearchFilter] = useState("");
-  const [columns, setColumns] = useState<ColumnConfig[]>([]);
   const [error, setError] = useState<string | null>(null);
-
-  // Detect columns from items
-  const detectColumns = useCallback((itemsData: CollectionItem[]) => {
-    if (itemsData.length === 0) {
-      setColumns([]);
-      return;
-    }
-
-    // Collect all unique keys from all items
-    const keySet = new Set<string>();
-    itemsData.forEach((item) => {
-      if (typeof item.data === "object" && item.data !== null) {
-        Object.keys(item.data).forEach((key) => keySet.add(key));
-      }
-    });
-
-    // Convert to column configs, sorted alphabetically
-    const newColumns: ColumnConfig[] = Array.from(keySet)
-      .sort()
-      .map((key) => ({ key, label: key }));
-
-    setColumns(newColumns);
-  }, []);
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
 
   const loadItems = useCallback(async () => {
     setIsLoading(true);
@@ -58,54 +84,82 @@ export default function CollectionViewer({ collectionId, onBack }: CollectionVie
         invoke<number>("get_collection_count", { collectionId }),
       ]);
 
-      setItems(itemsData);
-      setTotalItems(count);
-      detectColumns(itemsData);
+      setItems(Array.isArray(itemsData) ? itemsData : []);
+      setTotalItems(typeof count === "number" ? count : 0);
+      setExpandedIds(new Set());
     } catch (err) {
       console.error("Failed to load collection items:", err);
       setError(err instanceof Error ? err.message : "Failed to load items");
     } finally {
       setIsLoading(false);
     }
-  }, [collectionId, currentPage, pageSize, detectColumns]);
+  }, [collectionId, currentPage, pageSize]);
 
   useEffect(() => {
     loadItems();
   }, [loadItems]);
 
-  const handleDeleteItem = async (itemId: number) => {
-    if (!confirm("Are you sure you want to delete this item?")) {
-      return;
-    }
+  const flatItems = useMemo(() => items.map(flattenItem), [items]);
 
+  const columnKeys = useMemo(() => {
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    for (const { flat } of flatItems) {
+      for (const key of Object.keys(flat)) {
+        if (!seen.has(key)) {
+          seen.add(key);
+          ordered.push(key);
+        }
+      }
+    }
+    return ordered;
+  }, [flatItems]);
+
+  const filteredItems = useMemo(() => {
+    if (!searchFilter.trim()) return flatItems;
+    const term = searchFilter.toLowerCase();
+    return flatItems.filter(({ flat }) =>
+      Object.values(flat).some((v) => formatCell(v).toLowerCase().includes(term)),
+    );
+  }, [flatItems, searchFilter]);
+
+  const toggleExpanded = (id: number) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleDeleteItem = async (itemId: number) => {
+    if (!confirm("Are you sure you want to delete this item?")) return;
     try {
       const deleted = await invoke<boolean>("delete_collection_item", { itemId });
-      if (deleted) {
-        // Reload items
-        await loadItems();
-      } else {
-        alert("Failed to delete item");
-      }
+      if (deleted) await loadItems();
+      else alert("Failed to delete item");
     } catch (err) {
       console.error("Failed to delete item:", err);
       alert(err instanceof Error ? err.message : "Failed to delete item");
     }
   };
 
+  const downloadFile = (content: string, filename: string, mime: string) => {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const handleExportJSONL = async () => {
     try {
-      const jsonlContent = await invoke<string>("export_collection_jsonl", { collectionId });
-
-      // Create download link
-      const blob = new Blob([jsonlContent], { type: "application/jsonl" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `collection_${collectionId}.jsonl`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const content = await invoke<string>("export_collection_jsonl", { collectionId });
+      downloadFile(content, `collection_${collectionId}.jsonl`, "application/jsonl");
     } catch (err) {
       console.error("Failed to export JSONL:", err);
       alert(err instanceof Error ? err.message : "Failed to export collection");
@@ -114,59 +168,15 @@ export default function CollectionViewer({ collectionId, onBack }: CollectionVie
 
   const handleExportCSV = async () => {
     try {
-      const csvContent = await invoke<string>("export_collection_csv", { collectionId });
-
-      // Create download link
-      const blob = new Blob([csvContent], { type: "text/csv" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `collection_${collectionId}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      const content = await invoke<string>("export_collection_csv", { collectionId });
+      downloadFile(content, `collection_${collectionId}.csv`, "text/csv");
     } catch (err) {
       console.error("Failed to export CSV:", err);
       alert(err instanceof Error ? err.message : "Failed to export collection");
     }
   };
 
-  const handlePageChange = (newPage: number) => {
-    setCurrentPage(newPage);
-  };
-
   const totalPages = Math.ceil(totalItems / pageSize);
-
-  // Filter items based on search
-  const filteredItems = items.filter((item) => {
-    if (!searchFilter.trim()) return true;
-    const searchTerm = searchFilter.toLowerCase();
-
-    // Search in all values of the item data
-    if (typeof item.data === "object" && item.data !== null) {
-      return Object.values(item.data).some((value) => {
-        const stringValue = String(value).toLowerCase();
-        return stringValue.includes(searchTerm);
-      });
-    }
-    return false;
-  });
-
-  // Format value for display in table cell
-  const formatCellValue = (value: unknown): string => {
-    if (value === null || value === undefined) return "";
-    if (typeof value === "object") {
-      return JSON.stringify(value);
-    }
-    return String(value);
-  };
-
-  // Truncate long values for display
-  const truncateValue = (value: string, maxLength: number = 100): string => {
-    if (value.length <= maxLength) return value;
-    return value.substring(0, maxLength) + "...";
-  };
 
   if (isLoading && items.length === 0) {
     return (
@@ -178,7 +188,6 @@ export default function CollectionViewer({ collectionId, onBack }: CollectionVie
 
   return (
     <div className="collection-viewer">
-      {/* Header */}
       <div className="page-header">
         {onBack && (
           <button className="btn-secondary" onClick={onBack}>
@@ -188,38 +197,31 @@ export default function CollectionViewer({ collectionId, onBack }: CollectionVie
         <h1>Collection #{collectionId}</h1>
         <div className="header-actions">
           <button className="btn-secondary" onClick={handleExportJSONL}>
-            📥 Export JSONL
+            Export JSONL
           </button>
           <button className="btn-secondary" onClick={handleExportCSV}>
-            📥 Export CSV
+            Export CSV
           </button>
         </div>
       </div>
 
-      {/* Search and Stats */}
       <div className="collection-toolbar">
-        <div className="search-box">
-          <input
-            type="text"
-            placeholder="Search items..."
-            value={searchFilter}
-            onChange={(e) => setSearchFilter(e.target.value)}
-            className="search-input"
-          />
-        </div>
+        <input
+          type="text"
+          placeholder="Search items..."
+          value={searchFilter}
+          onChange={(e) => setSearchFilter(e.target.value)}
+          className="search-input"
+        />
         <div className="collection-stats">
-          <span>Total: {totalItems} items</span>
-          <span>Showing: {filteredItems.length} items</span>
+          <span>Total: {totalItems}</span>
+          <span>Showing: {filteredItems.length}</span>
         </div>
       </div>
 
-      {/* Error Message */}
-      {error && (
-        <div className="error-message">{error}</div>
-      )}
+      {error && <div className="error-message">{error}</div>}
 
-      {/* Data Table */}
-      {columns.length === 0 ? (
+      {columnKeys.length === 0 ? (
         <div className="empty-state">
           <p>No items in this collection.</p>
         </div>
@@ -230,64 +232,86 @@ export default function CollectionViewer({ collectionId, onBack }: CollectionVie
               <thead>
                 <tr>
                   <th className="col-id">ID</th>
-                  {columns.map((column) => (
-                    <th key={column.key} className={`col-${column.key.replace(/\s+/g, "-")}`}>
-                      {column.label}
-                    </th>
+                  {columnKeys.map((key) => (
+                    <th key={key}>{key}</th>
                   ))}
                   <th className="col-actions">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredItems.map((item) => (
-                  <tr key={item.id}>
-                    <td className="col-id">{item.id}</td>
-                    {columns.map((column) => {
-                      const value =
-                        typeof item.data === "object" && item.data !== null
-                          ? (item.data as Record<string, unknown>)[column.key]
-                          : undefined;
-                      const formattedValue = formatCellValue(value);
-                      return (
-                        <td key={column.key} className={`col-${column.key.replace(/\s+/g, "-")}`}>
-                          {truncateValue(formattedValue)}
-                        </td>
-                      );
-                    })}
-                    <td className="col-actions">
-                      <button
-                        className="btn-danger btn-small"
-                        onClick={() => handleDeleteItem(item.id)}
-                        title="Delete item"
+                {filteredItems.map(({ id, flat }) => {
+                  const isExpanded = expandedIds.has(id);
+                  return (
+                    <Fragment key={id}>
+                      <tr
+                        className={`data-row${isExpanded ? " expanded" : ""}`}
+                        onClick={() => toggleExpanded(id)}
                       >
-                        🗑️
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                        <td className="col-id">{id}</td>
+                        {columnKeys.map((key) => {
+                          const cell = formatCell(flat[key]);
+                          return (
+                            <td key={key} title={cell}>
+                              {cell.length > CELL_TRUNCATE_LENGTH
+                                ? `${cell.slice(0, CELL_TRUNCATE_LENGTH)}…`
+                                : cell}
+                            </td>
+                          );
+                        })}
+                        <td
+                          className="col-actions"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            className="btn-danger btn-small"
+                            onClick={() => handleDeleteItem(id)}
+                            title="Delete item"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                      {isExpanded && (
+                        <tr className="data-row-detail">
+                          <td colSpan={columnKeys.length + 2}>
+                            <dl className="detail-list">
+                              {columnKeys.map((key) => (
+                                <div className="detail-row" key={key}>
+                                  <dt>{key}</dt>
+                                  <dd>
+                                    <pre>{formatExpanded(flat[key])}</pre>
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
 
-          {/* Pagination */}
           {totalPages > 1 && (
             <div className="pagination">
               <button
                 className="btn-secondary"
-                onClick={() => handlePageChange(currentPage - 1)}
+                onClick={() => setCurrentPage((p) => p - 1)}
                 disabled={currentPage === 1}
               >
-                ← Previous
+                Previous
               </button>
               <span className="page-info">
                 Page {currentPage} of {totalPages}
               </span>
               <button
                 className="btn-secondary"
-                onClick={() => handlePageChange(currentPage + 1)}
+                onClick={() => setCurrentPage((p) => p + 1)}
                 disabled={currentPage === totalPages}
               >
-                Next →
+                Next
               </button>
             </div>
           )}
