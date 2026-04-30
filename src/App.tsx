@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, type ReactNode } from "react";
 import Editor from "./components/Editor";
 import FileTree, { type FsNode } from "./components/FileTree";
 import UnderConstruction from "./components/UnderConstruction";
@@ -6,6 +6,13 @@ import JobRunnerPage from "./components/JobRunnerPage";
 import CollectionViewer from "./components/CollectionViewer";
 import CollectionsList from "./components/CollectionsList";
 import { ToastProvider } from "./components/Toast";
+import {
+  DropperIcon,
+  CabinetIcon,
+  TestTubeIcon,
+  RackIcon,
+  MoonIcon,
+} from "./components/icons";
 
 type Section =
   | "code-editor"
@@ -14,10 +21,10 @@ type Section =
   | "collection-viewer";
 
 const SECTION_LABELS: Record<Section, string> = {
-  "code-editor": "Code Editor",
-  "job-runner": "Job Runner",
-  "experiment-designer": "Experiment Designer",
-  "collection-viewer": "Collection Viewer",
+  "code-editor": "Project",
+  "job-runner": "Inference Jobs",
+  "experiment-designer": "Agent",
+  "collection-viewer": "Collections",
 };
 
 function getLanguage(filename: string): string | undefined {
@@ -53,14 +60,14 @@ export default function App() {
   const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
   const fileContentsRef = useRef(new Map<string, string>());
 
-  const sections: { id: Section; icon: string; label: string }[] = [
-    { id: "code-editor", icon: "\u270E", label: "Code Editor" },
-    { id: "collection-viewer", icon: "\uD83D\uDCC1", label: "Collection Viewer" },
-    { id: "job-runner", icon: "\u25B6", label: "Job Runner" },
+  const sections: { id: Section; icon: ReactNode; label: string }[] = [
+    { id: "code-editor", icon: <DropperIcon />, label: "Project" },
+    { id: "collection-viewer", icon: <CabinetIcon />, label: "Collections" },
+    { id: "job-runner", icon: <TestTubeIcon />, label: "Inference Jobs" },
     {
       id: "experiment-designer",
-      icon: "\u26FC",
-      label: "Experiment Designer",
+      icon: <RackIcon />,
+      label: "Agent",
     },
   ];
 
@@ -79,7 +86,7 @@ export default function App() {
     <ToastProvider>
       <div className="app">
         <aside className="sidebar">
-          <div className="sidebar-logo">{"\u2611"}</div>
+          <div className="sidebar-logo" title="Nightshift"><MoonIcon /></div>
           <nav className="sidebar-nav">
             {sections.map((section) => (
               <button
