@@ -85,6 +85,10 @@ export default function App() {
   return (
     <ToastProvider>
       <div className="app">
+        <div className="topbar">
+          <span className="topbar-title">Nightshift</span>
+        </div>
+        <div className="app-body">
         <aside className="sidebar">
           <div className="sidebar-logo" title="Nightshift"><MoonIcon /></div>
           <nav className="sidebar-nav">
@@ -156,6 +160,7 @@ export default function App() {
             <UnderConstruction title={SECTION_LABELS[activeSection]} />
           </main>
         )}
+        </div>
       </div>
     </ToastProvider>
   );

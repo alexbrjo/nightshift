@@ -1,31 +1,138 @@
+/* ============================================================
+   Theme tokens
+
+   Switch themes by setting `data-theme="dark"` on the <html> root
+   (defaults to the "lab" theme below — lab-coat white workspaces
+   with a glove-blue nav sidebar). All component CSS uses these
+   semantic variables exclusively; hardcoded color values should be
+   added here instead of inline.
+   ============================================================ */
+
 :root {
+  /* ----- Layout surfaces ----- */
+  --bg-deepest: #f5f4ef;        /* outer page bg (lab-coat white, warm tint) */
+  --bg-dark: #ecebe6;           /* file-tree pane / secondary tone */
+  --bg-surface: #f8f7f3;        /* secondary sidebars (jobs list, collections list) */
+  --bg-elevated: #ffffff;       /* cards, table containers */
+  --bg-hover: #ebeae5;          /* hover row/item */
+  --editor-bg: #fafaf7;         /* code editor */
+
+  /* The vertical icon nav (left rail) and the window topbar. Always contrasts
+     with the workspace; the topbar uses the same color so they form an L. */
+  --nav-bg: #2c6cd9;            /* rich royal blue (glove blue, slightly lighter) */
+  --nav-fg: #ffffff;
+  --nav-fg-muted: rgba(255, 255, 255, 0.7);
+  --nav-fg-active: #ffffff;
+  --nav-active-bg: rgba(255, 255, 255, 0.2);
+  --nav-hover-bg: rgba(255, 255, 255, 0.12);
+  --nav-border: rgba(0, 0, 0, 0.18);
+
+  /* Topbar (window chrome). On macOS the traffic-light buttons overlay this. */
+  --topbar-bg: var(--nav-bg);
+  --topbar-fg: var(--nav-fg);
+  --topbar-height: 32px;
+
+  /* ----- Text ----- */
+  --text-primary: #1c2535;      /* dark navy-charcoal */
+  --text-secondary: #4a5566;
+  --text-muted: #8b95a4;
+  --text-on-accent: #ffffff;    /* readable text over --accent */
+
+  /* ----- Accent ----- */
+  --accent: #2563eb;            /* royal blue, slightly brighter than nav for highlights */
+  --accent-dim: #1d4ed8;        /* button hover */
+  /* Translucent accent variants for borders / glows / soft fills. */
+  --accent-soft: rgba(37, 99, 235, 0.08);
+  --accent-medium: rgba(37, 99, 235, 0.22);
+  --accent-strong: rgba(37, 99, 235, 0.4);
+
+  /* Legacy aliases — these names are referenced widely in the codebase. */
+  --moon-glow: var(--accent);
+  --moon-glow-soft: var(--accent-soft);
+  --moon-glow-medium: var(--accent-medium);
+  --moon-glow-strong: var(--accent-strong);
+
+  /* ----- Borders ----- */
+  --border-color: rgba(28, 37, 53, 0.12);
+  --border-subtle: rgba(28, 37, 53, 0.05);
+
+  /* ----- Status ----- */
+  --status-completed: #15803d;
+  --status-running: #1d4ed8;
+  --status-failed: #b91c1c;
+  --status-pending: #525964;
+  --status-completed-bg: rgba(21, 128, 61, 0.1);
+  --status-running-bg: rgba(29, 78, 216, 0.1);
+  --status-failed-bg: rgba(185, 28, 28, 0.1);
+
+  /* ----- Inputs ----- */
+  --input-bg: #ffffff;
+  --input-bg-readonly: #f3f3ee;
+
+  /* ----- Scrollbar / shadows / overlays ----- */
+  --scrollbar-thumb: rgba(28, 37, 53, 0.18);
+  --scrollbar-track: transparent;
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.12);
+  --backdrop-bg: rgba(0, 0, 0, 0.4);
+
+  /* ----- Type ----- */
+  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code", Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Original moon-glow / midnight theme. Apply with <html data-theme="dark">. */
+[data-theme="dark"] {
   --bg-deepest: #050508;
   --bg-dark: #0a0a10;
   --bg-surface: #101018;
   --bg-elevated: #161620;
   --bg-hover: #1c1c28;
+  --editor-bg: #070710;
+
+  --nav-bg: #0a0a10;
+  --nav-fg: #d4d0c8;
+  --nav-fg-muted: #4a4660;
+  --nav-fg-active: #ede5c4;
+  --nav-active-bg: rgba(237, 229, 196, 0.1);
+  --nav-hover-bg: #1c1c28;
+  --nav-border: rgba(237, 229, 196, 0.07);
+
+  --topbar-bg: var(--nav-bg);
+  --topbar-fg: var(--nav-fg);
 
   --text-primary: #d4d0c8;
   --text-secondary: #7a7590;
   --text-muted: #4a4660;
-
-  --moon-glow: #ede5c4;
-  --moon-glow-soft: rgba(237, 229, 196, 0.1);
-  --moon-glow-medium: rgba(237, 229, 196, 0.25);
-  --moon-glow-strong: rgba(237, 229, 196, 0.4);
+  --text-on-accent: #050508;
 
   --accent: #ede5c4;
   --accent-dim: #d4ccb0;
+  --accent-soft: rgba(237, 229, 196, 0.1);
+  --accent-medium: rgba(237, 229, 196, 0.25);
+  --accent-strong: rgba(237, 229, 196, 0.4);
 
   --border-color: rgba(237, 229, 196, 0.07);
   --border-subtle: rgba(255, 255, 255, 0.03);
 
-  --editor-bg: #070710;
+  --status-completed: #6be08c;
+  --status-running: #6bb4e0;
+  --status-failed: #e06b6b;
+  --status-pending: #7a7590;
+  --status-completed-bg: rgba(107, 224, 140, 0.15);
+  --status-running-bg: rgba(107, 180, 224, 0.15);
+  --status-failed-bg: rgba(224, 107, 107, 0.15);
+
+  --input-bg: rgba(0, 0, 0, 0.2);
+  --input-bg-readonly: rgba(0, 0, 0, 0.3);
+
   --scrollbar-thumb: rgba(237, 229, 196, 0.15);
   --scrollbar-track: transparent;
-
-  --font-mono: "JetBrains Mono", "Fira Code", "SF Mono", "Cascadia Code", Consolas, monospace;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.5);
+  --backdrop-bg: rgba(0, 0, 0, 0.5);
 }
 
 *, *::before, *::after {
@@ -49,10 +156,42 @@ body {
 
 .app {
   display: flex;
-  flex-direction: row;
+  flex-direction: column;
   height: 100vh;
   width: 100vw;
   background-color: var(--bg-deepest);
+}
+
+/* Window topbar — the strip the macOS traffic-light buttons sit in.
+   Acts as a draggable region so the user can move the window from anywhere
+   along it. Total height clears the ~28px traffic-light cluster. */
+.topbar {
+  height: var(--topbar-height);
+  flex-shrink: 0;
+  background: var(--topbar-bg);
+  color: var(--topbar-fg);
+  /* Reserve room on the left for the traffic-light buttons (macOS only). */
+  padding-left: 80px;
+  display: flex;
+  align-items: center;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.topbar-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--topbar-fg);
+}
+
+/* Body row holding the nav rail and workspace. */
+.app-body {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -61,15 +200,15 @@ body {
   align-items: center;
   width: 56px;
   min-width: 56px;
-  background-color: var(--bg-dark);
-  border-right: 1px solid var(--border-color);
+  background-color: var(--nav-bg);
+  border-right: 1px solid var(--nav-border);
   padding: 12px 0;
   user-select: none;
 }
 
 .sidebar-logo {
   font-size: 22px;
-  color: var(--moon-glow);
+  color: var(--nav-fg-active);
   margin-bottom: 20px;
   cursor: default;
   line-height: 1;
@@ -84,6 +223,7 @@ body {
 }
 
 .sidebar-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -92,20 +232,27 @@ body {
   background: transparent;
   border: none;
   border-radius: 8px;
-  color: var(--text-muted);
+  color: var(--nav-fg-muted);
   font-size: 16px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 .sidebar-btn:hover {
-  color: var(--text-secondary);
-  background: var(--bg-hover);
+  color: var(--nav-fg);
+  background: var(--nav-hover-bg);
 }
 
+/* Active sidebar item: rounded only on the LEFT side, flush against the
+   workspace on the right. The card's body extends past the rail's right
+   border so the white meets the workspace edge-to-edge with no seam. */
 .sidebar-btn.active {
-  color: var(--moon-glow);
-  background: var(--moon-glow-soft);
+  color: var(--accent);
+  background: var(--bg-deepest);
+  border-radius: 8px 0 0 8px;
+  width: calc(100% + 9px);   /* 8px sidebar-nav padding + 1px nav border */
+  margin-right: -9px;
+  z-index: 1;
 }
 
 .sidebar-btn span {
@@ -119,58 +266,66 @@ body {
   overflow: hidden;
 }
 
+/* Project file-tree sidebar — matches the structure of .collections-sidebar
+   and .job-list-sidebar so all three secondary sidebars feel like siblings. */
 .file-tree-panel {
-  width: 220px;
-  min-width: 220px;
-  background-color: var(--bg-dark);
+  flex: 0 0 280px;
+  background-color: var(--bg-surface);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
+  height: 100%;
   overflow: hidden;
 }
 
 .tree-header {
-  padding: 10px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
-  color: var(--text-muted);
+  padding: 16px 20px 12px;
   border-bottom: 1px solid var(--border-color);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
 }
 
 .tree-content {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 0;
+  padding: 8px 0;
 }
 
-.folder-header {
+.folder-header,
+.tree-file {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   background: transparent;
   border: none;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-family: var(--font-mono);
-  cursor: pointer;
   width: 100%;
   text-align: left;
-  padding: 4px 0;
-  transition: all 0.15s ease;
+  font-size: 13px;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  padding: 6px 16px;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-.folder-header:hover {
-  color: var(--moon-glow);
-  background: rgba(237, 229, 196, 0.03);
+.folder-header:hover,
+.tree-file:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
 }
 
 .expand-icon {
   font-size: 8px;
   width: 12px;
+  flex-shrink: 0;
   display: inline-block;
   text-align: center;
+  color: var(--text-muted);
   transition: transform 0.15s ease;
 }
 
@@ -178,53 +333,27 @@ body {
   transform: rotate(90deg);
 }
 
-.folder-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.tree-file {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 0;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  border: none;
-  background: transparent;
-  width: 100%;
-  text-align: left;
-  font-family: var(--font-mono);
-}
-
-.tree-file:hover {
-  color: var(--moon-glow);
-  background: rgba(237, 229, 196, 0.03);
-}
-
 .file-icon {
   font-size: 8px;
   width: 12px;
+  flex-shrink: 0;
   display: inline-block;
   text-align: center;
   color: var(--text-muted);
 }
 
-.tree-file:hover .file-icon {
-  color: var(--moon-glow);
-}
-
+.folder-name,
 .file-name {
-  font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  color: var(--text-secondary);
 }
 
-.tree-file:hover .file-name {
-  color: var(--moon-glow);
+.tree-file:hover .file-icon,
+.tree-file:hover .file-name,
+.folder-header:hover .expand-icon,
+.folder-header:hover .folder-name {
+  color: var(--text-primary);
 }
 
 .open-folder-prompt {
@@ -290,18 +419,18 @@ body {
 
 .cm-editor-wrapper .cm-gutters {
   background: transparent !important;
-  border-right: 1px solid rgba(237, 229, 196, 0.06) !important;
+  border-right: 1px solid var(--border-color) !important;
   color: var(--text-muted) !important;
   font-family: var(--font-mono) !important;
 }
 
 .cm-editor-wrapper .cm-activeLineGutter {
-  background: rgba(237, 229, 196, 0.05) !important;
+  background: color-mix(in srgb, var(--accent) 5%, transparent) !important;
   color: var(--moon-glow) !important;
 }
 
 .cm-editor-wrapper .cm-activeLine {
-  background: rgba(237, 229, 196, 0.03) !important;
+  background: color-mix(in srgb, var(--accent) 3%, transparent) !important;
 }
 
 .cm-editor-wrapper .cm-cursor {
@@ -309,7 +438,7 @@ body {
 }
 
 .cm-editor-wrapper .cm-selectionBackground {
-  background: rgba(237, 229, 196, 0.1) !important;
+  background: var(--accent-soft) !important;
 }
 
 .cm-editor-wrapper .cm-content {
@@ -335,7 +464,7 @@ body {
 
 .tree-content::-webkit-scrollbar-thumb:hover,
 .cm-scroller::-webkit-scrollbar-thumb:hover {
-  background: rgba(237, 229, 196, 0.35);
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
 }
 
 .workspace.full-width {
@@ -388,7 +517,7 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 4px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   backdrop-filter: blur(12px);
 }
 
@@ -408,11 +537,11 @@ body {
 }
 
 .context-menu-item.danger {
-  color: #e06b6b;
+  color: var(--status-failed);
 }
 
 .context-menu-item.danger:hover {
-  background: rgba(224, 107, 107, 0.1);
+  background: color-mix(in srgb, var(--status-failed) 10%, transparent);
 }
 
 .dialog-overlay {
@@ -422,7 +551,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--backdrop-bg);
 }
 
 .dialog-box {
@@ -431,7 +560,7 @@ body {
   border: 1px solid var(--border-color);
   border-radius: 10px;
   padding: 20px;
-  box-shadow: 0 12px 48px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-lg);
 }
 
 .dialog-title {
@@ -520,7 +649,7 @@ body {
   background: var(--bg-elevated);
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
   font-size: 12px;
   font-family: var(--font-sans);
   color: var(--text-secondary);
@@ -546,19 +675,19 @@ body {
 }
 
 .toast-error {
-  border-color: rgba(224, 107, 107, 0.3);
+  border-color: color-mix(in srgb, var(--status-failed) 30%, transparent);
 }
 
 .toast-error .toast-icon {
-  color: #e06b6b;
+  color: var(--status-failed);
 }
 
 .toast-success {
-  border-color: rgba(107, 224, 140, 0.3);
+  border-color: color-mix(in srgb, var(--status-completed) 30%, transparent);
 }
 
 .toast-success .toast-icon {
-  color: #6be08c;
+  color: var(--status-completed);
 }
 
 .toast-info {
@@ -697,15 +826,15 @@ body {
 }
 
 .status-badge.status-completed {
-  color: #6be08c;
+  color: var(--status-completed);
 }
 
 .status-badge.status-running {
-  color: #6bb4e0;
+  color: var(--status-running);
 }
 
 .status-badge.status-failed {
-  color: #e06b6b;
+  color: var(--status-failed);
 }
 
 .status-badge.status-pending {
@@ -831,26 +960,26 @@ body {
 }
 
 .status-banner.status-completed {
-  background: rgba(107, 224, 140, 0.15);
-  border: 1px solid rgba(107, 224, 140, 0.3);
-  color: #6be08c;
+  background: var(--status-completed-bg);
+  border: 1px solid color-mix(in srgb, var(--status-completed) 30%, transparent);
+  color: var(--status-completed);
 }
 
 .status-banner.status-running {
-  background: rgba(107, 180, 224, 0.15);
-  border: 1px solid rgba(107, 180, 224, 0.3);
-  color: #6bb4e0;
+  background: var(--status-running-bg);
+  border: 1px solid color-mix(in srgb, var(--status-running) 30%, transparent);
+  color: var(--status-running);
 }
 
 .status-banner.status-failed {
-  background: rgba(224, 107, 107, 0.15);
-  border: 1px solid rgba(224, 107, 107, 0.3);
-  color: #e06b6b;
+  background: var(--status-failed-bg);
+  border: 1px solid color-mix(in srgb, var(--status-failed) 30%, transparent);
+  color: var(--status-failed);
 }
 
 .status-banner.status-pending {
-  background: rgba(200, 200, 200, 0.15);
-  border: 1px solid rgba(200, 200, 200, 0.3);
+  background: color-mix(in srgb, var(--status-pending) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--status-pending) 30%, transparent);
   color: var(--text-secondary);
 }
 
@@ -877,7 +1006,7 @@ body {
 
 .progress-bar-container {
   height: 8px;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--input-bg-readonly);
   border-radius: 4px;
   overflow: hidden;
   margin-bottom: 12px;
@@ -900,11 +1029,11 @@ body {
 }
 
 .progress-stats .completed {
-  color: #6be08c;
+  color: var(--status-completed);
 }
 
 .progress-stats .failed {
-  color: #e06b6b;
+  color: var(--status-failed);
 }
 
 /* Configuration Section */
@@ -953,7 +1082,7 @@ body {
 }
 
 .code-block {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--input-bg-readonly);
   padding: 12px;
   border-radius: 4px;
   font-family: var(--font-mono);
@@ -1021,7 +1150,7 @@ body {
 
 .loading-prompts {
   padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--input-bg);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   color: var(--text-secondary);
@@ -1031,7 +1160,7 @@ body {
 .form-group select {
   width: 100%;
   padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--input-bg);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   color: var(--text-primary);
@@ -1044,17 +1173,17 @@ body {
 .form-group select:focus {
   outline: none;
   border-color: var(--moon-glow-medium);
-  box-shadow: 0 0 0 3px rgba(168, 224, 255, 0.1);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .form-group select.error {
-  border-color: rgba(224, 107, 107, 0.5);
+  border-color: color-mix(in srgb, var(--status-failed) 50%, transparent);
 }
 
 .form-error {
-  background: rgba(224, 107, 107, 0.15);
-  border: 1px solid rgba(224, 107, 107, 0.3);
-  color: #e06b6b;
+  background: var(--status-failed-bg);
+  border: 1px solid color-mix(in srgb, var(--status-failed) 30%, transparent);
+  color: var(--status-failed);
   padding: 12px;
   border-radius: 6px;
   margin-bottom: 16px;
@@ -1077,7 +1206,7 @@ body {
 .form-group textarea {
   width: 100%;
   padding: 10px 12px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--input-bg);
   border: 1px solid var(--border-color);
   border-radius: 6px;
   color: var(--text-primary);
@@ -1091,19 +1220,19 @@ body {
 .form-group textarea:focus {
   outline: none;
   border-color: var(--moon-glow-medium);
-  box-shadow: 0 0 0 3px rgba(168, 224, 255, 0.1);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .form-group input.error,
 .form-group select.error,
 .form-group textarea.error {
-  border-color: rgba(224, 107, 107, 0.5);
+  border-color: color-mix(in srgb, var(--status-failed) 50%, transparent);
 }
 
 .error-message {
   display: block;
   font-size: 11px;
-  color: #e06b6b;
+  color: var(--status-failed);
   margin-top: 4px;
 }
 
@@ -1125,7 +1254,7 @@ body {
 .number-input button {
   width: 32px;
   height: 38px;
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--input-bg);
   border: 1px solid var(--border-color);
   color: var(--text-primary);
   font-size: 16px;
@@ -1134,7 +1263,7 @@ body {
 }
 
 .number-input button:hover {
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--input-bg-readonly);
   border-color: var(--moon-glow-medium);
 }
 
@@ -1153,7 +1282,7 @@ body {
 }
 
 fieldset {
-  background: rgba(0, 0, 0, 0.15);
+  background: var(--input-bg-readonly);
   border: 1px solid var(--border-color);
   border-radius: 8px;
   padding: 16px;
@@ -1195,7 +1324,7 @@ legend {
 .error-message-large {
   text-align: center;
   padding: 40px;
-  color: #e06b6b;
+  color: var(--status-failed);
 }
 
 /* Button Styles */
@@ -1231,18 +1360,18 @@ legend {
 .btn-secondary:hover:not(:disabled) {
   color: var(--text-primary);
   border-color: var(--moon-glow-medium);
-  background: rgba(237, 229, 196, 0.05);
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
 }
 
 .btn-danger {
-  background: rgba(224, 107, 107, 0.2);
-  color: #e06b6b;
-  border: 1px solid rgba(224, 107, 107, 0.3);
+  background: color-mix(in srgb, var(--status-failed) 20%, transparent);
+  color: var(--status-failed);
+  border: 1px solid color-mix(in srgb, var(--status-failed) 30%, transparent);
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: rgba(224, 107, 107, 0.3);
-  border-color: rgba(224, 107, 107, 0.5);
+  background: color-mix(in srgb, var(--status-failed) 30%, transparent);
+  border-color: color-mix(in srgb, var(--status-failed) 50%, transparent);
 }
 
 .btn-primary:disabled,
@@ -1487,14 +1616,14 @@ legend {
 .collection-viewer .data-table .btn-danger {
   background: transparent;
   border: none;
-  color: #e06b6b;
+  color: var(--status-failed);
   padding: 4px 8px;
   font-weight: 500;
 }
 
 .collection-viewer .data-table .btn-danger:hover:not(:disabled) {
   background: transparent;
-  color: #ff8585;
+  color: color-mix(in srgb, var(--status-failed) 80%, white);
   text-decoration: underline;
 }
 

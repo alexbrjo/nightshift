@@ -56,7 +56,7 @@ function TreeNode({
     return (
       <div
         className="tree-file"
-        style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        style={{ paddingLeft: `${depth * 14 + 16}px` }}
         onClick={() => onFileClick(node)}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -74,7 +74,7 @@ function TreeNode({
     <div className="tree-folder">
       <button
         className="folder-header"
-        style={{ paddingLeft: `${depth * 16 + 8}px` }}
+        style={{ paddingLeft: `${depth * 14 + 16}px` }}
         onClick={() => onToggleExpand(node.path)}
         onContextMenu={(e) => {
           e.preventDefault();
