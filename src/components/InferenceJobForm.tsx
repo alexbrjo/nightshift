@@ -195,7 +195,8 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
         <div className="form-error">{errors.submit}</div>
       )}
 
-      {/* Job Name */}
+      {/* Top: Job Name + Prompt Spec side by side */}
+      <div className="form-row">
       <div className="form-group">
         <label htmlFor="job-name">Job Name *</label>
         <input
@@ -209,7 +210,6 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
         {errors.name && <span className="error-message">{errors.name}</span>}
       </div>
 
-      {/* Prompt Spec */}
       <div className="form-group">
         <label htmlFor="prompt-file">Prompt Spec *</label>
         {isLoadingPrompts ? (
@@ -250,7 +250,10 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
         )}
         {errors.promptFile && <span className="error-message">{errors.promptFile}</span>}
       </div>
+      </div>
 
+      {/* Fieldsets in responsive 2-col grid */}
+      <div className="form-fieldsets-grid">
       {/* LLM Configuration Section */}
       <fieldset className="llm-config-section">
         <legend>LLM Configuration</legend>
@@ -377,6 +380,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
         </div>
       </fieldset>
 
+      <div className="form-fieldsets-stack">
       {/* Sampling Controls */}
       <fieldset className="sampling-section">
         <legend>Samples & Strategy</legend>
@@ -469,6 +473,8 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
           />
         </div>
       </fieldset>
+      </div>
+      </div>
 
       {/* Action Buttons */}
       <div className="form-actions">

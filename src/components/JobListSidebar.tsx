@@ -3,11 +3,49 @@ import { invoke } from "@tauri-apps/api/core";
 import type { InferenceJob } from "../database";
 
 interface JobListSidebarProps {
+  selectedId?: number | null;
   onSelectJob: (jobId: number) => void;
   onNewJob: () => void;
+  refreshKey?: number;
 }
 
-export default function JobListSidebar({ onSelectJob, onNewJob }: JobListSidebarProps) {
+function getStatusClass(status: string): string {
+  switch (status.toLowerCase()) {
+    case "completed":
+      return "status-completed";
+    case "running":
+      return "status-running";
+    case "failed":
+      return "status-failed";
+    case "pending":
+    case "queued":
+      return "status-pending";
+    case "cancelled":
+      return "status-cancelled";
+    default:
+      return "";
+  }
+}
+
+function formatDate(dateStr?: string): string {
+  if (!dateStr) return "";
+  const normalized = dateStr.includes("T") ? dateStr : dateStr.replace(" ", "T") + "Z";
+  const d = new Date(normalized);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export default function JobListSidebar({
+  selectedId = null,
+  onSelectJob,
+  onNewJob,
+  refreshKey = 0,
+}: JobListSidebarProps) {
   const [jobs, setJobs] = useState<InferenceJob[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -17,7 +55,7 @@ export default function JobListSidebar({ onSelectJob, onNewJob }: JobListSidebar
         page: 1,
         pageSize: 50,
       });
-      setJobs(jobList);
+      setJobs(Array.isArray(jobList) ? jobList : []);
     } catch (error) {
       console.error("Failed to load jobs:", error);
     } finally {
@@ -27,108 +65,50 @@ export default function JobListSidebar({ onSelectJob, onNewJob }: JobListSidebar
 
   useEffect(() => {
     loadJobs();
-
-    // Set up polling for job status updates
     const interval = setInterval(loadJobs, 5000);
     return () => clearInterval(interval);
-  }, [loadJobs]);
-
-  const getStatusIcon = (status: string): string => {
-    switch (status.toLowerCase()) {
-      case "pending":
-        return "⏳";
-      case "queued":
-        return "📋";
-      case "running":
-        return "▶️";
-      case "completed":
-        return "✅";
-      case "failed":
-        return "❌";
-      case "cancelled":
-        return "⏹️";
-      default:
-        return "📝";
-    }
-  };
-
-  const getStatusClass = (status: string): string => {
-    switch (status.toLowerCase()) {
-      case "completed":
-        return "status-completed";
-      case "running":
-        return "status-running";
-      case "failed":
-        return "status-failed";
-      case "pending":
-        return "status-pending";
-      default:
-        return "";
-    }
-  };
-
-  const formatDate = (dateStr: string): string => {
-    const date = new Date(dateStr);
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
-  if (isLoading) {
-    return (
-      <div className="job-list-sidebar">
-        <div className="sidebar-header">
-          <h2>Inference Jobs</h2>
-          <button className="btn-primary" onClick={onNewJob}>
-            + New Job
-          </button>
-        </div>
-        <div className="loading-indicator">Loading jobs...</div>
-      </div>
-    );
-  }
+  }, [loadJobs, refreshKey]);
 
   return (
-    <div className="job-list-sidebar">
-      <div className="sidebar-header">
-        <h2>Inference Jobs</h2>
-        <button className="btn-primary" onClick={onNewJob}>
-          + New Job
+    <aside className="job-list-sidebar">
+      <header className="job-list-header">
+        <h2>Jobs</h2>
+        <button className="btn-primary btn-small" onClick={onNewJob}>
+          + New
         </button>
-      </div>
+      </header>
 
-      {jobs.length === 0 ? (
-        <div className="empty-state">
+      {isLoading ? (
+        <div className="loading-indicator">Loading…</div>
+      ) : jobs.length === 0 ? (
+        <div className="job-list-empty">
           <p>No inference jobs yet.</p>
-          <button className="btn-secondary" onClick={onNewJob}>
+          <button className="btn-secondary btn-small" onClick={onNewJob}>
             Create your first job
           </button>
         </div>
       ) : (
         <ul className="job-list">
-          {jobs.map((job) => (
-            <li
-              key={job.id}
-              className={`job-item ${getStatusClass(job.status)}`}
-              onClick={() => onSelectJob(job.id)}
-            >
-              <div className="job-icon">{getStatusIcon(job.status)}</div>
-              <div className="job-info">
+          {jobs.map((job) => {
+            const date = formatDate(job.created_at);
+            return (
+              <li
+                key={job.id}
+                className={`job-item${selectedId === job.id ? " selected" : ""}`}
+                onClick={() => onSelectJob(job.id)}
+              >
                 <div className="job-name">{job.name}</div>
                 <div className="job-meta">
                   <span className={`status-badge ${getStatusClass(job.status)}`}>
                     {job.status}
                   </span>
-                  <span className="job-date">{formatDate(job.created_at)}</span>
+                  {date && <span>{date}</span>}
                 </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
-    </div>
+    </aside>
   );
 }

@@ -5,7 +5,7 @@ import type { InferenceJob, Collection } from "../database";
 
 interface JobViewPageProps {
   jobId: number;
-  onBack: () => void;
+  onBack?: () => void;
   onViewCollection?: (collectionId: number) => void;
 }
 
@@ -153,9 +153,11 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
     return (
       <div className="job-view-page">
         <div className="error-message">Job not found</div>
-        <button className="btn-secondary" onClick={onBack}>
-          Back to Job List
-        </button>
+        {onBack && (
+          <button className="btn-secondary" onClick={onBack}>
+            Back to Job List
+          </button>
+        )}
       </div>
     );
   }
@@ -168,35 +170,31 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
     <div className="job-view-page">
       {/* Header */}
       <div className="page-header">
-        <button className="btn-secondary" onClick={onBack}>
-          ← Back
-        </button>
+        {onBack && (
+          <button className="btn-secondary" onClick={onBack}>
+            ← Back
+          </button>
+        )}
         <h1>{job.name}</h1>
         <div className="header-actions">
           {job.status === "pending" && (
             <button className="btn-primary" onClick={handleStartJob}>
-              ▶ Start Job
+              Start Job
             </button>
           )}
           {(job.status === "running" || isStreaming) && (
             <button className="btn-danger" onClick={handleCancelJob}>
-              ⏹ Cancel Job
+              Cancel Job
             </button>
           )}
           <button className="btn-secondary" onClick={handleExportYaml}>
-            📥 Export YAML
+            Export YAML
           </button>
         </div>
       </div>
 
       {/* Status Banner */}
       <div className={`status-banner status-${job.status.toLowerCase()}`}>
-        <span className="status-icon">
-          {job.status === "running" || isStreaming ? "▶️" : 
-           job.status === "completed" ? "✅" :
-           job.status === "failed" ? "❌" :
-           job.status === "cancelled" ? "⏹️" : "📝"}
-        </span>
         <span className="status-text">{job.status.toUpperCase()}</span>
       </div>
 
@@ -214,8 +212,8 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
             />
           </div>
           <div className="progress-stats">
-            <span className="stat completed">✅ {progress.completedSamples} completed</span>
-            <span className="stat failed">❌ {progress.failedSamples} failed</span>
+            <span className="stat completed">{progress.completedSamples} completed</span>
+            <span className="stat failed">{progress.failedSamples} failed</span>
           </div>
         </div>
       )}
