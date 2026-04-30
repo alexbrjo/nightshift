@@ -101,47 +101,50 @@ export default function App() {
           className={activeSection === "code-editor" ? "" : "hidden"}
         />
 
-        {activeSection === "code-editor" ? (
-          <main className="workspace">
-            {activeFile ? (
-              <Editor
-                code={activeFile.content}
-                language={activeFile.language}
-                onChange={(code) => {
-                  setActiveFile((prev) => {
-                    if (prev) {
-                      fileContentsRef.current.set(prev.path, code);
-                      return { ...prev, content: code };
-                    }
-                    return prev;
-                  });
-                }}
-              />
-            ) : (
-              <div className="editor-placeholder">
-                Open a folder and select a file to begin
-              </div>
-            )}
-          </main>
-        ) : activeSection === "job-runner" ? (
-          <main className="workspace job-runner-workspace full-width">
-            <JobRunnerPage />
-          </main>
-        ) : activeSection === "collection-viewer" ? (
-          <main className="workspace full-width collections-page">
-            <CollectionsList
-              selectedId={selectedCollectionId}
-              onSelectCollection={setSelectedCollectionId}
+        {/* All section panes stay mounted so in-flight work (job listeners,
+            polling, scroll positions) survives section switches. The inactive
+            panes are hidden via display:none. */}
+        <main className={`workspace${activeSection === "code-editor" ? "" : " hidden"}`}>
+          {activeFile ? (
+            <Editor
+              code={activeFile.content}
+              language={activeFile.language}
+              onChange={(code) => {
+                setActiveFile((prev) => {
+                  if (prev) {
+                    fileContentsRef.current.set(prev.path, code);
+                    return { ...prev, content: code };
+                  }
+                  return prev;
+                });
+              }}
             />
-            {selectedCollectionId ? (
-              <CollectionViewer collectionId={selectedCollectionId} />
-            ) : (
-              <div className="collections-placeholder">
-                <p>Select a collection to view its items.</p>
-              </div>
-            )}
-          </main>
-        ) : (
+          ) : (
+            <div className="editor-placeholder">
+              Open a folder and select a file to begin
+            </div>
+          )}
+        </main>
+
+        <main className={`workspace job-runner-workspace full-width${activeSection === "job-runner" ? "" : " hidden"}`}>
+          <JobRunnerPage />
+        </main>
+
+        <main className={`workspace full-width collections-page${activeSection === "collection-viewer" ? "" : " hidden"}`}>
+          <CollectionsList
+            selectedId={selectedCollectionId}
+            onSelectCollection={setSelectedCollectionId}
+          />
+          {selectedCollectionId ? (
+            <CollectionViewer collectionId={selectedCollectionId} />
+          ) : (
+            <div className="collections-placeholder">
+              <p>Select a collection to view its items.</p>
+            </div>
+          )}
+        </main>
+
+        {activeSection === "experiment-designer" && (
           <main className="workspace full-width">
             <UnderConstruction title={SECTION_LABELS[activeSection]} />
           </main>

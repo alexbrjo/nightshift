@@ -10,7 +10,7 @@ use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, instrument, warn};
 use url::Url;
 
-use crate::database::{DatabaseState, InferenceJobInput};
+use crate::database::DatabaseState;
 
 /// Job execution status
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -262,10 +262,14 @@ impl JobQueue {
             if matches!(status, JobStatus::Running | JobStatus::Queued) {
                 drop(jobs);
 
-                // Signal cancellation
-                let cancellations = self.cancellations.write().await;
-                if let Some(token) = cancellations.get(&job_id) {
-                    token.cancel();
+                // Signal cancellation. Clone the token out so we can release the
+                // map lock before awaiting cancel().
+                let token = {
+                    let cancellations = self.cancellations.read().await;
+                    cancellations.get(&job_id).cloned()
+                };
+                if let Some(token) = token {
+                    token.cancel().await;
                 }
 
                 // Update status
@@ -357,50 +361,28 @@ impl JobExecutor {
         })
     }
 
-    /// Start an inference job asynchronously
+    /// Start an inference job asynchronously.
+    /// Allows restart from terminal statuses (completed, failed, cancelled) and the
+    /// initial pending/queued statuses; only rejects if already running.
     #[instrument(skip(self), fields(job_id))]
     pub async fn start_job(&self, job_id: i64) -> Result<(), String> {
-        // Check if already running
         if self.queue.is_running(job_id).await {
             return Err("Job is already running".to_string());
         }
 
-        // Get job from database using internal helper
         let job = crate::database::get_inference_job_by_id(&self.db.pool, job_id)
-            .await?;
+            .await?
+            .ok_or("Job not found")?;
 
-        let job = job.ok_or("Job not found")?;
-
-        if job.status != "pending" && job.status != "queued" {
-            return Err(format!("Job cannot be started from status: {}", job.status));
+        match job.status.as_str() {
+            "pending" | "queued" | "completed" | "failed" | "cancelled" => {}
+            other => return Err(format!("Job cannot be started from status: {}", other)),
         }
 
-        // Convert f32 to f64 for temperature (not used here, but preserved for future)
+        // Flip DB status to "running". Do not rewrite other columns.
+        crate::database::update_job_status(&self.db.pool, job_id, "running").await?;
 
-        // Update database status - use non-Option fields based on InferenceJobInput struct
-        let input = InferenceJobInput {
-            name: job.name.clone(),
-            prompt_file: job.prompt_file.clone(),
-            data_source: job.data_source.clone(),
-            provider: job.provider.clone(),
-            model: job.model.clone(),
-            server_url: job.server_url.clone(),
-            output_mode: job.output_mode.clone(),
-            temperature: job.temperature,
-            max_tokens: job.max_tokens,
-            thinking_budget: job.thinking_budget,
-            samples: job.samples,
-            strategy: job.strategy.clone(),
-            pre_render_url: job.pre_render_url.clone(),
-            pre_render_timeout: job.pre_render_timeout,
-            pre_render_body: job.pre_render_body.clone(),
-            json_schema_file: job.json_schema_file.clone(),
-        };
-
-        crate::database::update_inference_job_by_id(&self.db.pool, job_id, input)
-            .await?;
-
-        // Enqueue and start
+        // Enqueue and start in-memory state.
         self.queue.enqueue(job_id).await;
         self.queue.start(job_id).await;
 
@@ -408,39 +390,15 @@ impl JobExecutor {
         Ok(())
     }
 
-    /// Cancel a running job
+    /// Cancel a running job. Updates only the status column; preserves all
+    /// configuration fields untouched.
     #[instrument(skip(self), fields(job_id))]
     pub async fn cancel_job(&self, job_id: i64) -> Result<bool, String> {
         let cancelled = self.queue.cancel(job_id).await;
 
         if cancelled {
-            // Get current job to preserve required fields
-            let job_opt = crate::database::get_inference_job_by_id(&self.db.pool, job_id).await?;
-
-            if let Some(job) = job_opt {
-                // Update database status with preserved values for required fields
-                let input = InferenceJobInput {
-                    name: job.name,
-                    prompt_file: job.prompt_file,
-                    data_source: job.data_source,
-                    provider: job.provider,
-                    model: job.model,
-                    server_url: job.server_url,
-                    output_mode: job.output_mode,
-                    temperature: None,
-                    max_tokens: None,
-                    thinking_budget: None,
-                    samples: 1, // Must be > 0
-                    strategy: "single".to_string(),
-                    pre_render_url: None,
-                    pre_render_timeout: None,
-                    pre_render_body: None,
-                    json_schema_file: None,
-                };
-
-                if let Err(e) = crate::database::update_inference_job_by_id(&self.db.pool, job_id, input).await {
-                    warn!("Failed to update cancelled job in DB: {}", e);
-                }
+            if let Err(e) = crate::database::update_job_status(&self.db.pool, job_id, "cancelled").await {
+                warn!("Failed to update cancelled job status in DB: {}", e);
             }
         }
 
@@ -633,24 +591,40 @@ impl JobExecutor {
         Ok(())
     }
 
+    /// Resolve a user-supplied relative path against the project root, rejecting
+    /// absolute paths, `..` components, and any path that — after symlink
+    /// resolution — escapes the project root.
+    fn resolve_within_project(&self, user_path: &str) -> Result<std::path::PathBuf, String> {
+        use std::path::{Component, Path};
+
+        let path = Path::new(user_path);
+        if path.is_absolute() {
+            return Err(format!("Absolute paths are not allowed: {}", user_path));
+        }
+        if path.components().any(|c| matches!(c, Component::ParentDir)) {
+            return Err(format!("Path may not contain '..': {}", user_path));
+        }
+
+        let root = self.db.get_project_root();
+        let root_canonical = std::fs::canonicalize(&root)
+            .map_err(|e| format!("Failed to resolve project root {}: {}", root.display(), e))?;
+        let full = root_canonical.join(path);
+        let full_canonical = std::fs::canonicalize(&full)
+            .map_err(|e| format!("Failed to resolve path {}: {}", full.display(), e))?;
+
+        if !full_canonical.starts_with(&root_canonical) {
+            return Err(format!("Path escapes project root: {}", user_path));
+        }
+        Ok(full_canonical)
+    }
+
     /// Load samples from data source file
     async fn load_samples(&self, config: &WorkerConfig) -> Result<Vec<serde_json::Value>, String> {
         debug!("Loading samples from data source: {} with strategy: {:?}", config.data_source, config.strategy);
 
-        // Resolve the data source path - use as-is if absolute, otherwise relative to project root
-        let full_path = if std::path::Path::new(&config.data_source).is_absolute() {
-            std::path::PathBuf::from(&config.data_source)
-        } else {
-            self.db.get_project_root().join(&config.data_source)
-        };
-        
+        let full_path = self.resolve_within_project(&config.data_source)?;
         debug!("Full data source path: {}", full_path.display());
-        
-        // Check if file exists
-        if !full_path.exists() {
-            return Err(format!("Data source file does not exist: {}", full_path.display()));
-        }
-        
+
         // Read the file content
         let content = tokio::fs::read_to_string(&full_path)
             .await
@@ -863,24 +837,13 @@ impl JobExecutor {
 
     /// Load prompt from file
     async fn load_prompt_file(&self, path: &str) -> Result<String, String> {
-        // Resolve the path - use as-is if absolute, otherwise relative to project root
-        let full_path = if std::path::Path::new(path).is_absolute() {
-            std::path::PathBuf::from(path)
-        } else {
-            self.db.get_project_root().join(path)
-        };
-        
+        let full_path = self.resolve_within_project(path)?;
         debug!("Loading prompt from: {} (resolved to: {})", path, full_path.display());
-        debug!("File exists: {}", full_path.exists());
-        
-        if !full_path.exists() {
-            return Err(format!("Prompt file does not exist: {}", full_path.display()));
-        }
-        
+
         let content = tokio::fs::read_to_string(&full_path)
             .await
             .map_err(|e| format!("Failed to read prompt file {}: {}", path, e))?;
-        
+
         debug!("Prompt file loaded successfully ({} bytes)", content.len());
         Ok(content)
     }

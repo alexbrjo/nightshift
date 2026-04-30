@@ -33,6 +33,8 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
       });
     } catch (error) {
       console.error("Failed to load job:", error);
+    } finally {
+      setIsLoading(false);
     }
   }, [jobId]);
 
@@ -50,51 +52,62 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
     loadJob();
     loadCollections();
 
-    // Listen for job status events
-    const unlistenStarted = listen("job-started", (event) => {
-      setIsStreaming(true);
-      setProgress((prev) => ({
-        ...prev,
-        totalSamples: (event.payload as any).total_samples || prev.totalSamples,
-      }));
-    });
+    // Listener registration is async, so an early unmount can race with it.
+    // Track the registered unlisten fns and a cancellation flag; if cleanup
+    // runs before listeners resolve, we'll unsubscribe them as soon as they do.
+    let cancelled = false;
+    const unlistens: Array<() => void> = [];
 
-    const unlistenSampleCompleted = listen("sample-completed", () => {
-      setProgress((prev) => ({
-        ...prev,
-        completedSamples: prev.completedSamples + 1,
-      }));
-    });
+    (async () => {
+      try {
+        const fns = await Promise.all([
+          listen<{ job_id: number; total_samples: number }>("job-started", (event) => {
+            if (event.payload.job_id !== jobId) return;
+            setIsStreaming(true);
+            setProgress((prev) => ({
+              ...prev,
+              totalSamples: event.payload.total_samples ?? prev.totalSamples,
+            }));
+          }),
+          listen("sample-completed", () => {
+            setProgress((prev) => ({
+              ...prev,
+              completedSamples: prev.completedSamples + 1,
+            }));
+          }),
+          listen("sample-failed", () => {
+            setProgress((prev) => ({
+              ...prev,
+              failedSamples: prev.failedSamples + 1,
+            }));
+          }),
+          listen<{ job_id: number }>("job-completed", (event) => {
+            if (event.payload.job_id !== jobId) return;
+            setIsStreaming(false);
+            loadJob();
+          }),
+          listen<{ job_id: number }>("job-cancelled", (event) => {
+            if (event.payload.job_id !== jobId) return;
+            setIsStreaming(false);
+            loadJob();
+          }),
+        ]);
 
-    const unlistenSampleFailed = listen("sample-failed", () => {
-      setProgress((prev) => ({
-        ...prev,
-        failedSamples: prev.failedSamples + 1,
-      }));
-    });
-
-    const unlistenCompleted = listen("job-completed", () => {
-      setIsStreaming(false);
-      loadJob(); // Reload to get updated status
-    });
-
-    const unlistenCancelled = listen("job-cancelled", () => {
-      setIsStreaming(false);
-      loadJob();
-    });
+        if (cancelled) {
+          fns.forEach((fn) => fn());
+        } else {
+          unlistens.push(...fns);
+        }
+      } catch (err) {
+        console.error("Failed to register job event listeners:", err);
+      }
+    })();
 
     return () => {
-      unlistenStarted.then((fn) => fn());
-      unlistenSampleCompleted.then((fn) => fn());
-      unlistenSampleFailed.then((fn) => fn());
-      unlistenCompleted.then((fn) => fn());
-      unlistenCancelled.then((fn) => fn());
+      cancelled = true;
+      unlistens.forEach((fn) => fn());
     };
   }, [loadJob, loadCollections, jobId]);
-
-  useEffect(() => {
-    setIsLoading(false);
-  }, [job]);
 
   const handleStartJob = async () => {
     try {
