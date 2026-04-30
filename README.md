@@ -25,3 +25,7 @@ Chain jobs together in a visual workflow editor where the output of one stage fe
 ## Analysis Agents
 
 Post-experiment evaluation agents walk through a structured workflow: running analysis queries, supplementing quantitative metrics with anecdotes, writing a summary, and proof-reading their work. Agent configurations can be saved to YAML for reuse. Each agent runs in a sandboxed environment with a database scoped to only the current experiment. A copy-on-create model clones relevant tables (schemas, input data, intermediate results) into a per-run database. The agent reads and writes freely inside that boundary but cannot see or access data from other runs, ensuring complete isolation. Results are written to a single `analysis.md` file. Before cleanup, agents can export their findings for cross-run or suite-level meta-analysis.
+
+## Credits
+
+Sidebar icons are from [Game Icons](https://game-icons.net/) by [Lorc](https://lorcblog.blogspot.com/), [Delapouite](https://delapouite.com/), and contributors, licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/).
