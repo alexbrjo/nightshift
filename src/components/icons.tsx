@@ -11,8 +11,8 @@ import {
   GiNotebook,
   GiTestTubes,
   GiFizzingFlask,
-  GiMoon,
 } from "react-icons/gi";
+import logoLightUrl from "../../src-tauri/icons/nightshift_icon_light.png";
 
 const ICON_SIZE = 20;
 
@@ -32,6 +32,9 @@ export function RackIcon() {
   return <GiFizzingFlask size={ICON_SIZE} />;
 }
 
+/** App logo for the sidebar header — striped-disk Nightshift mark (light
+ *  variant for the blue rail). Sourced from src-tauri/icons so the same
+ *  artwork is shared with the Tauri bundle. */
 export function MoonIcon() {
-  return <GiMoon size={22} />;
+  return <img src={logoLightUrl} alt="Nightshift" width={40} height={40} />;
 }
