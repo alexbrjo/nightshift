@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import Editor from "./components/Editor";
 import FileTree, { type FsNode } from "./components/FileTree";
 import UnderConstruction from "./components/UnderConstruction";
@@ -60,6 +60,24 @@ export default function App() {
   const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
   const fileContentsRef = useRef(new Map<string, string>());
 
+  // Theme toggle: clicking the moon logo flips between the default lab theme
+  // (no attribute) and the midnight theme (data-theme="dark"). Persisted to
+  // localStorage so it survives reloads.
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem("nightshift-theme") === "dark";
+  });
+
+  useEffect(() => {
+    if (isDark) {
+      document.documentElement.dataset.theme = "dark";
+      localStorage.setItem("nightshift-theme", "dark");
+    } else {
+      delete document.documentElement.dataset.theme;
+      localStorage.removeItem("nightshift-theme");
+    }
+  }, [isDark]);
+
   const sections: { id: Section; icon: ReactNode; label: string }[] = [
     { id: "code-editor", icon: <DropperIcon />, label: "Project" },
     { id: "collection-viewer", icon: <CabinetIcon />, label: "Collections" },
@@ -90,7 +108,15 @@ export default function App() {
         </div>
         <div className="app-body">
         <aside className="sidebar">
-          <div className="sidebar-logo" title="Nightshift"><MoonIcon /></div>
+          <button
+            type="button"
+            className="sidebar-logo"
+            title={isDark ? "Switch to lab theme" : "Switch to midnight theme"}
+            aria-pressed={isDark}
+            onClick={() => setIsDark((prev) => !prev)}
+          >
+            <MoonIcon />
+          </button>
           <nav className="sidebar-nav">
             {sections.map((section) => (
               <button

@@ -137,7 +137,7 @@ impl DatabaseState {
         nightshift_dir.join("nightshift.db")
     }
 
-    /// Resolve a project root, creating `.nightshift/` if it doesn't already
+    /// Resolve project root and creating `.nightshift/` if it doesn't already
     /// exist anywhere up the tree from `start_path`. The returned path is the
     /// directory that owns the `.nightshift/` folder.
     pub async fn ensure_project_root<P: AsRef<Path>>(start_path: P) -> Result<PathBuf, String> {
@@ -694,12 +694,12 @@ pub async fn create_inference_job(
         Err(e) => {
             let error_msg = format!("Failed to create inference job: {}", e);
             tracing::error!("{}", error_msg);
-            
+
             // Check for unique constraint violation
             if e.to_string().contains("UNIQUE constraint failed") {
                 return Err(format!("A job with the name '{}' already exists. Please choose a different name.", input.name));
             }
-            
+
             Err(error_msg)
         }
     }
@@ -833,7 +833,7 @@ pub async fn update_inference_job(
 pub async fn update_job_status(pool: &SqlitePool, id: i64, status: &str) -> Result<bool, String> {
     let result = sqlx::query(
         r#"
-        UPDATE inference_jobs 
+        UPDATE inference_jobs
         SET status = ?, updated_at = datetime('now')
         WHERE id = ?
         "#

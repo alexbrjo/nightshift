@@ -207,11 +207,30 @@ body {
 }
 
 .sidebar-logo {
-  font-size: 22px;
-  color: var(--nav-fg-active);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
   margin-bottom: 20px;
-  cursor: default;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  color: var(--nav-fg-active);
+  font-size: 22px;
   line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.sidebar-logo:hover {
+  background: var(--nav-hover-bg);
+}
+
+.sidebar-logo:focus-visible {
+  outline: 2px solid var(--nav-fg-active);
+  outline-offset: 2px;
 }
 
 .sidebar-nav {
