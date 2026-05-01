@@ -372,7 +372,7 @@ impl JobExecutor {
             return Err("Job is already running".to_string());
         }
 
-        let job = crate::database::get_inference_job_by_id(&self.db.pool, job_id)
+        let job = crate::database::get_inference_job_by_id(&self.db.pool(), job_id)
             .await?
             .ok_or("Job not found")?;
 
@@ -382,7 +382,7 @@ impl JobExecutor {
         }
 
         // Flip DB status to "running". Do not rewrite other columns.
-        crate::database::update_job_status(&self.db.pool, job_id, "running").await?;
+        crate::database::update_job_status(&self.db.pool(), job_id, "running").await?;
 
         // Enqueue and start in-memory state.
         self.queue.enqueue(job_id).await;
@@ -399,7 +399,7 @@ impl JobExecutor {
         let cancelled = self.queue.cancel(job_id).await;
 
         if cancelled {
-            if let Err(e) = crate::database::update_job_status(&self.db.pool, job_id, "cancelled").await {
+            if let Err(e) = crate::database::update_job_status(&self.db.pool(), job_id, "cancelled").await {
                 warn!("Failed to update cancelled job status in DB: {}", e);
             }
         }
@@ -552,7 +552,7 @@ impl JobExecutor {
         )
         .bind(config.job_id)
         .bind(format!("{} outputs", config.name))
-        .execute(&self.db.pool)
+        .execute(&self.db.pool())
         .await
         .map_err(|e| format!("Failed to create collection: {}", e))?;
 
@@ -560,7 +560,7 @@ impl JobExecutor {
             r#"SELECT id FROM collections WHERE job_id = ?"#
         )
         .bind(config.job_id)
-        .fetch_one(&self.db.pool)
+        .fetch_one(&self.db.pool())
         .await
         .map_err(|e| format!("Failed to get collection ID: {}", e))?;
 
@@ -574,7 +574,7 @@ impl JobExecutor {
         )
         .bind(collection_id)
         .bind(data)
-        .execute(&self.db.pool)
+        .execute(&self.db.pool())
         .await
         .map_err(|e| format!("Failed to save collection item: {}", e))?;
 

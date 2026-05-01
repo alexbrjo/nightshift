@@ -56,13 +56,13 @@ mod collection_commands_tests {
         .bind(5)
         .bind("exhaustive")
         .bind("completed")
-        .execute(&state.pool)
+        .execute(&state.pool())
         .await
         .expect("Failed to insert job");
 
         let job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
             .bind("test_job")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.pool())
             .await
             .expect("Failed to get job ID");
 
@@ -71,7 +71,7 @@ mod collection_commands_tests {
         )
         .bind(job_id)
         .bind("test_collection")
-        .fetch_one(&state.pool)
+        .fetch_one(&state.pool())
         .await
         .expect("Failed to create collection");
 
@@ -81,7 +81,7 @@ mod collection_commands_tests {
         )
         .bind(collection_id)
         .bind(r#"{"key": "value"}"#)
-        .fetch_one(&state.pool)
+        .fetch_one(&state.pool())
         .await
         .expect("Failed to insert item");
 
@@ -93,7 +93,7 @@ mod collection_commands_tests {
         // Verify item is gone
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM collection_items WHERE id = ?")
             .bind(item_id)
-            .fetch_one(&state.pool)
+            .fetch_one(&state.pool())
             .await
             .expect("Failed to count items");
         assert_eq!(count, 0, "Item should be deleted");
@@ -131,13 +131,13 @@ mod collection_commands_tests {
         .bind(5)
         .bind("exhaustive")
         .bind("completed")
-        .execute(&state.pool)
+        .execute(&state.pool())
         .await
         .expect("Failed to insert job");
 
         let job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
             .bind("test_job")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.pool())
             .await
             .expect("Failed to get job ID");
 
@@ -146,7 +146,7 @@ mod collection_commands_tests {
         )
         .bind(job_id)
         .bind("test_collection")
-        .fetch_one(&state.pool)
+        .fetch_one(&state.pool())
         .await
         .expect("Failed to create collection");
 
@@ -157,14 +157,14 @@ mod collection_commands_tests {
         sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
             .bind(collection_id)
             .bind(item1_data)
-            .execute(&state.pool)
+            .execute(&state.pool())
             .await
             .expect("Failed to insert item 1");
 
         sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
             .bind(collection_id)
             .bind(item2_data)
-            .execute(&state.pool)
+            .execute(&state.pool())
             .await
             .expect("Failed to insert item 2");
 
@@ -212,13 +212,13 @@ mod collection_commands_tests {
         .bind(5)
         .bind("exhaustive")
         .bind("completed")
-        .execute(&state.pool)
+        .execute(&state.pool())
         .await
         .expect("Failed to insert job");
 
         let job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
             .bind("test_job")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.pool())
             .await
             .expect("Failed to get job ID");
 
@@ -227,7 +227,7 @@ mod collection_commands_tests {
         )
         .bind(job_id)
         .bind("empty_collection")
-        .fetch_one(&state.pool)
+        .fetch_one(&state.pool())
         .await
         .expect("Failed to create collection");
 
@@ -271,13 +271,13 @@ mod collection_commands_tests {
         .bind(5)
         .bind("exhaustive")
         .bind("completed")
-        .execute(&state.pool)
+        .execute(&state.pool())
         .await
         .expect("Failed to insert job");
 
         let job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
             .bind("test_job")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.pool())
             .await
             .expect("Failed to get job ID");
 
@@ -286,7 +286,7 @@ mod collection_commands_tests {
         )
         .bind(job_id)
         .bind("test_collection")
-        .fetch_one(&state.pool)
+        .fetch_one(&state.pool())
         .await
         .expect("Failed to create collection");
 
@@ -294,14 +294,14 @@ mod collection_commands_tests {
         sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
             .bind(collection_id)
             .bind(r#"{"name": "Alice", "age": 30}"#)
-            .execute(&state.pool)
+            .execute(&state.pool())
             .await
             .expect("Failed to insert item 1");
 
         sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
             .bind(collection_id)
             .bind(r#"{"name": "Bob", "age": 25}"#)
-            .execute(&state.pool)
+            .execute(&state.pool())
             .await
             .expect("Failed to insert item 2");
 
@@ -340,13 +340,13 @@ mod collection_commands_tests {
         .bind(5)
         .bind("exhaustive")
         .bind("completed")
-        .execute(&state.pool)
+        .execute(&state.pool())
         .await
         .expect("Failed to insert job");
 
         let job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
             .bind("test_job")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.pool())
             .await
             .expect("Failed to get job ID");
 
@@ -355,7 +355,7 @@ mod collection_commands_tests {
         )
         .bind(job_id)
         .bind("test_collection")
-        .fetch_one(&state.pool)
+        .fetch_one(&state.pool())
         .await
         .expect("Failed to create collection");
 
@@ -363,7 +363,7 @@ mod collection_commands_tests {
         sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
             .bind(collection_id)
             .bind(r#"{"name": "Smith, John", "quote": "He said \"hello\""}"#)
-            .execute(&state.pool)
+            .execute(&state.pool())
             .await
             .expect("Failed to insert item");
 
@@ -396,13 +396,13 @@ mod collection_commands_tests {
         .bind(5)
         .bind("exhaustive")
         .bind("completed")
-        .execute(&state.pool)
+        .execute(&state.pool())
         .await
         .expect("Failed to insert job");
 
         let job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
             .bind("test_job")
-            .fetch_one(&state.pool)
+            .fetch_one(&state.pool())
             .await
             .expect("Failed to get job ID");
 
@@ -411,7 +411,7 @@ mod collection_commands_tests {
         )
         .bind(job_id)
         .bind("empty_collection")
-        .fetch_one(&state.pool)
+        .fetch_one(&state.pool())
         .await
         .expect("Failed to create collection");
 

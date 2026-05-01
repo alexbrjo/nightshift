@@ -10,7 +10,7 @@ use crate::state::JobManager;
 fn spawn_job_execution(executor: &JobExecutor, app: AppHandle, config: WorkerConfig) {
     let (tx, mut rx) = mpsc::channel::<JobEvent>(100);
     let app_clone = app.clone();
-    let pool = executor.db.pool.clone();
+    let pool = executor.db.pool();
 
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {

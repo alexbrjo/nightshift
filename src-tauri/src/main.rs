@@ -31,20 +31,17 @@ fn main() {
             executor: TokioMutex::new(None),
         })
         .setup(|app| {
-            // Initialize database connection with project-based path
-            // Use current working directory as default project location
-            let project_path = std::env::current_dir()
-                .expect("Failed to get current working directory");
-
-            // Initialize database connection using tokio runtime
+            // The DB starts as an in-memory SQLite scratch pool — no .nightshift
+            // directory is created until the user opens a project, at which
+            // point `scan_folder`/`set_root_path` calls `reconnect` to swap in
+            // the project's persistent file DB.
             #[cfg(not(target_os = "android"))]
             {
                 let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-                match rt.block_on(DatabaseState::new(&project_path)) {
+                match rt.block_on(DatabaseState::empty()) {
                     Ok(db_state) => { app.manage(db_state); }
                     Err(e) => {
-                        eprintln!("Failed to initialize database for project at {:?}: {}", project_path, e);
-                        eprintln!("Make sure the project has a .nightshift directory or create one.");
+                        eprintln!("Failed to initialize in-memory database: {}", e);
                         std::process::exit(1);
                     }
                 }

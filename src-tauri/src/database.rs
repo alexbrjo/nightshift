@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, SqlitePool};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use tauri::State;
 
 /// Represents an inference job configuration
@@ -71,11 +71,18 @@ pub struct InferenceJobInput {
     pub json_schema_file: Option<String>,
 }
 
-/// Database connection state
+/// Database connection state.
+///
+/// The pool is held behind an `Arc<RwLock<...>>` so it can be hot-swapped when
+/// the user opens a different project — every command reads through `pool()`
+/// to grab a fresh clone, while `reconnect(path)` atomically replaces the
+/// underlying connection. `reconnect_lock` serializes concurrent reconnects so
+/// the no-op-if-same-project check can't race with the write.
 #[derive(Clone)]
 pub struct DatabaseState {
-    pub pool: SqlitePool,
+    pool: Arc<RwLock<SqlitePool>>,
     pub project_root: Arc<Mutex<PathBuf>>,
+    reconnect_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl DatabaseState {
@@ -130,21 +137,29 @@ impl DatabaseState {
         nightshift_dir.join("nightshift.db")
     }
 
-    /// Initialize the database connection and run migrations
-    pub async fn new<P: AsRef<Path>>(project_path: P) -> Result<Self, sqlx::Error> {
-        let project_path_ref = project_path.as_ref();
+    /// Resolve a project root, creating `.nightshift/` if it doesn't already
+    /// exist anywhere up the tree from `start_path`. The returned path is the
+    /// directory that owns the `.nightshift/` folder.
+    pub async fn ensure_project_root<P: AsRef<Path>>(start_path: P) -> Result<PathBuf, String> {
+        if let Ok(found) = Self::find_project_root(start_path.as_ref()) {
+            return Ok(found);
+        }
+        // No `.nightshift` exists upward — create one at start_path.
+        let mut root = start_path.as_ref().to_path_buf();
+        if root.is_file() {
+            root = root.parent().ok_or("Path has no parent directory")?.to_path_buf();
+        }
+        tokio::fs::create_dir_all(root.join(".nightshift"))
+            .await
+            .map_err(|e| format!("Failed to create .nightshift directory: {}", e))?;
+        Ok(root)
+    }
 
-        // Find project root (directory containing .nightshift)
-        let project_root = Self::find_project_root(project_path_ref)
-            .map_err(|e| sqlx::Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                e
-            )))?;
+    /// Open a connection at the project's `.nightshift/nightshift.db` and run
+    /// all migrations. Used by both `new()` and `reconnect()`.
+    async fn open_pool(project_root: &Path) -> Result<SqlitePool, sqlx::Error> {
+        let db_path = Self::get_database_path(project_root);
 
-        // Get database path in .nightshift folder
-        let db_path = Self::get_database_path(&project_root);
-
-        // Ensure parent directory exists
         if let Some(parent) = db_path.parent() {
             tokio::fs::create_dir_all(parent).await
                 .map_err(|e| sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
@@ -152,18 +167,17 @@ impl DatabaseState {
 
         eprintln!("Project root: {}", project_root.display());
         eprintln!("Connecting to database at: {}", db_path.display());
-        // Use file URI format with absolute path for better path handling on macOS
         let connection_string = format!("file:{}?mode=rwc",
             db_path.display().to_string().replace(' ', "%20").replace('#', "%23"));
-        eprintln!("Connection string: {}", connection_string);
         let pool = SqlitePool::connect(&connection_string).await?;
 
-        // Enable foreign key constraints
-        sqlx::query("PRAGMA foreign_keys = ON")
-            .execute(&pool)
-            .await?;
+        Self::run_migrations(&pool).await?;
+        Ok(pool)
+    }
 
-        // Run migrations
+    async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+        sqlx::query("PRAGMA foreign_keys = ON").execute(pool).await?;
+
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS inference_jobs (
@@ -191,17 +205,15 @@ impl DatabaseState {
             )
             "#,
         )
-        .execute(&pool)
+        .execute(pool)
         .await?;
 
         // Add error_message column to existing databases that predate it.
-        // SQLite has no IF NOT EXISTS for ALTER TABLE — swallow the duplicate-column error.
         if let Err(e) = sqlx::query("ALTER TABLE inference_jobs ADD COLUMN error_message TEXT")
-            .execute(&pool)
+            .execute(pool)
             .await
         {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column name") {
+            if !e.to_string().contains("duplicate column name") {
                 return Err(e);
             }
         }
@@ -217,7 +229,7 @@ impl DatabaseState {
             )
             "#,
         )
-        .execute(&pool)
+        .execute(pool)
         .await?;
 
         sqlx::query(
@@ -231,47 +243,85 @@ impl DatabaseState {
             )
             "#,
         )
-        .execute(&pool)
+        .execute(pool)
         .await?;
 
-        // Create indexes for better query performance
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_inference_jobs_status ON inference_jobs(status)
-            "#,
-        )
-        .execute(&pool)
-        .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_inference_jobs_status ON inference_jobs(status)")
+            .execute(pool).await?;
+        sqlx::query("DROP INDEX IF EXISTS idx_collections_job_id").execute(pool).await?;
+        sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_job_id ON collections(job_id)")
+            .execute(pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_collection_items_collection_id ON collection_items(collection_id)")
+            .execute(pool).await?;
 
-        // Unique index enforces one collection per job (idempotent for new DBs;
-        // for existing DBs predating the UNIQUE constraint the legacy index is
-        // dropped first so this can succeed).
-        sqlx::query("DROP INDEX IF EXISTS idx_collections_job_id")
-            .execute(&pool)
-            .await?;
-        sqlx::query(
-            r#"
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_job_id ON collections(job_id)
-            "#,
-        )
-        .execute(&pool)
-        .await?;
+        Ok(())
+    }
 
-        sqlx::query(
-            r#"
-            CREATE INDEX IF NOT EXISTS idx_collection_items_collection_id ON collection_items(collection_id)
-            "#,
-        )
-        .execute(&pool)
-        .await?;
+    /// Initialize a database state with no project open yet. The pool is an
+    /// in-memory SQLite (no filesystem footprint) so the app can boot before
+    /// the user has chosen a project; commands that try to write data before
+    /// `reconnect()` will succeed against this scratch DB and the data is
+    /// discarded on the next reconnect. In practice no useful command runs
+    /// before a project is opened.
+    pub async fn empty() -> Result<Self, sqlx::Error> {
+        let pool = SqlitePool::connect("sqlite::memory:").await?;
+        Self::run_migrations(&pool).await?;
+        Ok(Self {
+            pool: Arc::new(RwLock::new(pool)),
+            project_root: Arc::new(Mutex::new(PathBuf::new())),
+            reconnect_lock: Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
 
-          Ok(Self { pool, project_root: Arc::new(Mutex::new(project_root)) })
-      }
+    /// Initialize the database connection and run migrations.
+    pub async fn new<P: AsRef<Path>>(project_path: P) -> Result<Self, sqlx::Error> {
+        let project_root = Self::ensure_project_root(project_path)
+            .await
+            .map_err(|e| sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        let pool = Self::open_pool(&project_root).await?;
+        Ok(Self {
+            pool: Arc::new(RwLock::new(pool)),
+            project_root: Arc::new(Mutex::new(project_root)),
+            reconnect_lock: Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
 
-    /// Update the project root path (called when user opens a new folder)
-    pub fn set_project_root<P: AsRef<Path>>(&self, path: P) {
-        let mut root = self.project_root.lock().unwrap();
-        *root = path.as_ref().to_path_buf();
+    /// Get a clone of the current pool. SqlitePool is internally Arc-shared,
+    /// so this is cheap. Callers should pass the result to sqlx by reference
+    /// (e.g. `&state.pool()`).
+    pub fn pool(&self) -> SqlitePool {
+        self.pool.read().unwrap().clone()
+    }
+
+    /// Reconnect the database pool to a different project's `.nightshift/`.
+    /// Creates the project's `.nightshift/` if it doesn't already exist.
+    /// Atomically swaps the live pool so existing in-flight queries against
+    /// the previous pool finish on their own. Concurrent calls coalesce: only
+    /// one reconnect runs at a time, and a follower whose target matches the
+    /// already-current project no-ops without re-opening the file.
+    pub async fn reconnect<P: AsRef<Path>>(&self, project_path: P) -> Result<(), String> {
+        let project_root = Self::ensure_project_root(project_path).await?;
+
+        // Serialize concurrent reconnects so the same-project check can't race
+        // with the project_root write.
+        let _guard = self.reconnect_lock.lock().await;
+
+        if *self.project_root.lock().unwrap() == project_root {
+            return Ok(());
+        }
+
+        let new_pool = Self::open_pool(&project_root)
+            .await
+            .map_err(|e| format!("Failed to open database for {}: {}", project_root.display(), e))?;
+
+        let old_pool = {
+            let mut pool = self.pool.write().unwrap();
+            std::mem::replace(&mut *pool, new_pool)
+        };
+        tokio::spawn(async move { old_pool.close().await; });
+
+        *self.project_root.lock().unwrap() = project_root;
+        Ok(())
     }
 
     /// Get the current project root path
@@ -442,14 +492,14 @@ mod tests {
         .bind(5)
         .bind("exhaustive")
         .bind("completed")
-        .execute(&pool.pool)
+        .execute(&pool.pool())
         .await
         .expect("Failed to insert parent record");
 
         // Get the job ID
         let _job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
             .bind("test_job")
-            .fetch_one(&pool.pool)
+            .fetch_one(&pool.pool())
             .await
             .expect("Failed to get job ID");
 
@@ -459,7 +509,7 @@ mod tests {
         )
         .bind(99999) // Non-existent job ID
         .bind("test_collection")
-        .execute(&pool.pool)
+        .execute(&pool.pool())
         .await;
 
         // Should fail because foreign key constraint is enforced
@@ -471,7 +521,7 @@ mod tests {
             "Error should mention foreign key constraint: {}", err);
 
         // Cleanup
-        sqlx::query("DELETE FROM inference_jobs").execute(&pool.pool).await.ok();
+        sqlx::query("DELETE FROM inference_jobs").execute(&pool.pool()).await.ok();
         fs::remove_dir_all(&project_dir).ok();
     }
 
@@ -507,7 +557,7 @@ mod tests {
         .bind(5)
         .bind("exhaustive")
         .bind("pending")
-        .execute(&pool.pool)
+        .execute(&pool.pool())
         .await;
 
         assert!(result1.is_ok(), "First insert should succeed");
@@ -526,7 +576,7 @@ mod tests {
         .bind(5)
         .bind("exhaustive")
         .bind("pending")
-        .execute(&pool.pool)
+        .execute(&pool.pool())
         .await;
 
         // Should fail because UNIQUE constraint is enforced
@@ -539,7 +589,7 @@ mod tests {
             "Error should mention unique constraint: {}", err);
 
         // Cleanup
-        sqlx::query("DELETE FROM inference_jobs").execute(&pool.pool).await.ok();
+        sqlx::query("DELETE FROM inference_jobs").execute(&pool.pool()).await.ok();
         fs::remove_dir_all(&project_dir).ok();
     }
 
@@ -565,7 +615,7 @@ mod tests {
         let index_exists: bool = sqlx::query_scalar(
             "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_collections_job_id'"
         )
-        .fetch_one(&pool.pool)
+        .fetch_one(&pool.pool())
         .await
         .expect("Failed to query sqlite_master");
 
@@ -633,7 +683,7 @@ pub async fn create_inference_job(
     .bind(input.pre_render_timeout)
     .bind(&input.pre_render_body)
     .bind(&input.json_schema_file)
-    .execute(&state.pool)
+    .execute(&state.pool())
     .await;
 
     match result {
@@ -679,7 +729,7 @@ pub async fn get_inference_job(
     state: State<'_, DatabaseState>,
     id: i64,
 ) -> Result<Option<InferenceJob>, String> {
-    get_inference_job_by_id(&state.pool, id).await
+    get_inference_job_by_id(&state.pool(), id).await
 }
 
 /// Tauri command to list all inference jobs with pagination
@@ -700,7 +750,7 @@ pub async fn list_inference_jobs(
     )
     .bind(page_size)
     .bind(offset)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.pool())
     .await
     .map_err(|e| format!("Failed to list inference jobs: {}", e))?;
 
@@ -776,7 +826,7 @@ pub async fn update_inference_job(
     id: i64,
     input: InferenceJobInput,
 ) -> Result<bool, String> {
-    update_inference_job_by_id(&state.pool, id, input).await
+    update_inference_job_by_id(&state.pool(), id, input).await
 }
 
 /// Update just the job status (internal helper)
@@ -827,7 +877,7 @@ pub async fn delete_inference_job(
         "#,
     )
     .bind(id)
-    .execute(&state.pool)
+    .execute(&state.pool())
     .await
     .map_err(|e| format!("Failed to delete inference job: {}", e))?;
 
@@ -848,7 +898,7 @@ pub async fn create_collection(
         "#,
     )
     .bind(job_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.pool())
     .await
     .map_err(|e| format!("Failed to check job existence: {}", e))?;
 
@@ -864,7 +914,7 @@ pub async fn create_collection(
     )
     .bind(job_id)
     .bind(name)
-    .execute(&state.pool)
+    .execute(&state.pool())
     .await
     .map_err(|e| format!("Failed to create collection: {}", e))?;
 
@@ -886,7 +936,7 @@ pub async fn get_collections_for_job(
         "#,
     )
     .bind(job_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.pool())
     .await
     .map_err(|e| format!("Failed to get collections: {}", e))
 }
@@ -903,7 +953,7 @@ pub async fn list_all_collections(
         ORDER BY created_at DESC
         "#,
     )
-    .fetch_all(&state.pool)
+    .fetch_all(&state.pool())
     .await
     .map_err(|e| format!("Failed to list collections: {}", e))
 }
@@ -931,7 +981,7 @@ pub async fn add_collection_item(
         "#,
     )
     .bind(collection_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.pool())
     .await
     .map_err(|e| format!("Failed to check collection existence: {}", e))?;
 
@@ -947,7 +997,7 @@ pub async fn add_collection_item(
     )
     .bind(collection_id)
     .bind(data)
-    .execute(&state.pool)
+    .execute(&state.pool())
     .await
     .map_err(|e| format!("Failed to add collection item: {}", e))?;
 
@@ -969,7 +1019,7 @@ pub async fn get_collection_items(
         "#,
     )
     .bind(collection_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.pool())
     .await
     .map_err(|e| format!("Failed to check collection existence: {}", e))?;
 
@@ -990,7 +1040,7 @@ pub async fn get_collection_items(
     .bind(collection_id)
     .bind(page_size)
     .bind(offset)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.pool())
     .await
     .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
 
@@ -1009,7 +1059,7 @@ pub async fn get_collection_count(
         "#,
     )
     .bind(collection_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.pool())
     .await
     .map_err(|e| format!("Failed to get collection count: {}", e))?;
 
@@ -1028,7 +1078,7 @@ pub async fn delete_collection_item(
         "#
     )
     .bind(item_id)
-    .execute(&state.pool)
+    .execute(&state.pool())
     .await
     .map_err(|e| format!("Failed to delete collection item: {}", e))?;
 
@@ -1056,7 +1106,7 @@ pub async fn export_collection_jsonl(
         "#
     )
     .bind(collection_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.pool())
     .await
     .map_err(|e| format!("Failed to check collection existence: {}", e))?;
 
@@ -1072,7 +1122,7 @@ pub async fn export_collection_jsonl(
         "#
     )
     .bind(collection_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.pool())
     .await
     .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
 
@@ -1111,7 +1161,7 @@ pub async fn export_collection_csv(
         "#
     )
     .bind(collection_id)
-    .fetch_one(&state.pool)
+    .fetch_one(&state.pool())
     .await
     .map_err(|e| format!("Failed to check collection existence: {}", e))?;
 
@@ -1127,7 +1177,7 @@ pub async fn export_collection_csv(
         "#
     )
     .bind(collection_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&state.pool())
     .await
     .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
 

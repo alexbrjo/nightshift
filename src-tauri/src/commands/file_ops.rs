@@ -5,11 +5,12 @@ use crate::database::DatabaseState;
 use crate::state::AppState;
 use crate::utils::{sanitize_name, scan_directory};
 
-/// Scan a folder and set it as the project root
+/// Scan a folder and set it as the project root. Reconnects the database to
+/// the project's `.nightshift/nightshift.db` (creating the directory if needed).
 #[tauri::command]
-pub fn scan_folder(
-    app_state: State<AppState>,
-    db_state: State<DatabaseState>,
+pub async fn scan_folder(
+    app_state: State<'_, AppState>,
+    db_state: State<'_, DatabaseState>,
     path: String,
 ) -> Result<serde_json::Value, String> {
     let path_buf = PathBuf::from(&path);
@@ -17,12 +18,13 @@ pub fn scan_folder(
         return Err("Not a valid directory".to_string());
     }
 
-    // Update both the UI root path and the database project root
     {
         let mut root = app_state.root_path.lock().unwrap();
         *root = Some(path_buf.clone());
     }
-    db_state.set_project_root(&path_buf);
+    // Reconnect the DB pool to this project's `.nightshift/`. Updates
+    // `db_state.project_root` and atomically swaps the pool inside.
+    db_state.reconnect(&path_buf).await?;
 
     let mut file_count = 0usize;
     let children = scan_directory(&path_buf, 0, &mut file_count)?;
@@ -32,16 +34,19 @@ pub fn scan_folder(
     }))
 }
 
-/// Set the root path without scanning
+/// Set the root path without scanning. Also reconnects the DB pool.
 #[tauri::command]
-pub fn set_root_path(
-    app_state: State<AppState>,
-    db_state: State<DatabaseState>,
+pub async fn set_root_path(
+    app_state: State<'_, AppState>,
+    db_state: State<'_, DatabaseState>,
     path: String,
-) {
-    let mut root = app_state.root_path.lock().unwrap();
-    *root = Some(PathBuf::from(path.clone()));
-    db_state.set_project_root(&path);
+) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    {
+        let mut root = app_state.root_path.lock().unwrap();
+        *root = Some(path_buf.clone());
+    }
+    db_state.reconnect(&path_buf).await
 }
 
 /// Get the current root path
