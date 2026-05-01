@@ -188,64 +188,77 @@ pub async fn export_job_to_yaml(
         .map_err(|e| format!("Failed to serialize to YAML: {}", e))
 }
 
-/// List all prompt files (.jinja2, .prompt, .j2) in a directory tree
-#[tauri::command]
-pub async fn list_prompt_files(
-    base_path: String,
-) -> Result<Vec<String>, String> {
-    use std::path::PathBuf;
-    
-    let mut prompt_files = Vec::new();
-    let base = PathBuf::from(&base_path);
-    
-    // Walk the directory tree looking for .jinja2 and .prompt files
-    fn walk_dir(dir: &std::path::Path, prompts: &mut Vec<String>, base: &std::path::Path) -> Result<(), String> {
+/// Walk a directory tree (skipping hidden + common build dirs) and return
+/// files whose extension matches one of `extensions` (lowercased, no dot).
+/// Returned paths are relative to `base`.
+fn list_files_with_extensions(base_path: &str, extensions: &[&str]) -> Result<Vec<String>, String> {
+    use std::path::{Path, PathBuf};
+
+    let base = PathBuf::from(base_path);
+    let mut files = Vec::new();
+
+    fn walk(
+        dir: &Path,
+        files: &mut Vec<String>,
+        base: &Path,
+        extensions: &[&str],
+    ) -> Result<(), String> {
         if !dir.is_dir() {
             return Ok(());
         }
-        
         let entries = std::fs::read_dir(dir).map_err(|e| format!("Failed to read directory: {}", e))?;
-        
         for entry in entries {
             let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
             let path = entry.path();
-            
             if path.is_dir() {
-                // Skip hidden directories and common non-code directories
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') || 
-                       name == "node_modules" || 
-                       name == ".git" || 
-                       name == "target" ||
-                       name == "dist" {
+                    // Skip hidden + typical build / dependency directories.
+                    if name.starts_with('.')
+                        || name == "node_modules"
+                        || name == ".git"
+                        || name == "target"
+                        || name == "dist"
+                    {
                         continue;
                     }
                 }
-                walk_dir(&path, prompts, base)?;
+                walk(&path, files, base, extensions)?;
             } else if path.is_file() {
-                // Check for prompt file extensions
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if ext == "jinja2" || ext == "prompt" || ext == "j2" {
-                        // Convert to relative path from base
+                    if extensions.iter().any(|e| e.eq_ignore_ascii_case(ext)) {
                         if let Ok(relative) = path.strip_prefix(base) {
-                            if let Some(path_str) = relative.to_str() {
-                                prompts.push(path_str.to_string());
+                            if let Some(s) = relative.to_str() {
+                                files.push(s.to_string());
                             }
                         }
                     }
                 }
             }
         }
-        
         Ok(())
     }
-    
-    walk_dir(&base, &mut prompt_files, &base)?;
-    
-    // Sort alphabetically
-    prompt_files.sort();
-    
-    Ok(prompt_files)
+
+    walk(&base, &mut files, &base, extensions)?;
+    files.sort();
+    Ok(files)
+}
+
+/// List all prompt files (.jinja2, .prompt, .j2) in a directory tree
+#[tauri::command]
+pub async fn list_prompt_files(base_path: String) -> Result<Vec<String>, String> {
+    list_files_with_extensions(&base_path, &["jinja2", "prompt", "j2"])
+}
+
+/// List candidate input data files (.jsonl, .ndjson, .json, .csv, .tsv).
+#[tauri::command]
+pub async fn list_data_files(base_path: String) -> Result<Vec<String>, String> {
+    list_files_with_extensions(&base_path, &["jsonl", "ndjson", "json", "csv", "tsv"])
+}
+
+/// List candidate JSON Schema files (.json — the form lets the user pick).
+#[tauri::command]
+pub async fn list_schema_files(base_path: String) -> Result<Vec<String>, String> {
+    list_files_with_extensions(&base_path, &["json"])
 }
 
 #[cfg(test)]

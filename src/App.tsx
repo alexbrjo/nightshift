@@ -28,23 +28,34 @@ const SECTION_LABELS: Record<Section, string> = {
 };
 
 function getLanguage(filename: string): string | undefined {
+  // Multi-extension files like `prompt.spec.jinja2` → use the FINAL extension.
   const ext = filename.split(".").pop()?.toLowerCase();
   const map: Record<string, string> = {
     js: "javascript",
+    mjs: "javascript",
+    cjs: "javascript",
     ts: "typescript",
     jsx: "jsx",
     tsx: "tsx",
     json: "json",
     jsonl: "json",
+    ndjson: "json",
     md: "markdown",
     markdown: "markdown",
+    mdx: "markdown",
     yaml: "yaml",
     yml: "yaml",
     py: "python",
     rs: "rust",
     html: "html",
+    htm: "html",
     css: "css",
     sh: "bash",
+    bash: "bash",
+    jinja2: "jinja2",
+    jinja: "jinja2",
+    j2: "jinja2",
+    prompt: "jinja2",
   };
   return ext ? map[ext] : undefined;
 }
@@ -59,6 +70,11 @@ export default function App() {
   } | null>(null);
   const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
   const fileContentsRef = useRef(new Map<string, string>());
+  // Per-file disk content captured the first time a file is opened (and after
+  // each save). A path is "dirty" iff its in-memory content differs from this
+  // baseline; the dirty set drives the unsaved-marker in the file tree.
+  const originalContentsRef = useRef(new Map<string, string>());
+  const [dirtyPaths, setDirtyPaths] = useState<Set<string>>(new Set());
 
   // Theme toggle: clicking the moon logo flips between the default lab theme
   // (no attribute) and the midnight theme (data-theme="dark"). Persisted to
@@ -90,13 +106,36 @@ export default function App() {
   ];
 
   const handleFileOpen = useCallback(async (node: FsNode) => {
-    const content = node.content || "";
+    // Prefer the in-memory copy if we already have it — otherwise the user's
+    // unsaved edits would get clobbered every time they revisit a file. The
+    // node.content provided by FileTree is treated as disk truth and seeds
+    // the original-content baseline for dirty detection.
+    const diskContent = node.content || "";
+    const existing = fileContentsRef.current.get(node.path);
+    const content = existing !== undefined ? existing : diskContent;
+
     fileContentsRef.current.set(node.path, content);
+    if (!originalContentsRef.current.has(node.path)) {
+      originalContentsRef.current.set(node.path, diskContent);
+    }
     setActiveFile({
       path: node.path,
       name: node.name,
       content,
       language: getLanguage(node.name),
+    });
+  }, []);
+
+  // Called by FileTree after a successful write_file. Re-baselines the saved
+  // path so the dirty marker disappears.
+  const handleFileSaved = useCallback((path: string) => {
+    const current = fileContentsRef.current.get(path) ?? "";
+    originalContentsRef.current.set(path, current);
+    setDirtyPaths((prev) => {
+      if (!prev.has(path)) return prev;
+      const next = new Set(prev);
+      next.delete(path);
+      return next;
     });
   }, []);
 
@@ -134,6 +173,8 @@ export default function App() {
         {/* FileTree always mounted so folder state persists across section switches */}
         <FileTree
           onFileOpen={handleFileOpen}
+          onFileSaved={handleFileSaved}
+          dirtyPaths={dirtyPaths}
           getActiveContent={(filePath) => fileContentsRef.current.get(filePath || activeFile?.path || "") ?? undefined}
           className={activeSection === "code-editor" ? "" : "hidden"}
         />
@@ -148,11 +189,22 @@ export default function App() {
               language={activeFile.language}
               onChange={(code) => {
                 setActiveFile((prev) => {
-                  if (prev) {
-                    fileContentsRef.current.set(prev.path, code);
-                    return { ...prev, content: code };
-                  }
-                  return prev;
+                  if (!prev) return prev;
+                  fileContentsRef.current.set(prev.path, code);
+                  // Recompute dirty state for this path against its disk
+                  // baseline; exits cleanly if the user typed back to the
+                  // original content.
+                  const original = originalContentsRef.current.get(prev.path) ?? "";
+                  const path = prev.path;
+                  setDirtyPaths((d) => {
+                    const isDirty = code !== original;
+                    if (isDirty === d.has(path)) return d;
+                    const next = new Set(d);
+                    if (isDirty) next.add(path);
+                    else next.delete(path);
+                    return next;
+                  });
+                  return { ...prev, content: code };
                 });
               }}
             />
@@ -164,7 +216,12 @@ export default function App() {
         </main>
 
         <main className={`workspace job-runner-workspace full-width${activeSection === "job-runner" ? "" : " hidden"}`}>
-          <JobRunnerPage />
+          <JobRunnerPage
+            onViewCollection={(collectionId) => {
+              setSelectedCollectionId(collectionId);
+              setActiveSection("collection-viewer");
+            }}
+          />
         </main>
 
         <main className={`workspace full-width collections-page${activeSection === "collection-viewer" ? "" : " hidden"}`}>

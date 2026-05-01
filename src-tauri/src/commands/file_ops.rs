@@ -93,6 +93,58 @@ pub fn rename_path(
     Ok(new_path.strip_prefix(root).unwrap_or(&new_path).to_string_lossy().to_string())
 }
 
+/// Move a file or folder into a different parent directory inside the project.
+/// `target_parent_relative_path` is empty-string for the project root.
+/// Both the source and resolved destination must stay inside the project root.
+#[tauri::command]
+pub fn move_path(
+    state: State<AppState>,
+    source_relative_path: String,
+    target_parent_relative_path: String,
+) -> Result<String, String> {
+    let root = state.root_path.lock().unwrap();
+    let root = root.as_ref().ok_or("No folder opened".to_string())?;
+
+    let source = root.join(&source_relative_path);
+    if !source.starts_with(root) {
+        return Err("Source outside project root".to_string());
+    }
+    if !source.exists() {
+        return Err("Source does not exist".to_string());
+    }
+
+    let target_parent = if target_parent_relative_path.is_empty() {
+        root.clone()
+    } else {
+        root.join(&target_parent_relative_path)
+    };
+    if !target_parent.starts_with(root) {
+        return Err("Target outside project root".to_string());
+    }
+    if !target_parent.is_dir() {
+        return Err("Target parent is not a directory".to_string());
+    }
+
+    let file_name = source.file_name().ok_or("Invalid source path".to_string())?;
+    let dest = target_parent.join(file_name);
+
+    if dest == source {
+        // Already there — nothing to do.
+        return Ok(source_relative_path);
+    }
+    if dest.exists() {
+        return Err(format!("{} already exists in target folder", file_name.to_string_lossy()));
+    }
+
+    // Disallow moving a directory into itself or its descendants.
+    if source.is_dir() && dest.starts_with(&source) {
+        return Err("Cannot move a folder into itself".to_string());
+    }
+
+    fs::rename(&source, &dest).map_err(|e| format!("Failed to move: {}", e))?;
+    Ok(dest.strip_prefix(root).unwrap_or(&dest).to_string_lossy().to_string())
+}
+
 /// Delete a file or folder recursively
 #[tauri::command]
 pub fn delete_path(state: State<AppState>, relative_path: String) -> Result<(), String> {

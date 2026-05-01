@@ -35,6 +35,10 @@ function getParentPath(node: FsNode): string {
   return node.isDir ? node.path : (node.path.lastIndexOf("/") > 0 ? node.path.substring(0, node.path.lastIndexOf("/")) : "");
 }
 
+// Custom MIME type for the drag payload \u2014 keeps us from accepting drags from
+// other tabs/apps and from confusing browser-native file drags.
+const DRAG_MIME = "application/x-nightshift-tree-path";
+
 function TreeNode({
   node,
   depth,
@@ -42,6 +46,10 @@ function TreeNode({
   onContextMenu,
   expandedFolders,
   onToggleExpand,
+  dirtyPaths,
+  onMove,
+  dragOverPath,
+  setDragOverPath,
 }: {
   node: FsNode;
   depth: number;
@@ -49,14 +57,27 @@ function TreeNode({
   onContextMenu: (e: React.MouseEvent, node: FsNode) => void;
   expandedFolders: Set<string>;
   onToggleExpand: (path: string) => void;
+  dirtyPaths: Set<string>;
+  onMove: (sourcePath: string, targetParentPath: string) => void;
+  dragOverPath: string | null;
+  setDragOverPath: (path: string | null) => void;
 }) {
   const expanded = node.isDir ? expandedFolders.has(node.path) : false;
 
+  const handleDragStart = (e: React.DragEvent) => {
+    e.stopPropagation();
+    e.dataTransfer.setData(DRAG_MIME, node.path);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
   if (!node.isDir) {
+    const isDirty = dirtyPaths.has(node.path);
     return (
       <div
-        className="tree-file"
+        className={`tree-file${isDirty ? " dirty" : ""}`}
         style={{ paddingLeft: `${depth * 14 + 16}px` }}
+        draggable={true}
+        onDragStart={handleDragStart}
         onClick={() => onFileClick(node)}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -66,15 +87,44 @@ function TreeNode({
       >
         <span className="file-icon">&#9675;</span>
         <span className="file-name">{node.name}</span>
+        {isDirty && <span className="file-dirty-marker" aria-label="unsaved changes">{"\u25CF"}</span>}
       </div>
     );
   }
 
+  // Folder: drop target lives on the WRAPPER, not the header button \u2014 buttons
+  // can swallow drag events on Webkit and we want the folder's expanded
+  // children area to accept drops too. innermost-wins via stopPropagation.
+  const isDropTarget = dragOverPath === node.path;
   return (
-    <div className="tree-folder">
+    <div
+      className={`tree-folder${isDropTarget ? " drop-target" : ""}`}
+      onDragOver={(e) => {
+        e.preventDefault(); // mark this element as a valid drop target
+        e.stopPropagation();
+        e.dataTransfer.dropEffect = "move";
+        if (dragOverPath !== node.path) setDragOverPath(node.path);
+      }}
+      onDragLeave={(e) => {
+        // Only clear when actually leaving the folder element, not when
+        // moving from header \u2192 child.
+        if (e.currentTarget === e.target && dragOverPath === node.path) {
+          setDragOverPath(null);
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setDragOverPath(null);
+        const source = e.dataTransfer.getData(DRAG_MIME);
+        if (source && source !== node.path) onMove(source, node.path);
+      }}
+    >
       <button
         className="folder-header"
         style={{ paddingLeft: `${depth * 14 + 16}px` }}
+        draggable={true}
+        onDragStart={handleDragStart}
         onClick={() => onToggleExpand(node.path)}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -86,6 +136,7 @@ function TreeNode({
           {expanded ? "\u25BC" : "\u25B6"}
         </span>
         <span className="folder-name">{node.name}</span>
+        {isDropTarget && <span className="drop-target-arrow" aria-hidden="true">{"\u2937"}</span>}
       </button>
       {expanded &&
         node.children?.map((child) => (
@@ -97,6 +148,10 @@ function TreeNode({
             onContextMenu={onContextMenu}
             expandedFolders={expandedFolders}
             onToggleExpand={onToggleExpand}
+            dirtyPaths={dirtyPaths}
+            onMove={onMove}
+            dragOverPath={dragOverPath}
+            setDragOverPath={setDragOverPath}
           />
         ))}
     </div>
@@ -105,19 +160,30 @@ function TreeNode({
 
 type DialogType = "rename" | "newFile" | "newFolder";
 
+// Stable empty fallback so FileTree's `dirtyPaths` prop can be optional
+// without forcing the parent to memoize a new Set on every render.
+const EMPTY_DIRTY: Set<string> = new Set();
+
 export default function FileTree({
   onFileOpen,
+  onFileSaved,
+  dirtyPaths,
   getActiveContent,
   className = "",
 }: {
   onFileOpen: (node: FsNode) => void;
+  onFileSaved?: (path: string) => void;
+  dirtyPaths?: Set<string>;
   getActiveContent: (filePath?: string) => string | undefined;
   className?: string;
 }) {
+  const dirty = dirtyPaths ?? EMPTY_DIRTY;
   const [nodes, setNodes] = useState<FsNode[]>([]);
   const [rootName, setRootName] = useState("");
   const [rootPath, setRootPath] = useState<string | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  // Sentinel value "" represents the project root as a drop target.
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
   const { showToast } = useToast();
 
   const loadExpandedState = useCallback(async (path: string) => {
@@ -340,6 +406,25 @@ export default function FileTree({
     [rootPath, refreshTree],
   );
 
+  // Move a path from `sourcePath` to `targetParentPath` (empty string means
+   // the project root). Refreshes the tree on success so the move is visible.
+  const handleMove = useCallback(
+    async (sourcePath: string, targetParentPath: string) => {
+      if (!rootPath) return;
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        await invoke("move_path", {
+          sourceRelativePath: sourcePath,
+          targetParentRelativePath: targetParentPath,
+        });
+        await refreshTree();
+      } catch (err) {
+        showToast(`Failed to move: ${err}`);
+      }
+    },
+    [rootPath],
+  );
+
   const handleSave = useCallback(
     async (node: FsNode) => {
       if (!rootPath || node.isDir) return;
@@ -348,12 +433,13 @@ export default function FileTree({
         const content = getActiveContent(node.path);
         if (content !== undefined) {
           await invoke("write_file", { relativePath: node.path, content });
+          onFileSaved?.(node.path);
         }
       } catch (err) {
         showToast(`Failed to save: ${err}`);
       }
     },
-    [rootPath, getActiveContent],
+    [rootPath, getActiveContent, onFileSaved],
   );
 
   const handleDialogSubmit = useCallback(
@@ -426,11 +512,27 @@ export default function FileTree({
               {rootName}
             </div>
             <div
-              className="tree-content"
+              className={`tree-content${dragOverPath === "" ? " drop-target-root" : ""}`}
               onContextMenu={(e) => {
                 if (e.target === e.currentTarget) {
                   e.preventDefault();
                 }
+              }}
+              onDragOver={(e) => {
+                if (!e.dataTransfer.types.includes(DRAG_MIME)) return;
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                if (dragOverPath !== "") setDragOverPath("");
+              }}
+              onDragLeave={(e) => {
+                // Only clear when leaving the container itself, not children.
+                if (e.target === e.currentTarget) setDragOverPath(null);
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOverPath(null);
+                const source = e.dataTransfer.getData(DRAG_MIME);
+                if (source) handleMove(source, "");
               }}
             >
               {nodes.map((node) => (
@@ -442,6 +544,10 @@ export default function FileTree({
                   onContextMenu={handleContextMenu}
                   expandedFolders={expandedFolders}
                   onToggleExpand={toggleExpand}
+                  dirtyPaths={dirty}
+                  onMove={handleMove}
+                  dragOverPath={dragOverPath}
+                  setDragOverPath={setDragOverPath}
                 />
               ))}
             </div>

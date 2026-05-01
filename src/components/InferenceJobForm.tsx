@@ -50,37 +50,40 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
   const [formData, setFormData] = useState<JobConfig>(INITIAL_FORM_STATE);
 
   const [promptFiles, setPromptFiles] = useState<string[]>([]);
+  const [dataFiles, setDataFiles] = useState<string[]>([]);
+  const [schemaFiles, setSchemaFiles] = useState<string[]>([]);
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Load prompt files when form is opened
+  // Load prompt / data / schema candidates when the form opens. They all
+  // walk the project tree on the Rust side; the same `basePath` is reused.
   useEffect(() => {
-    if (isOpen) {
-      loadPromptFiles();
-    }
-  }, [isOpen]);
-
-  const loadPromptFiles = async () => {
-    try {
+    if (!isOpen) return;
+    let cancelled = false;
+    (async () => {
       setIsLoadingPrompts(true);
-      // Get current working directory or use a default path
-      const basePath = await invoke<string>("get_root_path");
-      if (basePath) {
-        const prompts = await invoke<string[]>("list_prompt_files", { basePath });
+      try {
+        const basePath = (await invoke<string | null>("get_root_path")) || ".";
+        const [prompts, datas, schemas] = await Promise.all([
+          invoke<string[]>("list_prompt_files", { basePath }).catch(() => []),
+          invoke<string[]>("list_data_files", { basePath }).catch(() => []),
+          invoke<string[]>("list_schema_files", { basePath }).catch(() => []),
+        ]);
+        if (cancelled) return;
         setPromptFiles(prompts);
-      } else {
-        // Fallback to current directory
-        const prompts = await invoke<string[]>("list_prompt_files", { basePath: "." });
-        setPromptFiles(prompts);
+        setDataFiles(datas);
+        setSchemaFiles(schemas);
+      } catch (error) {
+        console.error("Failed to load project files:", error);
+      } finally {
+        if (!cancelled) setIsLoadingPrompts(false);
       }
-    } catch (error) {
-      console.error("Failed to load prompt files:", error);
-      setPromptFiles([]);
-    } finally {
-      setIsLoadingPrompts(false);
-    }
-  };
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen]);
 
   // Reset form when opened using useEffect to avoid infinite re-renders
   useEffect(() => {
@@ -255,24 +258,17 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
         {isLoadingPrompts ? (
           <div className="loading-prompts">Loading prompts...</div>
         ) : promptFiles.length > 0 ? (
-          <>
-            <select
-              id="prompt-file"
-              value={formData.promptFile}
-              onChange={(e) => updateField("promptFile", e.target.value)}
-              className={errors.promptFile ? "error" : ""}
-            >
-              <option value="">Select a prompt file...</option>
-              {promptFiles.map((file) => (
-                <option key={file} value={file}>
-                  {file}
-                </option>
-              ))}
-            </select>
-            <div className="prompt-hint">
-              Found {promptFiles.length} prompt file{promptFiles.length !== 1 ? 's' : ''} in your project
-            </div>
-          </>
+          <select
+            id="prompt-file"
+            value={formData.promptFile}
+            onChange={(e) => updateField("promptFile", e.target.value)}
+            className={errors.promptFile ? "error" : ""}
+          >
+            <option value="">Select a prompt file...</option>
+            {promptFiles.map((file) => (
+              <option key={file} value={file}>{file}</option>
+            ))}
+          </select>
         ) : (
           <>
             <input
@@ -284,7 +280,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
               className={errors.promptFile ? "error" : ""}
             />
             <div className="prompt-hint">
-              No prompt files found. Enter path manually or add .jinja2/.prompt files to your project
+              No prompt files found — add .jinja2 / .prompt files to your project.
             </div>
           </>
         )}
@@ -342,17 +338,16 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
         <div className="form-row">
           <div className="form-group">
             <label htmlFor="max-tokens">Max Tokens</label>
-            <div className="number-input">
-              <button type="button" onClick={() => updateField("maxTokens", Math.max(1, (formData.maxTokens || 1024) - 256))}>-</button>
-              <input
-                id="max-tokens"
-                type="number"
-                value={formData.maxTokens || ""}
-                onChange={(e) => updateField("maxTokens", e.target.value ? parseInt(e.target.value) : undefined)}
-                placeholder="1024"
-              />
-              <button type="button" onClick={() => updateField("maxTokens", (formData.maxTokens || 1024) + 256)}>+</button>
-            </div>
+            <select
+              id="max-tokens"
+              value={formData.maxTokens?.toString() || ""}
+              onChange={(e) => updateField("maxTokens", e.target.value ? parseInt(e.target.value) : undefined)}
+            >
+              <option value="">Default</option>
+              {[256, 512, 1024, 2048, 4096, 8192, 16384].map((n) => (
+                <option key={n} value={n}>{n.toLocaleString()}</option>
+              ))}
+            </select>
           </div>
 
           <div className="form-group">
@@ -403,18 +398,31 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
           {formData.outputMode === "JSON Schema" && (
             <div className="form-group">
               <label htmlFor="json-schema-file">Schema File</label>
-              <div className="file-picker-row">
-                <input
+              {schemaFiles.length > 0 ? (
+                <select
                   id="json-schema-file"
-                  type="text"
                   value={formData.jsonSchemaFile || ""}
                   onChange={(e) => updateField("jsonSchemaFile", e.target.value)}
-                  placeholder="path/to/schema.json"
-                />
-                <button type="button" className="btn-secondary" onClick={handleBrowseSchemaFile}>
-                  Browse
-                </button>
-              </div>
+                >
+                  <option value="">Select a schema file...</option>
+                  {schemaFiles.map((file) => (
+                    <option key={file} value={file}>{file}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="file-picker-row">
+                  <input
+                    id="json-schema-file"
+                    type="text"
+                    value={formData.jsonSchemaFile || ""}
+                    onChange={(e) => updateField("jsonSchemaFile", e.target.value)}
+                    placeholder="path/to/schema.json"
+                  />
+                  <button type="button" className="btn-secondary" onClick={handleBrowseSchemaFile}>
+                    Browse
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -454,19 +462,33 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
 
           <div className="form-group">
             <label htmlFor="data-source">Data Source *</label>
-            <div className="file-picker-row">
-              <input
+            {dataFiles.length > 0 ? (
+              <select
                 id="data-source"
-                type="text"
                 value={formData.dataSource}
                 onChange={(e) => updateField("dataSource", e.target.value)}
-                placeholder="path/to/data.jsonl"
                 className={errors.dataSource ? "error" : ""}
-              />
-              <button type="button" className="btn-secondary" onClick={handleBrowseDataSource}>
-                Browse
-              </button>
-            </div>
+              >
+                <option value="">Select a data file...</option>
+                {dataFiles.map((file) => (
+                  <option key={file} value={file}>{file}</option>
+                ))}
+              </select>
+            ) : (
+              <div className="file-picker-row">
+                <input
+                  id="data-source"
+                  type="text"
+                  value={formData.dataSource}
+                  onChange={(e) => updateField("dataSource", e.target.value)}
+                  placeholder="path/to/data.jsonl"
+                  className={errors.dataSource ? "error" : ""}
+                />
+                <button type="button" className="btn-secondary" onClick={handleBrowseDataSource}>
+                  Browse
+                </button>
+              </div>
+            )}
             {errors.dataSource && <span className="error-message">{errors.dataSource}</span>}
           </div>
         </div>

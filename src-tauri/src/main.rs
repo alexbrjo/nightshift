@@ -56,6 +56,7 @@ fn main() {
             get_root_path,
             read_file,
             rename_path,
+            move_path,
             delete_path,
             copy_file,
             write_file,
@@ -87,6 +88,8 @@ fn main() {
             subscribe_to_job_status,
             export_job_to_yaml,
             list_prompt_files,
+            list_data_files,
+            list_schema_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");

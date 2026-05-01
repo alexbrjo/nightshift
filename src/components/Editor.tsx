@@ -1,12 +1,17 @@
 import { useRef, useEffect } from "react";
 import { EditorView, basicSetup } from "codemirror";
 import { EditorState } from "@codemirror/state";
+import { StreamLanguage } from "@codemirror/language";
 import { javascript } from "@codemirror/lang-javascript";
 import { python } from "@codemirror/lang-python";
 import { html } from "@codemirror/lang-html";
 import { css } from "@codemirror/lang-css";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { yaml as yamlMode } from "@codemirror/legacy-modes/mode/yaml";
+import { rust as rustMode } from "@codemirror/legacy-modes/mode/rust";
+import { shell as shellMode } from "@codemirror/legacy-modes/mode/shell";
+import { jinja2 as jinja2Mode } from "@codemirror/legacy-modes/mode/jinja2";
 import { oneDark } from "@codemirror/theme-one-dark";
 
 interface EditorProps {
@@ -17,11 +22,48 @@ interface EditorProps {
 
 function getLanguageExtension(lang?: string) {
   if (!lang) return [];
-  const l = lang.toLowerCase();
-  if (["js"].includes(l)) return [javascript()];
-  if (["json"].includes(l)) return [json()];
-  if (["markdown", "md", "mdx"].includes(l)) return [markdown()];
-  return [];
+  switch (lang.toLowerCase()) {
+    case "javascript":
+    case "js":
+    case "jsx":
+      return [javascript({ jsx: true })];
+    case "typescript":
+    case "ts":
+      return [javascript({ typescript: true })];
+    case "tsx":
+      return [javascript({ typescript: true, jsx: true })];
+    case "python":
+    case "py":
+      return [python()];
+    case "html":
+    case "htm":
+      return [html()];
+    case "css":
+      return [css()];
+    case "json":
+    case "jsonl":
+      return [json()];
+    case "markdown":
+    case "md":
+    case "mdx":
+      return [markdown()];
+    case "yaml":
+    case "yml":
+      return [StreamLanguage.define(yamlMode)];
+    case "rust":
+    case "rs":
+      return [StreamLanguage.define(rustMode)];
+    case "bash":
+    case "sh":
+    case "shell":
+      return [StreamLanguage.define(shellMode)];
+    case "jinja":
+    case "jinja2":
+    case "j2":
+      return [StreamLanguage.define(jinja2Mode)];
+    default:
+      return [];
+  }
 }
 
 export default function Editor({ code, language, onChange }: EditorProps) {

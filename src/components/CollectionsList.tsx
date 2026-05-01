@@ -84,7 +84,6 @@ export default function CollectionsList({ selectedId, onSelectCollection }: Coll
                 <div className="collection-name">{c.name}</div>
                 <div className="collection-meta">
                   <span>#{c.id}</span>
-                  <span>Job {c.job_id}</span>
                   {date && <span>{date}</span>}
                 </div>
               </li>

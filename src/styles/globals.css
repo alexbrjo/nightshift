@@ -368,6 +368,46 @@ body {
   text-overflow: ellipsis;
 }
 
+.file-dirty-marker {
+  margin-left: auto;
+  padding-right: 4px;
+  color: #eab308; /* amber-500: a clear unsaved-edit yellow */
+  font-size: 10px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.tree-file.dirty .file-name {
+  font-style: italic;
+}
+
+/* Drag-and-drop drop targets */
+.tree-folder.drop-target > .folder-header {
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.tree-folder.drop-target > .folder-header .folder-name {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.drop-target-arrow {
+  margin-left: auto;
+  padding-right: 8px;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.tree-content.drop-target-root {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+
 .tree-file:hover .file-icon,
 .tree-file:hover .file-name,
 .folder-header:hover .expand-icon,
