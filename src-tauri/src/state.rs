@@ -1,7 +1,7 @@
-use std::path::{PathBuf};
+use crate::job_executor::JobExecutor;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use tokio::sync::Mutex as TokioMutex;
-use crate::job_executor::JobExecutor;
 
 /// Application state tracking the currently opened folder
 pub struct AppState {

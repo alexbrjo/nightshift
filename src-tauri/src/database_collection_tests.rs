@@ -1,11 +1,11 @@
 #[cfg(test)]
 mod collection_commands_tests {
     use crate::database::{
-        delete_collection_item, export_collection_csv, export_collection_jsonl,
+        delete_collection_item_by_id, export_collection_csv_by_id, export_collection_jsonl_by_id,
         format_csv_value, DatabaseState,
     };
-    use std::fs;
     use std::env;
+    use std::fs;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex, OnceLock};
     use uuid::Uuid;
@@ -27,9 +27,7 @@ mod collection_commands_tests {
 
         fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
 
-        let db_state = DatabaseState::new(&project_dir)
-            .await
-            .expect("Failed to create database");
+        let db_state = DatabaseState::new(&project_dir).await.expect("Failed to create database");
 
         (db_state, project_dir)
     }
@@ -66,18 +64,17 @@ mod collection_commands_tests {
             .await
             .expect("Failed to get job ID");
 
-        let collection_id: i64 = sqlx::query_scalar(
-            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id"
-        )
-        .bind(job_id)
-        .bind("test_collection")
-        .fetch_one(&state.pool())
-        .await
-        .expect("Failed to create collection");
+        let collection_id: i64 =
+            sqlx::query_scalar("INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id")
+                .bind(job_id)
+                .bind("test_collection")
+                .fetch_one(&state.pool())
+                .await
+                .expect("Failed to create collection");
 
         // Add an item
         let item_id: i64 = sqlx::query_scalar(
-            "INSERT INTO collection_items (collection_id, data) VALUES (?, ?) RETURNING id"
+            "INSERT INTO collection_items (collection_id, data) VALUES (?, ?) RETURNING id",
         )
         .bind(collection_id)
         .bind(r#"{"key": "value"}"#)
@@ -86,7 +83,7 @@ mod collection_commands_tests {
         .expect("Failed to insert item");
 
         // Delete the item using the command
-        let result = delete_collection_item(state, item_id).await;
+        let result = delete_collection_item_by_id(&state.pool(), item_id).await;
         assert!(result.is_ok(), "Delete should succeed: {:?}", result.err());
         assert!(result.unwrap(), "Should report that a row was deleted");
 
@@ -106,7 +103,7 @@ mod collection_commands_tests {
         let (state, project_dir) = create_test_database().await;
 
         // Try to delete a non-existent item
-        let result = delete_collection_item(state, 99999).await;
+        let result = delete_collection_item_by_id(&state.pool(), 99999).await;
         assert!(result.is_ok(), "Delete should succeed even for non-existent item");
         assert!(!result.unwrap(), "Should report that no row was deleted");
 
@@ -141,19 +138,18 @@ mod collection_commands_tests {
             .await
             .expect("Failed to get job ID");
 
-        let collection_id: i64 = sqlx::query_scalar(
-            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id"
-        )
-        .bind(job_id)
-        .bind("test_collection")
-        .fetch_one(&state.pool())
-        .await
-        .expect("Failed to create collection");
+        let collection_id: i64 =
+            sqlx::query_scalar("INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id")
+                .bind(job_id)
+                .bind("test_collection")
+                .fetch_one(&state.pool())
+                .await
+                .expect("Failed to create collection");
 
         // Add items with different data
         let item1_data = r#"{"name": "Alice", "age": 30}"#;
         let item2_data = r#"{"name": "Bob", "age": 25}"#;
-        
+
         sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
             .bind(collection_id)
             .bind(item1_data)
@@ -169,25 +165,25 @@ mod collection_commands_tests {
             .expect("Failed to insert item 2");
 
         // Export as JSONL
-        let result = export_collection_jsonl(state, collection_id).await;
+        let result = export_collection_jsonl_by_id(&state.pool(), collection_id).await;
         assert!(result.is_ok(), "Export should succeed: {:?}", result.err());
-        
+
         let jsonl_content = result.unwrap();
         let lines: Vec<&str> = jsonl_content.lines().collect();
-        
+
         assert_eq!(lines.len(), 2, "Should have 2 lines");
-        
+
         // Parse and verify each line
         let parsed1: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
         let parsed2: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
-        
+
         assert!(parsed1.get("data").is_some(), "First item should have data field");
         assert!(parsed2.get("data").is_some(), "Second item should have data field");
-        
+
         // Verify order (should be by created_at ASC)
         let data1 = parsed1.get("data").unwrap();
         let data2 = parsed2.get("data").unwrap();
-        
+
         assert_eq!(data1.get("name").and_then(|v| v.as_str()), Some("Alice"));
         assert_eq!(data2.get("name").and_then(|v| v.as_str()), Some("Bob"));
 
@@ -222,19 +218,18 @@ mod collection_commands_tests {
             .await
             .expect("Failed to get job ID");
 
-        let collection_id: i64 = sqlx::query_scalar(
-            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id"
-        )
-        .bind(job_id)
-        .bind("empty_collection")
-        .fetch_one(&state.pool())
-        .await
-        .expect("Failed to create collection");
+        let collection_id: i64 =
+            sqlx::query_scalar("INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id")
+                .bind(job_id)
+                .bind("empty_collection")
+                .fetch_one(&state.pool())
+                .await
+                .expect("Failed to create collection");
 
         // Export empty collection
-        let result = export_collection_jsonl(state, collection_id).await;
+        let result = export_collection_jsonl_by_id(&state.pool(), collection_id).await;
         assert!(result.is_ok(), "Export should succeed: {:?}", result.err());
-        
+
         let jsonl_content = result.unwrap();
         assert_eq!(jsonl_content, "", "Empty collection should return empty string");
 
@@ -246,7 +241,7 @@ mod collection_commands_tests {
         let (state, project_dir) = create_test_database().await;
 
         // Try to export non-existent collection
-        let result = export_collection_jsonl(state, 99999).await;
+        let result = export_collection_jsonl_by_id(&state.pool(), 99999).await;
         assert!(result.is_err(), "Export should fail for non-existent collection");
         assert!(result.unwrap_err().contains("Collection not found"));
 
@@ -281,14 +276,13 @@ mod collection_commands_tests {
             .await
             .expect("Failed to get job ID");
 
-        let collection_id: i64 = sqlx::query_scalar(
-            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id"
-        )
-        .bind(job_id)
-        .bind("test_collection")
-        .fetch_one(&state.pool())
-        .await
-        .expect("Failed to create collection");
+        let collection_id: i64 =
+            sqlx::query_scalar("INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id")
+                .bind(job_id)
+                .bind("test_collection")
+                .fetch_one(&state.pool())
+                .await
+                .expect("Failed to create collection");
 
         // Add items with different data
         sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
@@ -306,14 +300,14 @@ mod collection_commands_tests {
             .expect("Failed to insert item 2");
 
         // Export as CSV
-        let result = export_collection_csv(state, collection_id).await;
+        let result = export_collection_csv_by_id(&state.pool(), collection_id).await;
         assert!(result.is_ok(), "Export should succeed: {:?}", result.err());
-        
+
         let csv_content = result.unwrap();
         let lines: Vec<&str> = csv_content.lines().collect();
-        
+
         assert_eq!(lines.len(), 3, "Should have header + 2 data rows");
-        
+
         // Verify header contains expected columns (order may vary due to BTreeSet)
         let header = lines[0];
         assert!(header.contains("name"), "Header should contain 'name' column");
@@ -350,14 +344,13 @@ mod collection_commands_tests {
             .await
             .expect("Failed to get job ID");
 
-        let collection_id: i64 = sqlx::query_scalar(
-            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id"
-        )
-        .bind(job_id)
-        .bind("test_collection")
-        .fetch_one(&state.pool())
-        .await
-        .expect("Failed to create collection");
+        let collection_id: i64 =
+            sqlx::query_scalar("INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id")
+                .bind(job_id)
+                .bind("test_collection")
+                .fetch_one(&state.pool())
+                .await
+                .expect("Failed to create collection");
 
         // Add item with special characters (comma, quotes, newline)
         sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
@@ -368,9 +361,9 @@ mod collection_commands_tests {
             .expect("Failed to insert item");
 
         // Export as CSV
-        let result = export_collection_csv(state, collection_id).await;
+        let result = export_collection_csv_by_id(&state.pool(), collection_id).await;
         assert!(result.is_ok(), "Export should succeed: {:?}", result.err());
-        
+
         let csv_content = result.unwrap();
         // Should contain properly escaped quotes
         assert!(csv_content.contains("\"\""), "Should escape quotes with double quotes");
@@ -406,19 +399,18 @@ mod collection_commands_tests {
             .await
             .expect("Failed to get job ID");
 
-        let collection_id: i64 = sqlx::query_scalar(
-            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id"
-        )
-        .bind(job_id)
-        .bind("empty_collection")
-        .fetch_one(&state.pool())
-        .await
-        .expect("Failed to create collection");
+        let collection_id: i64 =
+            sqlx::query_scalar("INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id")
+                .bind(job_id)
+                .bind("empty_collection")
+                .fetch_one(&state.pool())
+                .await
+                .expect("Failed to create collection");
 
         // Export empty collection
-        let result = export_collection_csv(state, collection_id).await;
+        let result = export_collection_csv_by_id(&state.pool(), collection_id).await;
         assert!(result.is_ok(), "Export should succeed: {:?}", result.err());
-        
+
         let csv_content = result.unwrap();
         assert_eq!(csv_content, "", "Empty collection should return empty string");
 
@@ -430,7 +422,7 @@ mod collection_commands_tests {
         let (state, project_dir) = create_test_database().await;
 
         // Try to export non-existent collection
-        let result = export_collection_csv(state, 99999).await;
+        let result = export_collection_csv_by_id(&state.pool(), 99999).await;
         assert!(result.is_err(), "Export should fail for non-existent collection");
         assert!(result.unwrap_err().contains("Collection not found"));
 

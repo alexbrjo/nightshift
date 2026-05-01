@@ -88,16 +88,18 @@ mod tests {
         let temp_dir = env::temp_dir();
         let unique_id = Uuid::new_v4().to_string();
         let test_project_dir = temp_dir.join(format!("nightshift_expand_test_{}", unique_id));
-        
+
         // Create the directory structure
         fs::create_dir_all(&test_project_dir).unwrap();
 
         let paths = vec!["src".to_string(), "src/components".to_string()];
-        
-        let result = save_expanded_state(test_project_dir.to_string_lossy().to_string(), paths.clone());
+
+        let result =
+            save_expanded_state(test_project_dir.to_string_lossy().to_string(), paths.clone());
         assert!(result.is_ok());
 
-        let loaded_paths = load_expanded_state(test_project_dir.to_string_lossy().to_string()).unwrap();
+        let loaded_paths =
+            load_expanded_state(test_project_dir.to_string_lossy().to_string()).unwrap();
         assert_eq!(loaded_paths, paths);
 
         // Cleanup
@@ -109,7 +111,7 @@ mod tests {
         let temp_dir = env::temp_dir();
         let unique_id = Uuid::new_v4().to_string();
         let test_project_dir = temp_dir.join(format!("nightshift_no_expand_test_{}", unique_id));
-        
+
         fs::create_dir_all(&test_project_dir).unwrap();
 
         let paths = load_expanded_state(test_project_dir.to_string_lossy().to_string()).unwrap();

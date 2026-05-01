@@ -1,12 +1,11 @@
 /// Sanitize a filename by removing invalid characters
-/// 
-/// Returns an error if:
-/// - The name contains null bytes or ".." sequence
-/// - The name is empty after sanitization
 pub fn sanitize_name(name: &str) -> Result<String, String> {
     let sanitized = name.replace('\0', "");
     if sanitized.contains("..") || sanitized != name && name.contains('\0') {
         return Err("Invalid name: contains null bytes or \"..\" sequence".to_string());
+    }
+    if sanitized.contains('/') || sanitized.contains('\\') {
+        return Err("Invalid name: contains path separators".to_string());
     }
     if sanitized.is_empty() {
         return Err("Invalid name: empty after sanitization".to_string());
@@ -28,6 +27,12 @@ mod tests {
         assert!(sanitize_name("foo/../bar").is_err());
         assert!(sanitize_name("..").is_err());
         assert!(sanitize_name("foo..bar").is_err()); // ".." anywhere is rejected
+    }
+
+    #[test]
+    fn sanitize_name_rejects_path_separators() {
+        assert!(sanitize_name("foo/bar").is_err());
+        assert!(sanitize_name("foo\\bar").is_err());
     }
 
     #[test]

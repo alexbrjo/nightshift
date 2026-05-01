@@ -71,6 +71,28 @@ pub struct InferenceJobInput {
     pub json_schema_file: Option<String>,
 }
 
+fn validate_inference_job_input(input: &InferenceJobInput) -> Result<(), String> {
+    if input.name.trim().is_empty() {
+        return Err("Job name cannot be empty".to_string());
+    }
+
+    if input.samples <= 0 {
+        return Err("Number of samples must be greater than 0".to_string());
+    }
+
+    if url::Url::parse(&input.server_url).is_err() {
+        return Err(format!("Invalid server URL: {}", input.server_url));
+    }
+
+    if let Some(ref pre_render_url) = input.pre_render_url {
+        if url::Url::parse(pre_render_url).is_err() {
+            return Err(format!("Invalid pre-render URL: {}", pre_render_url));
+        }
+    }
+
+    Ok(())
+}
+
 /// Database connection state.
 ///
 /// The pool is held behind an `Arc<RwLock<...>>` so it can be hot-swapped when
@@ -93,9 +115,7 @@ impl DatabaseState {
 
         // If start_path is a file, get its parent
         if current.is_file() {
-            current = current.parent()
-                .ok_or("Path has no parent directory")?
-                .to_path_buf();
+            current = current.parent().ok_or("Path has no parent directory")?.to_path_buf();
         }
 
         // Walk up the directory tree looking for .nightshift
@@ -137,18 +157,42 @@ impl DatabaseState {
         nightshift_dir.join("nightshift.db")
     }
 
-    /// Resolve project root and creating `.nightshift/` if it doesn't already
-    /// exist anywhere up the tree from `start_path`. The returned path is the
-    /// directory that owns the `.nightshift/` folder.
+    /// Resolve project root for `start_path`. The opened folder must be the
+    /// project root itself: either it already contains `.nightshift/`, or no
+    /// ancestor does (in which case `.nightshift/` is initialized there).
+    /// Opening a subfolder of an existing project is rejected so that the
+    /// app's notion of the project root and the database's never diverge.
     pub async fn ensure_project_root<P: AsRef<Path>>(start_path: P) -> Result<PathBuf, String> {
-        if let Ok(found) = Self::find_project_root(start_path.as_ref()) {
-            return Ok(found);
-        }
-        // No `.nightshift` exists upward — create one at start_path.
         let mut root = start_path.as_ref().to_path_buf();
         if root.is_file() {
             root = root.parent().ok_or("Path has no parent directory")?.to_path_buf();
         }
+
+        let here = root.join(".nightshift");
+        if here.exists() && here.is_dir() {
+            return Ok(root);
+        }
+
+        // No `.nightshift/` here. If an ancestor has one, the user opened a
+        // subfolder of an existing project — refuse and tell them where the
+        // real root is.
+        let mut cursor = root.clone();
+        while let Some(parent) = cursor.parent() {
+            if parent == cursor {
+                break;
+            }
+            let ancestor_marker = parent.join(".nightshift");
+            if ancestor_marker.exists() && ancestor_marker.is_dir() {
+                return Err(format!(
+                    "{} is inside an existing Nightshift project at {}. Open the project root directly.",
+                    root.display(),
+                    parent.display()
+                ));
+            }
+            cursor = parent.to_path_buf();
+        }
+
+        // No `.nightshift/` here or above — initialize a fresh project here.
         tokio::fs::create_dir_all(root.join(".nightshift"))
             .await
             .map_err(|e| format!("Failed to create .nightshift directory: {}", e))?;
@@ -161,14 +205,20 @@ impl DatabaseState {
         let db_path = Self::get_database_path(project_root);
 
         if let Some(parent) = db_path.parent() {
-            tokio::fs::create_dir_all(parent).await
+            tokio::fs::create_dir_all(parent)
+                .await
                 .map_err(|e| sqlx::Error::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
         }
 
-        eprintln!("Project root: {}", project_root.display());
-        eprintln!("Connecting to database at: {}", db_path.display());
-        let connection_string = format!("file:{}?mode=rwc",
-            db_path.display().to_string().replace(' ', "%20").replace('#', "%23"));
+        tracing::info!(
+            project_root = %project_root.display(),
+            db_path = %db_path.display(),
+            "opening project database"
+        );
+        let connection_string = format!(
+            "file:{}?mode=rwc",
+            db_path.display().to_string().replace(' ', "%20").replace('#', "%23")
+        );
         let pool = SqlitePool::connect(&connection_string).await?;
 
         Self::run_migrations(&pool).await?;
@@ -246,11 +296,17 @@ impl DatabaseState {
         .execute(pool)
         .await?;
 
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_inference_jobs_status ON inference_jobs(status)")
-            .execute(pool).await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_inference_jobs_status ON inference_jobs(status)",
+        )
+        .execute(pool)
+        .await?;
         sqlx::query("DROP INDEX IF EXISTS idx_collections_job_id").execute(pool).await?;
-        sqlx::query("CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_job_id ON collections(job_id)")
-            .execute(pool).await?;
+        sqlx::query(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_job_id ON collections(job_id)",
+        )
+        .execute(pool)
+        .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_collection_items_collection_id ON collection_items(collection_id)")
             .execute(pool).await?;
 
@@ -310,15 +366,17 @@ impl DatabaseState {
             return Ok(());
         }
 
-        let new_pool = Self::open_pool(&project_root)
-            .await
-            .map_err(|e| format!("Failed to open database for {}: {}", project_root.display(), e))?;
+        let new_pool = Self::open_pool(&project_root).await.map_err(|e| {
+            format!("Failed to open database for {}: {}", project_root.display(), e)
+        })?;
 
         let old_pool = {
             let mut pool = self.pool.write().unwrap();
             std::mem::replace(&mut *pool, new_pool)
         };
-        tokio::spawn(async move { old_pool.close().await; });
+        tokio::spawn(async move {
+            old_pool.close().await;
+        });
 
         *self.project_root.lock().unwrap() = project_root;
         Ok(())
@@ -337,8 +395,8 @@ mod collection_commands_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::env;
+    use std::fs;
     use std::sync::{Arc, Mutex, OnceLock};
     use uuid::Uuid;
 
@@ -439,6 +497,46 @@ mod tests {
         fs::remove_dir_all(&project_dir).ok();
     }
 
+    #[tokio::test]
+    async fn ensure_project_root_uses_self_when_marker_present() {
+        let _guard = get_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let project_dir = env::temp_dir().join(format!("epr_self_{}", Uuid::new_v4()));
+        fs::create_dir_all(project_dir.join(".nightshift")).unwrap();
+
+        let result = DatabaseState::ensure_project_root(&project_dir).await;
+        assert_eq!(result.unwrap(), project_dir);
+
+        fs::remove_dir_all(&project_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn ensure_project_root_initializes_when_no_marker_anywhere() {
+        let _guard = get_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let project_dir = env::temp_dir().join(format!("epr_init_{}", Uuid::new_v4()));
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let result = DatabaseState::ensure_project_root(&project_dir).await;
+        assert_eq!(result.as_ref().unwrap(), &project_dir);
+        assert!(project_dir.join(".nightshift").is_dir());
+
+        fs::remove_dir_all(&project_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn ensure_project_root_rejects_subfolder_of_existing_project() {
+        let _guard = get_test_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let project_dir = env::temp_dir().join(format!("epr_sub_{}", Uuid::new_v4()));
+        let sub = project_dir.join("nested").join("deep");
+        fs::create_dir_all(project_dir.join(".nightshift")).unwrap();
+        fs::create_dir_all(&sub).unwrap();
+
+        let err = DatabaseState::ensure_project_root(&sub).await.unwrap_err();
+        assert!(err.contains("inside an existing Nightshift project"), "got: {err}");
+        assert!(!sub.join(".nightshift").exists(), "should not create marker in subfolder");
+
+        fs::remove_dir_all(&project_dir).ok();
+    }
+
     #[test]
     fn test_get_database_path_returns_correct_location() {
         let temp_dir = env::temp_dir();
@@ -459,6 +557,38 @@ mod tests {
         assert_eq!(db_path, project_dir.join(".nightshift").join("nightshift.db"));
     }
 
+    fn valid_job_input() -> InferenceJobInput {
+        InferenceJobInput {
+            name: "test_job".to_string(),
+            prompt_file: "prompt.jinja2".to_string(),
+            data_source: "data.jsonl".to_string(),
+            provider: "local".to_string(),
+            model: "test-model".to_string(),
+            server_url: "http://localhost:1234".to_string(),
+            output_mode: "Unstructured".to_string(),
+            temperature: None,
+            max_tokens: None,
+            thinking_budget: None,
+            samples: 1,
+            strategy: "single".to_string(),
+            pre_render_url: None,
+            pre_render_timeout: None,
+            pre_render_body: None,
+            json_schema_file: None,
+        }
+    }
+
+    #[test]
+    fn test_validate_inference_job_input_rejects_invalid_urls() {
+        let mut invalid_server = valid_job_input();
+        invalid_server.server_url = "not a url".to_string();
+        assert!(validate_inference_job_input(&invalid_server).is_err());
+
+        let mut invalid_pre_render = valid_job_input();
+        invalid_pre_render.pre_render_url = Some("not a url".to_string());
+        assert!(validate_inference_job_input(&invalid_pre_render).is_err());
+    }
+
     #[tokio::test]
     async fn test_foreign_key_constraints_are_enabled() {
         // Acquire the global lock to prevent concurrent database operations
@@ -473,9 +603,7 @@ mod tests {
         fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
 
         // Create database
-        let pool = DatabaseState::new(&project_dir)
-            .await
-            .expect("Failed to create database");
+        let pool = DatabaseState::new(&project_dir).await.expect("Failed to create database");
 
         // Test that foreign key constraints are enforced
         // First, insert a parent record
@@ -504,21 +632,25 @@ mod tests {
             .expect("Failed to get job ID");
 
         // Try to insert a collection with invalid job_id (should fail due to FK constraint)
-        let result = sqlx::query(
-            "INSERT INTO collections (job_id, name) VALUES (?, ?)"
-        )
-        .bind(99999) // Non-existent job ID
-        .bind("test_collection")
-        .execute(&pool.pool())
-        .await;
+        let result = sqlx::query("INSERT INTO collections (job_id, name) VALUES (?, ?)")
+            .bind(99999) // Non-existent job ID
+            .bind("test_collection")
+            .execute(&pool.pool())
+            .await;
 
         // Should fail because foreign key constraint is enforced
-        assert!(result.is_err(), "Foreign key constraint should prevent inserting collection with invalid job_id");
+        assert!(
+            result.is_err(),
+            "Foreign key constraint should prevent inserting collection with invalid job_id"
+        );
 
         let err = result.unwrap_err();
-        assert!(err.to_string().contains("FOREIGN KEY constraint failed") ||
-                err.to_string().contains("foreign key"),
-            "Error should mention foreign key constraint: {}", err);
+        assert!(
+            err.to_string().contains("FOREIGN KEY constraint failed")
+                || err.to_string().contains("foreign key"),
+            "Error should mention foreign key constraint: {}",
+            err
+        );
 
         // Cleanup
         sqlx::query("DELETE FROM inference_jobs").execute(&pool.pool()).await.ok();
@@ -539,9 +671,7 @@ mod tests {
         fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
 
         // Create database
-        let pool = DatabaseState::new(&project_dir)
-            .await
-            .expect("Failed to create database");
+        let pool = DatabaseState::new(&project_dir).await.expect("Failed to create database");
 
         // Insert first job with name "unique_test_job"
         let result1 = sqlx::query(
@@ -583,10 +713,13 @@ mod tests {
         assert!(result2.is_err(), "UNIQUE constraint should prevent duplicate job names");
 
         let err = result2.unwrap_err();
-        assert!(err.to_string().contains("UNIQUE") ||
-                err.to_string().contains("unique") ||
-                err.to_string().contains("constraint"),
-            "Error should mention unique constraint: {}", err);
+        assert!(
+            err.to_string().contains("UNIQUE")
+                || err.to_string().contains("unique")
+                || err.to_string().contains("constraint"),
+            "Error should mention unique constraint: {}",
+            err
+        );
 
         // Cleanup
         sqlx::query("DELETE FROM inference_jobs").execute(&pool.pool()).await.ok();
@@ -607,9 +740,7 @@ mod tests {
         fs::create_dir_all(&nightshift_dir).expect("Failed to create test directory");
 
         // Create database
-        let pool = DatabaseState::new(&project_dir)
-            .await
-            .expect("Failed to create database");
+        let pool = DatabaseState::new(&project_dir).await.expect("Failed to create database");
 
         // Query sqlite_master to check if the index exists
         let index_exists: bool = sqlx::query_scalar(
@@ -632,28 +763,13 @@ pub async fn create_inference_job(
     state: State<'_, DatabaseState>,
     input: InferenceJobInput,
 ) -> Result<i64, String> {
-    // Validate input
-    if input.name.trim().is_empty() {
-        return Err("Job name cannot be empty".to_string());
-    }
+    validate_inference_job_input(&input)?;
 
-    if input.samples <= 0 {
-        return Err("Number of samples must be greater than 0".to_string());
-    }
-
-    // Validate server_url
-    if url::Url::parse(&input.server_url).is_err() {
-        return Err(format!("Invalid server URL: {}", input.server_url));
-    }
-
-    // Validate pre_render_url if present
-    if let Some(ref pre_render_url) = input.pre_render_url {
-        if url::Url::parse(pre_render_url).is_err() {
-            return Err(format!("Invalid pre-render URL: {}", pre_render_url));
-        }
-    }
-
-    tracing::info!("Creating inference job: {} with prompt file: {}", input.name, input.prompt_file);
+    tracing::info!(
+        "Creating inference job: {} with prompt file: {}",
+        input.name,
+        input.prompt_file
+    );
 
     let result = sqlx::query(
         r#"
@@ -688,7 +804,10 @@ pub async fn create_inference_job(
 
     match result {
         Ok(result) => {
-            tracing::info!("Successfully created inference job with ID: {}", result.last_insert_rowid());
+            tracing::info!(
+                "Successfully created inference job with ID: {}",
+                result.last_insert_rowid()
+            );
             Ok(result.last_insert_rowid())
         }
         Err(e) => {
@@ -697,7 +816,10 @@ pub async fn create_inference_job(
 
             // Check for unique constraint violation
             if e.to_string().contains("UNIQUE constraint failed") {
-                return Err(format!("A job with the name '{}' already exists. Please choose a different name.", input.name));
+                return Err(format!(
+                    "A job with the name '{}' already exists. Please choose a different name.",
+                    input.name
+                ));
             }
 
             Err(error_msg)
@@ -763,14 +885,7 @@ pub async fn update_inference_job_by_id(
     id: i64,
     input: InferenceJobInput,
 ) -> Result<bool, String> {
-    // Validate input
-    if input.name.trim().is_empty() {
-        return Err("Job name cannot be empty".to_string());
-    }
-
-    if input.samples <= 0 {
-        return Err("Number of samples must be greater than 0".to_string());
-    }
+    validate_inference_job_input(&input)?;
 
     let result = sqlx::query(
         r#"
@@ -836,7 +951,7 @@ pub async fn update_job_status(pool: &SqlitePool, id: i64, status: &str) -> Resu
         UPDATE inference_jobs
         SET status = ?, updated_at = datetime('now')
         WHERE id = ?
-        "#
+        "#,
     )
     .bind(status)
     .bind(id)
@@ -848,13 +963,17 @@ pub async fn update_job_status(pool: &SqlitePool, id: i64, status: &str) -> Resu
 }
 
 /// Update job status with error message (internal helper)
-pub async fn update_job_status_with_error(pool: &SqlitePool, id: i64, error: &str) -> Result<bool, String> {
+pub async fn update_job_status_with_error(
+    pool: &SqlitePool,
+    id: i64,
+    error: &str,
+) -> Result<bool, String> {
     let result = sqlx::query(
         r#"
         UPDATE inference_jobs
         SET status = 'failed', error_message = ?, updated_at = datetime('now')
         WHERE id = ?
-        "#
+        "#,
     )
     .bind(error)
     .bind(id)
@@ -1072,13 +1191,17 @@ pub async fn delete_collection_item(
     state: State<'_, DatabaseState>,
     item_id: i64,
 ) -> Result<bool, String> {
+    delete_collection_item_by_id(&state.pool(), item_id).await
+}
+
+pub(crate) async fn delete_collection_item_by_id(pool: &SqlitePool, item_id: i64) -> Result<bool, String> {
     let result = sqlx::query(
         r#"
         DELETE FROM collection_items WHERE id = ?
-        "#
+        "#,
     )
     .bind(item_id)
-    .execute(&state.pool())
+    .execute(pool)
     .await
     .map_err(|e| format!("Failed to delete collection item: {}", e))?;
 
@@ -1099,14 +1222,21 @@ pub async fn export_collection_jsonl(
     state: State<'_, DatabaseState>,
     collection_id: i64,
 ) -> Result<String, String> {
+    export_collection_jsonl_by_id(&state.pool(), collection_id).await
+}
+
+pub(crate) async fn export_collection_jsonl_by_id(
+    pool: &SqlitePool,
+    collection_id: i64,
+) -> Result<String, String> {
     // Verify collection exists
     let collection_exists = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?)
-        "#
+        "#,
     )
     .bind(collection_id)
-    .fetch_one(&state.pool())
+    .fetch_one(pool)
     .await
     .map_err(|e| format!("Failed to check collection existence: {}", e))?;
 
@@ -1119,10 +1249,10 @@ pub async fn export_collection_jsonl(
         SELECT * FROM collection_items
         WHERE collection_id = ?
         ORDER BY created_at ASC
-        "#
+        "#,
     )
     .bind(collection_id)
-    .fetch_all(&state.pool())
+    .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
 
@@ -1136,14 +1266,11 @@ pub async fn export_collection_jsonl(
         })
         .collect();
 
-    let jsonl_lines: Result<Vec<String>, _> = export_items
-        .iter()
-        .map(|item| serde_json::to_string(item))
-        .collect();
+    let jsonl_lines: Result<Vec<String>, _> =
+        export_items.iter().map(|item| serde_json::to_string(item)).collect();
 
-    let jsonl_content = jsonl_lines
-        .map_err(|e| format!("Failed to serialize items to JSONL: {}", e))?
-        .join("\n");
+    let jsonl_content =
+        jsonl_lines.map_err(|e| format!("Failed to serialize items to JSONL: {}", e))?.join("\n");
 
     Ok(jsonl_content)
 }
@@ -1154,14 +1281,21 @@ pub async fn export_collection_csv(
     state: State<'_, DatabaseState>,
     collection_id: i64,
 ) -> Result<String, String> {
+    export_collection_csv_by_id(&state.pool(), collection_id).await
+}
+
+pub(crate) async fn export_collection_csv_by_id(
+    pool: &SqlitePool,
+    collection_id: i64,
+) -> Result<String, String> {
     // Verify collection exists
     let collection_exists = sqlx::query_scalar::<_, bool>(
         r#"
         SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?)
-        "#
+        "#,
     )
     .bind(collection_id)
-    .fetch_one(&state.pool())
+    .fetch_one(pool)
     .await
     .map_err(|e| format!("Failed to check collection existence: {}", e))?;
 
@@ -1174,10 +1308,10 @@ pub async fn export_collection_csv(
         SELECT * FROM collection_items
         WHERE collection_id = ?
         ORDER BY created_at ASC
-        "#
+        "#,
     )
     .bind(collection_id)
-    .fetch_all(&state.pool())
+    .fetch_all(pool)
     .await
     .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
 
@@ -1212,9 +1346,7 @@ pub async fn export_collection_csv(
             .iter()
             .map(|key| {
                 if let serde_json::Value::Object(map) = &item.data {
-                    map.get(key)
-                        .map(|v| format_csv_value(v))
-                        .unwrap_or_default()
+                    map.get(key).map(|v| format_csv_value(v)).unwrap_or_default()
                 } else {
                     String::new()
                 }

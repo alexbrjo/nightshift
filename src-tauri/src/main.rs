@@ -10,11 +10,10 @@ use tauri::Manager;
 
 use crate::commands::*;
 use crate::database::{
-    DatabaseState, create_inference_job, get_inference_job, list_inference_jobs,
-    update_inference_job, delete_inference_job, create_collection, get_collections_for_job,
-    add_collection_item,
-    get_collection_items, get_collection_count, delete_collection_item, export_collection_jsonl,
-    export_collection_csv, list_all_collections,
+    add_collection_item, create_collection, create_inference_job, delete_collection_item,
+    delete_inference_job, export_collection_csv, export_collection_jsonl, get_collection_count,
+    get_collection_items, get_collections_for_job, get_inference_job, list_all_collections,
+    list_inference_jobs, update_inference_job, DatabaseState,
 };
 use crate::state::{AppState, JobManager};
 use tokio::sync::Mutex as TokioMutex;
@@ -22,14 +21,12 @@ use tokio::sync::Mutex as TokioMutex;
 fn main() {
     // Initialize tracing subscriber
     tracing_subscriber::fmt::init();
-    
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { root_path: std::sync::Mutex::new(None) })
-        .manage(JobManager {
-            executor: TokioMutex::new(None),
-        })
+        .manage(JobManager { executor: TokioMutex::new(None) })
         .setup(|app| {
             // The DB starts as an in-memory SQLite scratch pool — no .nightshift
             // directory is created until the user opens a project, at which
@@ -39,7 +36,9 @@ fn main() {
             {
                 let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
                 match rt.block_on(DatabaseState::empty()) {
-                    Ok(db_state) => { app.manage(db_state); }
+                    Ok(db_state) => {
+                        app.manage(db_state);
+                    }
                     Err(e) => {
                         eprintln!("Failed to initialize in-memory database: {}", e);
                         std::process::exit(1);

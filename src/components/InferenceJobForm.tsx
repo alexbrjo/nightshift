@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
 export interface JobConfig {
@@ -41,7 +42,7 @@ const INITIAL_FORM_STATE: JobConfig = {
   provider: "Local",
   model: "bonsai-8b",
   serverUrl: DEFAULT_SERVER_URL,
-  outputMode: "Unstructured",
+  outputMode: "JSON Schema",
   samples: 1,
   strategy: "Single",
 };
@@ -56,32 +57,44 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Load prompt / data / schema candidates when the form opens. They all
-  // walk the project tree on the Rust side; the same `basePath` is reused.
   useEffect(() => {
     if (!isOpen) return;
     let cancelled = false;
-    (async () => {
+
+    // Load may run before FileTree's auto-open finishes its async reconnect, so
+    // we also re-load whenever the backend emits `project-opened`.
+    const loadFiles = async () => {
       setIsLoadingPrompts(true);
       try {
-        const basePath = (await invoke<string | null>("get_root_path")) || ".";
         const [prompts, datas, schemas] = await Promise.all([
-          invoke<string[]>("list_prompt_files", { basePath }).catch(() => []),
-          invoke<string[]>("list_data_files", { basePath }).catch(() => []),
-          invoke<string[]>("list_schema_files", { basePath }).catch(() => []),
+          invoke<string[]>("list_prompt_files"),
+          invoke<string[]>("list_data_files"),
+          invoke<string[]>("list_schema_files"),
         ]);
         if (cancelled) return;
         setPromptFiles(prompts);
         setDataFiles(datas);
         setSchemaFiles(schemas);
       } catch (error) {
-        console.error("Failed to load project files:", error);
+        if (cancelled) return;
+        // No project open yet is expected before FileTree settles; the
+        // `project-opened` listener will retrigger this load when it does.
+        const msg = String(error);
+        if (!msg.includes("No folder opened")) {
+          console.error("Failed to load project files:", error);
+        }
       } finally {
         if (!cancelled) setIsLoadingPrompts(false);
       }
-    })();
+    };
+
+    void loadFiles();
+    const unlistenPromise = listen("project-opened", () => {
+      void loadFiles();
+    });
     return () => {
       cancelled = true;
+      void unlistenPromise.then((unlisten) => unlisten());
     };
   }, [isOpen]);
 

@@ -1,4 +1,4 @@
-use minijinja::{Environment, context};
+use minijinja::{context, Environment};
 use rand::prelude::SliceRandom;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -184,9 +184,7 @@ pub struct CancellationToken {
 
 impl CancellationToken {
     pub fn new() -> Self {
-        CancellationToken {
-            inner: Arc::new(Mutex::new(false)),
-        }
+        CancellationToken { inner: Arc::new(Mutex::new(false)) }
     }
 
     pub async fn cancel(&self) {
@@ -213,10 +211,7 @@ pub struct JobQueue {
 
 impl JobQueue {
     pub fn new() -> Self {
-        JobQueue {
-            jobs: RwLock::new(HashMap::new()),
-            cancellations: RwLock::new(HashMap::new()),
-        }
+        JobQueue { jobs: RwLock::new(HashMap::new()), cancellations: RwLock::new(HashMap::new()) }
     }
 
     pub async fn enqueue(&self, job_id: i64) {
@@ -356,11 +351,7 @@ impl JobExecutor {
             .build()
             .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
-        Ok(JobExecutor {
-            db: db_state,
-            queue: Arc::new(JobQueue::new()),
-            client,
-        })
+        Ok(JobExecutor { db: db_state, queue: Arc::new(JobQueue::new()), client })
     }
 
     /// Start an inference job asynchronously.
@@ -399,7 +390,9 @@ impl JobExecutor {
         let cancelled = self.queue.cancel(job_id).await;
 
         if cancelled {
-            if let Err(e) = crate::database::update_job_status(&self.db.pool(), job_id, "cancelled").await {
+            if let Err(e) =
+                crate::database::update_job_status(&self.db.pool(), job_id, "cancelled").await
+            {
                 warn!("Failed to update cancelled job status in DB: {}", e);
             }
         }
@@ -414,7 +407,10 @@ impl JobExecutor {
         config: WorkerConfig,
         tx: mpsc::Sender<JobEvent>,
     ) -> Result<(), String> {
-        let cancellation = self.queue.get_cancellation_token(config.job_id).await
+        let cancellation = self
+            .queue
+            .get_cancellation_token(config.job_id)
+            .await
             .ok_or("Cancellation token not found")?;
 
         info!("Starting job execution for {} with {} samples", config.name, config.samples);
@@ -425,11 +421,13 @@ impl JobExecutor {
 
         if samples.is_empty() {
             warn!("No samples loaded for job {}", config.job_id);
-            let _ = tx.send(JobEvent::Completed { 
-                job_id: config.job_id, 
-                success_count: 0, 
-                failure_count: 0 
-            }).await;
+            let _ = tx
+                .send(JobEvent::Completed {
+                    job_id: config.job_id,
+                    success_count: 0,
+                    failure_count: 0,
+                })
+                .await;
             self.queue.complete(config.job_id).await;
             return Ok(());
         }
@@ -443,11 +441,15 @@ impl JobExecutor {
         info!("Using collection {} for job {}", collection_id, config.job_id);
 
         // Send started event
-        if tx.send(JobEvent::Started {
-            job_id: config.job_id,
-            job_name: config.name.clone(),
-            total_samples,
-        }).await.is_err() {
+        if tx
+            .send(JobEvent::Started {
+                job_id: config.job_id,
+                job_name: config.name.clone(),
+                total_samples,
+            })
+            .await
+            .is_err()
+        {
             warn!("Failed to send started event");
         }
 
@@ -457,20 +459,23 @@ impl JobExecutor {
             if cancellation.is_cancelled().await {
                 info!("Job {} cancelled at sample {}/{}", config.job_id, index, total_samples);
 
-                let _ = tx.send(JobEvent::Cancelled {
-                    job_id: config.job_id,
-                    completed_samples: completed_count,
-                }).await;
+                let _ = tx
+                    .send(JobEvent::Cancelled {
+                        job_id: config.job_id,
+                        completed_samples: completed_count,
+                    })
+                    .await;
 
                 self.queue.complete(config.job_id).await;
                 return Ok(());
             }
 
             // Send sample started event
-            if tx.send(JobEvent::SampleStarted {
-                sample_index: index,
-                total_samples,
-            }).await.is_err() {
+            if tx
+                .send(JobEvent::SampleStarted { sample_index: index, total_samples })
+                .await
+                .is_err()
+            {
                 warn!("Failed to send sample started event");
             }
 
@@ -478,31 +483,45 @@ impl JobExecutor {
             match self.process_sample(&config, index, &sample, &cancellation, &tx).await {
                 Ok(output) => {
                     completed_count += 1;
-                    info!("Sample {} succeeded for job {} (progress: {}/{})", index, config.job_id, completed_count, total_samples);
+                    info!(
+                        "Sample {} succeeded for job {} (progress: {}/{})",
+                        index, config.job_id, completed_count, total_samples
+                    );
 
                     // Save output to collection
                     if let Err(e) = self.save_to_collection(collection_id, &output).await {
                         warn!("Failed to save output to collection: {}", e);
                     }
 
-                    if tx.send(JobEvent::SampleCompleted {
-                        sample_index: index,
-                        total_samples,
-                        output: output.clone(),
-                    }).await.is_err() {
+                    if tx
+                        .send(JobEvent::SampleCompleted {
+                            sample_index: index,
+                            total_samples,
+                            output: output.clone(),
+                        })
+                        .await
+                        .is_err()
+                    {
                         warn!("Failed to send sample completed event");
                     }
                 }
                 Err(e) => {
                     failed_count += 1;
-                    error!("Sample {} failed for job {}: {} (progress: {}/{})", index, config.job_id, e, completed_count, total_samples);
+                    error!(
+                        "Sample {} failed for job {}: {} (progress: {}/{})",
+                        index, config.job_id, e, completed_count, total_samples
+                    );
 
-                    if tx.send(JobEvent::SampleFailed {
-                        sample_index: index,
-                        total_samples,
-                        error: e.clone(),
-                        retry_count: 0,
-                    }).await.is_err() {
+                    if tx
+                        .send(JobEvent::SampleFailed {
+                            sample_index: index,
+                            total_samples,
+                            error: e.clone(),
+                            retry_count: 0,
+                        })
+                        .await
+                        .is_err()
+                    {
                         warn!("Failed to send sample failed event");
                     }
                 }
@@ -527,17 +546,21 @@ impl JobExecutor {
 
         // Send completion event
         info!("Sending completion event for job {}", config.job_id);
-        let _ = tx.send(JobEvent::Completed {
-            job_id: config.job_id,
-            success_count: completed_count,
-            failure_count: failed_count,
-        }).await;
+        let _ = tx
+            .send(JobEvent::Completed {
+                job_id: config.job_id,
+                success_count: completed_count,
+                failure_count: failed_count,
+            })
+            .await;
 
         info!("Marking job {} as complete in queue", config.job_id);
         self.queue.complete(config.job_id).await;
 
-        info!("Job {} completed: {} successful, {} failed",
-              config.job_id, completed_count, failed_count);
+        info!(
+            "Job {} completed: {} successful, {} failed",
+            config.job_id, completed_count, failed_count
+        );
 
         Ok(())
     }
@@ -547,36 +570,34 @@ impl JobExecutor {
     /// `INSERT OR IGNORE` either creates the row or no-ops if another caller
     /// already did, then the SELECT returns the unique row.
     async fn ensure_collection(&self, config: &WorkerConfig) -> Result<i64, String> {
-        sqlx::query(
-            r#"INSERT OR IGNORE INTO collections (job_id, name) VALUES (?, ?)"#
-        )
-        .bind(config.job_id)
-        .bind(format!("{} outputs", config.name))
-        .execute(&self.db.pool())
-        .await
-        .map_err(|e| format!("Failed to create collection: {}", e))?;
+        sqlx::query(r#"INSERT OR IGNORE INTO collections (job_id, name) VALUES (?, ?)"#)
+            .bind(config.job_id)
+            .bind(format!("{} outputs", config.name))
+            .execute(&self.db.pool())
+            .await
+            .map_err(|e| format!("Failed to create collection: {}", e))?;
 
-        let result: (i64,) = sqlx::query_as(
-            r#"SELECT id FROM collections WHERE job_id = ?"#
-        )
-        .bind(config.job_id)
-        .fetch_one(&self.db.pool())
-        .await
-        .map_err(|e| format!("Failed to get collection ID: {}", e))?;
+        let result: (i64,) = sqlx::query_as(r#"SELECT id FROM collections WHERE job_id = ?"#)
+            .bind(config.job_id)
+            .fetch_one(&self.db.pool())
+            .await
+            .map_err(|e| format!("Failed to get collection ID: {}", e))?;
 
         Ok(result.0)
     }
 
     /// Save output to collection
-    async fn save_to_collection(&self, collection_id: i64, data: &serde_json::Value) -> Result<(), String> {
-        sqlx::query(
-            r#"INSERT INTO collection_items (collection_id, data) VALUES (?, ?)"#
-        )
-        .bind(collection_id)
-        .bind(data)
-        .execute(&self.db.pool())
-        .await
-        .map_err(|e| format!("Failed to save collection item: {}", e))?;
+    async fn save_to_collection(
+        &self,
+        collection_id: i64,
+        data: &serde_json::Value,
+    ) -> Result<(), String> {
+        sqlx::query(r#"INSERT INTO collection_items (collection_id, data) VALUES (?, ?)"#)
+            .bind(collection_id)
+            .bind(data)
+            .execute(&self.db.pool())
+            .await
+            .map_err(|e| format!("Failed to save collection item: {}", e))?;
 
         Ok(())
     }
@@ -610,7 +631,10 @@ impl JobExecutor {
 
     /// Load samples from data source file
     async fn load_samples(&self, config: &WorkerConfig) -> Result<Vec<serde_json::Value>, String> {
-        debug!("Loading samples from data source: {} with strategy: {:?}", config.data_source, config.strategy);
+        debug!(
+            "Loading samples from data source: {} with strategy: {:?}",
+            config.data_source, config.strategy
+        );
 
         let full_path = self.resolve_within_project(&config.data_source)?;
         debug!("Full data source path: {}", full_path.display());
@@ -622,11 +646,12 @@ impl JobExecutor {
 
         // Parse based on format (JSONL or JSON array)
         let mut samples: Vec<serde_json::Value> = Vec::new();
-        
+
         if content.trim().starts_with('[') {
             // JSON array format
-            let parsed: Vec<serde_json::Value> = serde_json::from_str(&content)
-                .map_err(|e| format!("Failed to parse JSON array from {}: {}", config.data_source, e))?;
+            let parsed: Vec<serde_json::Value> = serde_json::from_str(&content).map_err(|e| {
+                format!("Failed to parse JSON array from {}: {}", config.data_source, e)
+            })?;
             samples = parsed;
         } else {
             // JSONL format (one JSON object per line)
@@ -635,21 +660,29 @@ impl JobExecutor {
                 if trimmed.is_empty() || trimmed.starts_with('#') {
                     continue; // Skip empty lines and comments
                 }
-                
+
                 match serde_json::from_str(trimmed) {
                     Ok(obj) => samples.push(obj),
                     Err(e) => {
-                        warn!("Failed to parse line {} in {}: {}", line_num + 1, config.data_source, e);
+                        warn!(
+                            "Failed to parse line {} in {}: {}",
+                            line_num + 1,
+                            config.data_source,
+                            e
+                        );
                     }
                 }
             }
         }
 
         debug!("Loaded {} samples from {}", samples.len(), config.data_source);
-        
+
         // Log first sample for debugging
         if let Some(first) = samples.first() {
-            debug!("First sample keys: {:?}", first.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+            debug!(
+                "First sample keys: {:?}",
+                first.as_object().map(|o| o.keys().collect::<Vec<_>>())
+            );
             debug!("First sample content: {:?}", first);
         } else {
             warn!("No samples loaded from data source!");
@@ -672,21 +705,15 @@ impl JobExecutor {
                 let mut indices: Vec<usize> = (0..samples.len()).collect();
                 indices.shuffle(&mut rng);
 
-                let selected: Vec<serde_json::Value> = indices
-                    .into_iter()
-                    .take(count)
-                    .map(|i| samples[i].clone())
-                    .collect();
+                let selected: Vec<serde_json::Value> =
+                    indices.into_iter().take(count).map(|i| samples[i].clone()).collect();
 
                 Ok(selected)
             }
             SamplingStrategy::Exhaustive => {
                 // Return all samples (up to config.samples limit if specified)
-                let count = if config.samples > 0 {
-                    config.samples as usize
-                } else {
-                    samples.len()
-                };
+                let count =
+                    if config.samples > 0 { config.samples as usize } else { samples.len() };
                 Ok(samples.into_iter().take(count).collect())
             }
         }
@@ -705,7 +732,12 @@ impl JobExecutor {
         let max_retries = 3;
         let base_delay = Duration::from_secs(1);
 
-        info!("Processing sample {}/{} for job {}", sample_index + 1, config.samples, config.job_id);
+        info!(
+            "Processing sample {}/{} for job {}",
+            sample_index + 1,
+            config.samples,
+            config.job_id
+        );
 
         for attempt in 0..=max_retries {
             // Check cancellation before each attempt
@@ -713,7 +745,12 @@ impl JobExecutor {
                 return Err("Cancelled".to_string());
             }
 
-            debug!("Attempting LLM call for sample {} (attempt {}/{})", sample_index + 1, attempt + 1, max_retries + 1);
+            debug!(
+                "Attempting LLM call for sample {} (attempt {}/{})",
+                sample_index + 1,
+                attempt + 1,
+                max_retries + 1
+            );
             match self.attempt_llm_call(config, sample_index, sample).await {
                 Ok(output) => return Ok(output),
                 Err(e) => {
@@ -722,15 +759,24 @@ impl JobExecutor {
                     if attempt < max_retries && is_rate_limit {
                         let delay = base_delay * 2u32.pow(attempt as u32); // Exponential backoff
 
-                        info!("Rate limited, retrying sample {} in {:?} (attempt {}/{})",
-                              sample_index, delay, attempt + 1, max_retries);
-
-                        if tx.send(JobEvent::SampleFailed {
+                        info!(
+                            "Rate limited, retrying sample {} in {:?} (attempt {}/{})",
                             sample_index,
-                            total_samples: 0, // Will be updated by caller
-                            error: e.clone(),
-                            retry_count: attempt + 1,
-                        }).await.is_err() {
+                            delay,
+                            attempt + 1,
+                            max_retries
+                        );
+
+                        if tx
+                            .send(JobEvent::SampleFailed {
+                                sample_index,
+                                total_samples: 0, // Will be updated by caller
+                                error: e.clone(),
+                                retry_count: attempt + 1,
+                            })
+                            .await
+                            .is_err()
+                        {
                             warn!("Failed to send retry event");
                         }
 
@@ -763,10 +809,7 @@ impl JobExecutor {
         let rendered_prompt = self.render_prompt(&prompt_content, sample)?;
 
         // Build request
-        let messages = vec![Message {
-            role: "user".to_string(),
-            content: rendered_prompt,
-        }];
+        let messages = vec![Message { role: "user".to_string(), content: rendered_prompt }];
 
         let request = LlmRequest {
             model: config.model.clone(),
@@ -787,7 +830,8 @@ impl JobExecutor {
         debug!("Calling LLM API at {}", endpoint_url);
 
         // Call LLM API
-        let response = self.client
+        let response = self
+            .client
             .post(&endpoint_url)
             .json(&request)
             .send()
@@ -807,9 +851,10 @@ impl JobExecutor {
         }
 
         // Try to parse as JSON, but also capture raw text for debugging
-        let response_text = response.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
+        let response_text =
+            response.text().await.map_err(|e| format!("Failed to read response body: {}", e))?;
         debug!("LLM response body: {}", &response_text);
-        
+
         let llm_response: LlmResponse = serde_json::from_str(&response_text)
             .map_err(|e| format!("Failed to parse response JSON ({}): {}", e, response_text))?;
 
@@ -847,18 +892,25 @@ impl JobExecutor {
             data => sample,
         };
 
-        debug!("Template content (first 300 chars): {}", &template.chars().take(300).collect::<String>());
+        debug!(
+            "Template content (first 300 chars): {}",
+            &template.chars().take(300).collect::<String>()
+        );
         debug!("Sample data: {:?}", sample);
 
         env.add_template("prompt", template)
             .map_err(|e| format!("Failed to parse template: {}", e))?;
 
-        let rendered = env.get_template("prompt")
+        let rendered = env
+            .get_template("prompt")
             .map_err(|e| format!("Failed to load template: {}", e))?
             .render(&ctx)
             .map_err(|e| format!("Failed to render template: {}", e))?;
-        
-        debug!("Rendered prompt (first 500 chars): {}", &rendered.chars().take(500).collect::<String>());
+
+        debug!(
+            "Rendered prompt (first 500 chars): {}",
+            &rendered.chars().take(500).collect::<String>()
+        );
         Ok(rendered)
     }
 }
