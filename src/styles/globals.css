@@ -835,8 +835,7 @@ body {
 .job-item {
   padding: 10px 20px;
   cursor: pointer;
-  border-left: 2px solid transparent;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition: background-color 0.15s ease;
 }
 
 .job-item:hover {
@@ -845,7 +844,6 @@ body {
 
 .job-item.selected {
   background: var(--bg-hover);
-  border-left-color: var(--moon-glow);
 }
 
 .job-name {
@@ -856,10 +854,6 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.job-item.selected .job-name {
-  color: var(--moon-glow);
 }
 
 .job-meta {
@@ -1496,8 +1490,7 @@ legend {
 .collection-item {
   padding: 10px 20px;
   cursor: pointer;
-  border-left: 2px solid transparent;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition: background-color 0.15s ease;
 }
 
 .collection-item:hover {
@@ -1506,7 +1499,6 @@ legend {
 
 .collection-item.selected {
   background: var(--bg-hover);
-  border-left-color: var(--moon-glow);
 }
 
 .collection-name {
@@ -1517,10 +1509,6 @@ legend {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.collection-item.selected .collection-name {
-  color: var(--moon-glow);
 }
 
 .collection-meta {
