@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { PipetteIcon } from "./icons";
 
 export interface JobConfig {
   name: string;
@@ -541,7 +542,13 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
           onClick={handleSubmit}
           disabled={isSubmitting}
         >
-          {isSubmitting ? "Creating..." : "Create & Start"}
+          {isSubmitting ? (
+            "Creating..."
+          ) : (
+            <>
+              Create <PipetteIcon />
+            </>
+          )}
         </button>
       </div>
     </div>

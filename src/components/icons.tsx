@@ -9,6 +9,7 @@
 import {
   GiEyedropper,
   GiNotebook,
+  GiFiles,
   GiTestTubes,
   GiFizzingFlask,
 } from "react-icons/gi";
@@ -16,12 +17,14 @@ import logoLightUrl from "../../src-tauri/icons/nightshift_icon_light.png";
 
 const ICON_SIZE = 20;
 
+/** Editor / Project: notebook with pen. */
 export function DropperIcon() {
-  return <GiEyedropper size={ICON_SIZE} />;
+  return <GiNotebook size={ICON_SIZE} />;
 }
 
+/** Collections: stacked sheets of paper. */
 export function CabinetIcon() {
-  return <GiNotebook size={ICON_SIZE} />;
+  return <GiFiles size={ICON_SIZE} />;
 }
 
 export function TestTubeIcon() {
@@ -30,6 +33,12 @@ export function TestTubeIcon() {
 
 export function RackIcon() {
   return <GiFizzingFlask size={ICON_SIZE} />;
+}
+
+/** Inline pipette icon — used in action buttons. Inherits text color and
+ *  sits flush with adjacent label text. */
+export function PipetteIcon({ size = 16 }: { size?: number }) {
+  return <GiEyedropper size={size} style={{ verticalAlign: "-0.15em" }} />;
 }
 
 /** App logo for the sidebar header — striped-disk Nightshift mark (light
