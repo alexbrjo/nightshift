@@ -2,7 +2,7 @@
 mod collection_commands_tests {
     use crate::database::{
         delete_collection_item_by_id, export_collection_csv_by_id, export_collection_jsonl_by_id,
-        format_csv_value, DatabaseState,
+        format_csv_value, list_selectable_collections_with_pool, DatabaseState,
     };
     use std::env;
     use std::fs;
@@ -466,5 +466,92 @@ mod collection_commands_tests {
         let obj_val = serde_json::json!({"key": "value"});
         let result = format_csv_value(&obj_val);
         assert!(result.starts_with('"') && result.ends_with('"'));
+    }
+
+    async fn insert_job_with_status(state: &DatabaseState, name: &str, status: &str) -> i64 {
+        sqlx::query(
+            "INSERT INTO inference_jobs (name, prompt_file, data_source, provider, model, server_url, output_mode, samples, strategy, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(name)
+        .bind("p.j2")
+        .bind("d.jsonl")
+        .bind("Local")
+        .bind("m")
+        .bind("http://x")
+        .bind("Unstructured")
+        .bind(1)
+        .bind("Single")
+        .bind(status)
+        .execute(&state.pool())
+        .await
+        .expect("insert job");
+
+        sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
+            .bind(name)
+            .fetch_one(&state.pool())
+            .await
+            .expect("get job id")
+    }
+
+    async fn insert_collection(state: &DatabaseState, job_id: i64, name: &str) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id",
+        )
+        .bind(job_id)
+        .bind(name)
+        .fetch_one(&state.pool())
+        .await
+        .expect("insert collection")
+    }
+
+    async fn insert_item(state: &DatabaseState, collection_id: i64, data: &str) {
+        sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
+            .bind(collection_id)
+            .bind(data)
+            .execute(&state.pool())
+            .await
+            .expect("insert item");
+    }
+
+    #[tokio::test]
+    async fn list_selectable_collections_only_includes_completed_jobs() {
+        let (state, dir) = create_test_database().await;
+
+        let done_job = insert_job_with_status(&state, "done", "completed").await;
+        let running_job = insert_job_with_status(&state, "running", "running").await;
+        let failed_job = insert_job_with_status(&state, "failed", "failed").await;
+        let cancelled_job = insert_job_with_status(&state, "cancelled", "cancelled").await;
+
+        let done_col = insert_collection(&state, done_job, "done outputs").await;
+        insert_item(&state, done_col, r#"{"a":1}"#).await;
+        insert_item(&state, done_col, r#"{"a":2}"#).await;
+        let _ = insert_collection(&state, running_job, "running outputs").await;
+        let _ = insert_collection(&state, failed_job, "failed outputs").await;
+        let _ = insert_collection(&state, cancelled_job, "cancelled outputs").await;
+
+        let result = list_selectable_collections_with_pool(&state.pool())
+            .await
+            .expect("query");
+
+        assert_eq!(result.len(), 1, "only the completed-job collection should appear");
+        assert_eq!(result[0].name, "done outputs");
+        assert_eq!(result[0].item_count, 2);
+
+        cleanup_test_database(&dir);
+    }
+
+    #[tokio::test]
+    async fn list_selectable_collections_empty_when_no_completed_jobs() {
+        let (state, dir) = create_test_database().await;
+
+        let pending = insert_job_with_status(&state, "pending", "pending").await;
+        let _ = insert_collection(&state, pending, "pending outputs").await;
+
+        let result = list_selectable_collections_with_pool(&state.pool())
+            .await
+            .expect("query");
+        assert!(result.is_empty());
+
+        cleanup_test_database(&dir);
     }
 }

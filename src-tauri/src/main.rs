@@ -13,7 +13,7 @@ use crate::database::{
     add_collection_item, create_collection, create_inference_job, delete_collection_item,
     delete_inference_job, export_collection_csv, export_collection_jsonl, get_collection_count,
     get_collection_items, get_collections_for_job, get_inference_job, list_all_collections,
-    list_inference_jobs, update_inference_job, DatabaseState,
+    list_inference_jobs, list_selectable_collections, update_inference_job, DatabaseState,
 };
 use crate::state::{AppState, JobManager};
 use tokio::sync::Mutex as TokioMutex;
@@ -75,6 +75,7 @@ fn main() {
             create_collection,
             get_collections_for_job,
             list_all_collections,
+            list_selectable_collections,
             add_collection_item,
             get_collection_items,
             get_collection_count,

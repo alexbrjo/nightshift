@@ -466,6 +466,7 @@ impl JobExecutor {
         let total_samples = samples.len();
         let mut completed_count = 0;
         let mut failed_count = 0;
+        let mut last_error: Option<String> = None;
 
         // Create or get collection for this job
         let collection_id = self.ensure_collection(&config).await?;
@@ -538,6 +539,7 @@ impl JobExecutor {
                 }
                 Err(e) => {
                     failed_count += 1;
+                    last_error = Some(e.clone());
                     error!(
                         "Sample {} failed for job {}: {} (progress: {}/{})",
                         index, config.job_id, e, completed_count, total_samples
@@ -575,15 +577,26 @@ impl JobExecutor {
             }
         }
 
-        // Send completion event
+        // Send completion event. If every sample failed, surface as Failed so
+        // the job's DB status reflects the failure and the user sees the error.
         info!("Sending completion event for job {}", config.job_id);
-        let _ = tx
-            .send(JobEvent::Completed {
-                job_id: config.job_id,
-                success_count: completed_count,
-                failure_count: failed_count,
-            })
-            .await;
+        if completed_count == 0 && failed_count > 0 {
+            let _ = tx
+                .send(JobEvent::Failed {
+                    job_id: config.job_id,
+                    error: last_error
+                        .unwrap_or_else(|| format!("All {} samples failed", failed_count)),
+                })
+                .await;
+        } else {
+            let _ = tx
+                .send(JobEvent::Completed {
+                    job_id: config.job_id,
+                    success_count: completed_count,
+                    failure_count: failed_count,
+                })
+                .await;
+        }
 
         info!("Marking job {} as complete in queue", config.job_id);
         self.queue.complete(config.job_id).await;
@@ -660,55 +673,25 @@ impl JobExecutor {
         Ok(full_canonical)
     }
 
-    /// Load samples from data source file
+    /// Load samples from a data source — either a project-relative file path
+    /// or a `collection:<id>` reference to an existing collection.
     async fn load_samples(&self, config: &WorkerConfig) -> Result<Vec<serde_json::Value>, String> {
         debug!(
             "Loading samples from data source: {} with strategy: {:?}",
             config.data_source, config.strategy
         );
 
-        let full_path = self.resolve_within_project(&config.data_source)?;
-        debug!("Full data source path: {}", full_path.display());
-
-        // Read the file content
-        let content = tokio::fs::read_to_string(&full_path)
-            .await
-            .map_err(|e| format!("Failed to read data source {}: {}", config.data_source, e))?;
-
-        // Parse based on format (JSONL or JSON array)
-        let mut samples: Vec<serde_json::Value> = Vec::new();
-
-        if content.trim().starts_with('[') {
-            // JSON array format
-            let parsed: Vec<serde_json::Value> = serde_json::from_str(&content).map_err(|e| {
-                format!("Failed to parse JSON array from {}: {}", config.data_source, e)
-            })?;
-            samples = parsed;
+        let samples = if let Some(rest) = config.data_source.strip_prefix("collection:") {
+            let id: i64 = rest
+                .parse()
+                .map_err(|_| format!("Invalid collection id: {}", rest))?;
+            self.load_collection_samples(id).await?
         } else {
-            // JSONL format (one JSON object per line)
-            for (line_num, line) in content.lines().enumerate() {
-                let trimmed = line.trim();
-                if trimmed.is_empty() || trimmed.starts_with('#') {
-                    continue; // Skip empty lines and comments
-                }
-
-                match serde_json::from_str(trimmed) {
-                    Ok(obj) => samples.push(obj),
-                    Err(e) => {
-                        warn!(
-                            "Failed to parse line {} in {}: {}",
-                            line_num + 1,
-                            config.data_source,
-                            e
-                        );
-                    }
-                }
-            }
-        }
+            self.load_file_samples(&config.data_source).await?
+        };
 
         debug!("Loaded {} samples from {}", samples.len(), config.data_source);
 
-        // Log first sample for debugging
         if let Some(first) = samples.first() {
             debug!(
                 "First sample keys: {:?}",
@@ -719,33 +702,130 @@ impl JobExecutor {
             warn!("No samples loaded from data source!");
         }
 
-        // Apply sampling strategy
-        match &config.strategy {
-            SamplingStrategy::Single => {
-                // Return first sample only
-                Ok(samples.into_iter().next().map(|s| vec![s]).unwrap_or_default())
-            }
-            SamplingStrategy::Random => {
-                // Return up to `config.samples` randomly selected, without replacement.
-                let count = (config.samples.max(0) as usize).min(samples.len());
-                if count == 0 || samples.is_empty() {
-                    return Ok(Vec::new());
+        Ok(Self::apply_strategy(samples, &config.strategy, config.samples))
+    }
+
+    async fn load_file_samples(
+        &self,
+        data_source: &str,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        let full_path = self.resolve_within_project(data_source)?;
+        debug!("Full data source path: {}", full_path.display());
+
+        let content = tokio::fs::read_to_string(&full_path)
+            .await
+            .map_err(|e| format!("Failed to read data source {}: {}", data_source, e))?;
+
+        let mut samples: Vec<serde_json::Value> = Vec::new();
+
+        if content.trim().starts_with('[') {
+            let parsed: Vec<serde_json::Value> = serde_json::from_str(&content).map_err(|e| {
+                format!("Failed to parse JSON array from {}: {}", data_source, e)
+            })?;
+            samples = parsed;
+        } else {
+            for (line_num, line) in content.lines().enumerate() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
                 }
 
+                match serde_json::from_str(trimmed) {
+                    Ok(obj) => samples.push(obj),
+                    Err(e) => {
+                        warn!(
+                            "Failed to parse line {} in {}: {}",
+                            line_num + 1,
+                            data_source,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(samples)
+    }
+
+    async fn load_collection_samples(
+        &self,
+        collection_id: i64,
+    ) -> Result<Vec<serde_json::Value>, String> {
+        // Re-check eligibility at execution time. The picker only lists
+        // collections whose owning job is `completed`, but a job's `data_source`
+        // can also be set via YAML import, persisted before the source job
+        // finishes, or read after the source was deleted/cancelled. Mirror the
+        // picker's filter so jobs never run against partial / stale data.
+        let source_status = sqlx::query_scalar::<_, Option<String>>(
+            r#"
+            SELECT j.status
+            FROM collections c
+            JOIN inference_jobs j ON j.id = c.job_id
+            WHERE c.id = ?
+            "#,
+        )
+        .bind(collection_id)
+        .fetch_optional(&self.db.pool())
+        .await
+        .map_err(|e| format!("Failed to check collection eligibility: {}", e))?
+        .flatten();
+
+        match source_status.as_deref() {
+            None => {
+                return Err(format!("Collection no longer exists (id={})", collection_id));
+            }
+            Some("completed") => {}
+            Some(other) => {
+                return Err(format!(
+                    "Collection {} is not usable as a data source: source job is {}",
+                    collection_id, other
+                ));
+            }
+        }
+
+        let rows = sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT data FROM collection_items WHERE collection_id = ? ORDER BY created_at ASC, id ASC",
+        )
+        .bind(collection_id)
+        .fetch_all(&self.db.pool())
+        .await
+        .map_err(|e| format!("Failed to load collection items: {}", e))?;
+
+        Ok(rows.into_iter().map(parse_content_field).collect())
+    }
+
+    fn apply_strategy(
+        samples: Vec<serde_json::Value>,
+        strategy: &SamplingStrategy,
+        limit: i32,
+    ) -> Vec<serde_json::Value> {
+        match strategy {
+            SamplingStrategy::Single => {
+                samples.into_iter().next().map(|s| vec![s]).unwrap_or_default()
+            }
+            SamplingStrategy::Random => {
+                let count = (limit.max(0) as usize).min(samples.len());
+                if count == 0 || samples.is_empty() {
+                    return Vec::new();
+                }
                 let mut rng = rand::rng();
                 let mut indices: Vec<usize> = (0..samples.len()).collect();
                 indices.shuffle(&mut rng);
-
-                let selected: Vec<serde_json::Value> =
-                    indices.into_iter().take(count).map(|i| samples[i].clone()).collect();
-
-                Ok(selected)
+                indices.into_iter().take(count).map(|i| samples[i].clone()).collect()
             }
             SamplingStrategy::Exhaustive => {
-                // Return all samples (up to config.samples limit if specified)
-                let count =
-                    if config.samples > 0 { config.samples as usize } else { samples.len() };
-                Ok(samples.into_iter().take(count).collect())
+                // Iterate every row, repeated `limit` times each. `limit` is
+                // "samples per row" — useful for sampling LLM variance per
+                // input. A limit < 1 is treated as 1 to preserve the
+                // "run them all once" baseline.
+                let reps = if limit > 1 { limit as usize } else { 1 };
+                let mut out = Vec::with_capacity(samples.len() * reps);
+                for s in samples {
+                    for _ in 0..reps {
+                        out.push(s.clone());
+                    }
+                }
+                out
             }
         }
     }
@@ -973,6 +1053,24 @@ impl JobExecutor {
     }
 }
 
+/// Collection items store the raw model output as `content: "<string>"`.
+/// When that string is itself JSON (Plain JSON / JSON Schema output modes),
+/// parse it so chained-job templates can write `{{ content.field }}` as a
+/// user would expect — instead of accessing attributes on a JSON-encoded
+/// string and getting `undefined`.
+fn parse_content_field(mut row: serde_json::Value) -> serde_json::Value {
+    let Some(obj) = row.as_object_mut() else { return row };
+    let Some(content) = obj.get("content").and_then(|c| c.as_str()) else {
+        return row;
+    };
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content.trim()) {
+        if parsed.is_object() || parsed.is_array() {
+            obj.insert("content".to_string(), parsed);
+        }
+    }
+    row
+}
+
 /// Render Jinja2 prompt with sample data. Sample fields are exposed at the top
 /// level (LangChain convention) so `{{ word }}` works directly. Samples must
 /// be JSON objects — arrays/scalars have no fields to spread and are rejected.
@@ -998,13 +1096,13 @@ fn render_prompt(template: &str, sample: &serde_json::Value) -> Result<String, S
     debug!("Sample data: {:?}", sample);
 
     env.add_template("prompt", template)
-        .map_err(|e| format!("Failed to parse template: {}", e))?;
+        .map_err(|e| format!("Failed to parse template: {:#}", e))?;
 
     let rendered = env
         .get_template("prompt")
-        .map_err(|e| format!("Failed to load template: {}", e))?
+        .map_err(|e| format!("Failed to load template: {:#}", e))?
         .render(MjValue::from_serialize(&ctx_map))
-        .map_err(|e| format!("Failed to render template: {}", e))?;
+        .map_err(|e| format!("Failed to render template: {:#}", e))?;
 
     debug!(
         "Rendered prompt (first 500 chars): {}",
@@ -1074,6 +1172,205 @@ mod tests {
     fn render_prompt_rejects_non_object_sample() {
         let err = render_prompt("{{ x }}", &serde_json::json!([1, 2, 3])).unwrap_err();
         assert!(err.contains("must be a JSON object"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_content_field_parses_json_object_string() {
+        let row = serde_json::json!({
+            "content": r#"{"word_de": "gehen", "word_en": "to go"}"#,
+            "model": "bonsai-8b",
+            "sample_index": 0,
+        });
+        let parsed = parse_content_field(row);
+        assert_eq!(parsed["content"]["word_de"], "gehen");
+        assert_eq!(parsed["content"]["word_en"], "to go");
+        assert_eq!(parsed["model"], "bonsai-8b");
+        assert_eq!(parsed["sample_index"], 0);
+    }
+
+    #[test]
+    fn parse_content_field_parses_json_array_string() {
+        let row = serde_json::json!({"content": "[1, 2, 3]"});
+        let parsed = parse_content_field(row);
+        assert_eq!(parsed["content"], serde_json::json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn parse_content_field_leaves_non_json_strings_alone() {
+        let row = serde_json::json!({"content": "just plain prose, not JSON"});
+        let parsed = parse_content_field(row.clone());
+        assert_eq!(parsed, row);
+    }
+
+    #[test]
+    fn parse_content_field_leaves_scalar_json_alone() {
+        let row = serde_json::json!({"content": "42"});
+        let parsed = parse_content_field(row.clone());
+        assert_eq!(parsed["content"], "42");
+    }
+
+    #[test]
+    fn parse_content_field_passthrough_when_no_content() {
+        let row = serde_json::json!({"foo": "bar"});
+        let parsed = parse_content_field(row.clone());
+        assert_eq!(parsed, row);
+    }
+
+    #[test]
+    fn apply_strategy_single_returns_first_only() {
+        let samples = vec![
+            serde_json::json!({"i": 0}),
+            serde_json::json!({"i": 1}),
+            serde_json::json!({"i": 2}),
+        ];
+        let out = JobExecutor::apply_strategy(samples, &SamplingStrategy::Single, 99);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0]["i"], 0);
+    }
+
+    #[test]
+    fn apply_strategy_single_on_empty_returns_empty() {
+        let out = JobExecutor::apply_strategy(vec![], &SamplingStrategy::Single, 5);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn apply_strategy_exhaustive_runs_every_row_once_by_default() {
+        let samples =
+            vec![serde_json::json!(1), serde_json::json!(2), serde_json::json!(3)];
+        let out = JobExecutor::apply_strategy(samples, &SamplingStrategy::Exhaustive, 1);
+        assert_eq!(out, vec![serde_json::json!(1), serde_json::json!(2), serde_json::json!(3)]);
+    }
+
+    #[test]
+    fn apply_strategy_exhaustive_repeats_each_row_when_limit_gt_one() {
+        let samples = vec![serde_json::json!("a"), serde_json::json!("b")];
+        let out = JobExecutor::apply_strategy(samples, &SamplingStrategy::Exhaustive, 3);
+        assert_eq!(
+            out,
+            vec![
+                serde_json::json!("a"),
+                serde_json::json!("a"),
+                serde_json::json!("a"),
+                serde_json::json!("b"),
+                serde_json::json!("b"),
+                serde_json::json!("b"),
+            ]
+        );
+    }
+
+    #[test]
+    fn apply_strategy_exhaustive_zero_limit_treated_as_one() {
+        let samples = vec![serde_json::json!(1), serde_json::json!(2)];
+        let out = JobExecutor::apply_strategy(samples, &SamplingStrategy::Exhaustive, 0);
+        assert_eq!(out.len(), 2);
+    }
+
+    #[test]
+    fn apply_strategy_random_returns_count_without_replacement() {
+        let samples: Vec<_> = (0..10).map(serde_json::Value::from).collect();
+        let out = JobExecutor::apply_strategy(samples, &SamplingStrategy::Random, 4);
+        assert_eq!(out.len(), 4);
+        let mut seen: Vec<i64> = out.iter().map(|v| v.as_i64().unwrap()).collect();
+        seen.sort();
+        seen.dedup();
+        assert_eq!(seen.len(), 4);
+    }
+
+    async fn make_executor() -> (JobExecutor, std::path::PathBuf) {
+        use std::env;
+        use uuid::Uuid;
+        let project_dir =
+            env::temp_dir().join(format!("ns_exec_test_{}", Uuid::new_v4()));
+        std::fs::create_dir_all(project_dir.join(".nightshift")).unwrap();
+        let db = DatabaseState::new(&project_dir).await.expect("db");
+        let exec = JobExecutor {
+            db,
+            queue: Arc::new(JobQueue::new()),
+            client: Client::new(),
+        };
+        (exec, project_dir)
+    }
+
+    async fn make_collection(exec: &JobExecutor, status: &str, items: &[&str]) -> i64 {
+        sqlx::query(
+            "INSERT INTO inference_jobs (name, prompt_file, data_source, provider, model, server_url, output_mode, samples, strategy, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(format!("job-{}", status))
+        .bind("p.j2").bind("d.jsonl").bind("Local").bind("m").bind("http://x")
+        .bind("Unstructured").bind(1).bind("Single").bind(status)
+        .execute(&exec.db.pool()).await.unwrap();
+        let job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
+            .bind(format!("job-{}", status))
+            .fetch_one(&exec.db.pool()).await.unwrap();
+        let cid: i64 = sqlx::query_scalar(
+            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id",
+        )
+        .bind(job_id).bind(format!("c-{}", status))
+        .fetch_one(&exec.db.pool()).await.unwrap();
+        for item in items {
+            sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
+                .bind(cid).bind(*item)
+                .execute(&exec.db.pool()).await.unwrap();
+        }
+        cid
+    }
+
+    #[tokio::test]
+    async fn load_collection_samples_returns_items_for_completed_source() {
+        let (exec, dir) = make_executor().await;
+        let cid = make_collection(
+            &exec,
+            "completed",
+            &[r#"{"content":"hi"}"#, r#"{"content":"bye"}"#],
+        )
+        .await;
+
+        let out = exec.load_collection_samples(cid).await.unwrap();
+        assert_eq!(out.len(), 2);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn load_collection_samples_rejects_non_completed_source() {
+        let (exec, dir) = make_executor().await;
+        let cid = make_collection(&exec, "running", &[r#"{"content":"hi"}"#]).await;
+
+        let err = exec.load_collection_samples(cid).await.unwrap_err();
+        assert!(err.contains("not usable") && err.contains("running"), "got: {err}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn load_collection_samples_rejects_unknown_id() {
+        let (exec, dir) = make_executor().await;
+        let err = exec.load_collection_samples(99999).await.unwrap_err();
+        assert!(err.contains("no longer exists"), "got: {err}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn load_samples_routes_invalid_collection_id_to_error() {
+        let (exec, dir) = make_executor().await;
+        let cfg = WorkerConfig {
+            job_id: 1,
+            name: "n".into(),
+            prompt_file: "p".into(),
+            data_source: "collection:abc".into(),
+            provider: "Local".into(),
+            model: "m".into(),
+            server_url: "http://x".into(),
+            output_mode: "Unstructured".into(),
+            temperature: None,
+            max_tokens: None,
+            thinking_budget: None,
+            samples: 1,
+            strategy: SamplingStrategy::Single,
+            json_schema_file: None,
+        };
+        let err = exec.load_samples(&cfg).await.unwrap_err();
+        assert!(err.contains("Invalid collection id"), "got: {err}");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

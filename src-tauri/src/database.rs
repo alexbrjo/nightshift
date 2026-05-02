@@ -1052,6 +1052,44 @@ pub struct Collection {
     pub created_at: String,
 }
 
+/// Collection summary for the data-source picker.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectableCollection {
+    pub id: i64,
+    pub name: String,
+    pub item_count: i64,
+}
+
+pub async fn list_selectable_collections_with_pool(
+    pool: &SqlitePool,
+) -> Result<Vec<SelectableCollection>, String> {
+    sqlx::query_as::<_, SelectableCollection>(
+        r#"
+        SELECT
+            c.id AS id,
+            c.name AS name,
+            (SELECT COUNT(*) FROM collection_items WHERE collection_id = c.id) AS item_count
+        FROM collections c
+        JOIN inference_jobs j ON j.id = c.job_id
+        WHERE j.status = 'completed'
+        ORDER BY c.created_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|e| format!("Failed to list selectable collections: {}", e))
+}
+
+/// Tauri command: list collections eligible to be used as a data source.
+/// Only includes collections whose owning job has status='completed'.
+#[tauri::command]
+pub async fn list_selectable_collections(
+    state: State<'_, DatabaseState>,
+) -> Result<Vec<SelectableCollection>, String> {
+    list_selectable_collections_with_pool(&state.pool()).await
+}
+
 /// Tauri command to add an item to a collection
 #[tauri::command]
 pub async fn add_collection_item(

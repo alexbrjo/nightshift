@@ -50,6 +50,9 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
   const [promptFiles, setPromptFiles] = useState<string[]>([]);
   const [dataFiles, setDataFiles] = useState<string[]>([]);
   const [schemaFiles, setSchemaFiles] = useState<string[]>([]);
+  const [collections, setCollections] = useState<
+    Array<{ id: number; name: string; itemCount: number }>
+  >([]);
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -63,15 +66,19 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
     const loadFiles = async () => {
       setIsLoadingPrompts(true);
       try {
-        const [prompts, datas, schemas] = await Promise.all([
+        const [prompts, datas, schemas, cols] = await Promise.all([
           invoke<string[]>("list_prompt_files"),
           invoke<string[]>("list_data_files"),
           invoke<string[]>("list_schema_files"),
+          invoke<Array<{ id: number; name: string; itemCount: number }>>(
+            "list_selectable_collections",
+          ),
         ]);
         if (cancelled) return;
         setPromptFiles(prompts);
         setDataFiles(datas);
         setSchemaFiles(schemas);
+        setCollections(cols);
       } catch (error) {
         if (cancelled) return;
         // No project open yet is expected before FileTree settles; the
@@ -441,16 +448,25 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
 
         <div className="form-row">
           <div className="form-group">
-            <label htmlFor="samples">Number of Samples</label>
+            <label htmlFor="samples">
+              {formData.strategy === "Exhaustive" ? "Samples per row" : "Number of Samples"}
+            </label>
             <select
               id="samples"
               value={formData.samples}
               onChange={(e) => updateField("samples", parseInt(e.target.value))}
+              disabled={formData.strategy === "Single"}
             >
               {[1, 5, 10, 25, 50, 100, 250, 500, 1000].map((n) => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
+            {formData.strategy === "Exhaustive" && (
+              <span className="hint">Each row in the source is evaluated this many times.</span>
+            )}
+            {formData.strategy === "Single" && (
+              <span className="hint">Single runs the first row only.</span>
+            )}
           </div>
 
           <div className="form-group">
@@ -468,17 +484,30 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
 
           <div className="form-group">
             <label htmlFor="data-source">Data Source *</label>
-            {dataFiles.length > 0 ? (
+            {dataFiles.length > 0 || collections.length > 0 ? (
               <select
                 id="data-source"
                 value={formData.dataSource}
                 onChange={(e) => updateField("dataSource", e.target.value)}
                 className={errors.dataSource ? "error" : ""}
               >
-                <option value="">Select a data file...</option>
-                {dataFiles.map((file) => (
-                  <option key={file} value={file}>{file}</option>
-                ))}
+                <option value="">Select a data source...</option>
+                {dataFiles.length > 0 && (
+                  <optgroup label="Files">
+                    {dataFiles.map((file) => (
+                      <option key={`f:${file}`} value={file}>{file}</option>
+                    ))}
+                  </optgroup>
+                )}
+                {collections.length > 0 && (
+                  <optgroup label="Collections">
+                    {collections.map((c) => (
+                      <option key={`c:${c.id}`} value={`collection:${c.id}`}>
+                        {c.name} ({c.itemCount})
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             ) : (
               <div className="file-picker-row">

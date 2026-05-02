@@ -218,6 +218,9 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
       {/* Status Banner */}
       <div className={`status-banner status-${job.status.toLowerCase()}`}>
         <span className="status-text">{job.status.toUpperCase()}</span>
+        {job.status === "failed" && job.error_message && (
+          <pre className="status-error">{job.error_message}</pre>
+        )}
       </div>
 
       {/* Progress Bar */}

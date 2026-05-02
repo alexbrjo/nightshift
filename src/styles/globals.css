@@ -1004,12 +1004,34 @@ body {
 
 .status-banner {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
   padding: 16px 24px;
   border-radius: 8px;
   margin-bottom: 24px;
   font-weight: 600;
+}
+
+.form-group .hint {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.status-banner .status-error {
+  margin: 0;
+  padding: 8px 12px;
+  width: 100%;
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: inherit;
 }
 
 .status-banner.status-completed {
