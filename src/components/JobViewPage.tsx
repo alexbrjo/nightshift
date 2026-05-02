@@ -303,36 +303,6 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
               )}
             </dl>
           </div>
-
-          {(job.pre_render_url || job.pre_render_body) && (
-            <div className="config-group">
-              <h3>Pre-render Request</h3>
-              <dl>
-                {job.pre_render_url && (
-                  <>
-                    <dt>URL</dt>
-                    <dd>{job.pre_render_url}</dd>
-                  </>
-                )}
-                
-                {job.pre_render_timeout !== undefined && job.pre_render_timeout !== null && (
-                  <>
-                    <dt>Timeout</dt>
-                    <dd>{job.pre_render_timeout}s</dd>
-                  </>
-                )}
-                
-                {job.pre_render_body && (
-                  <>
-                    <dt>Request Body</dt>
-                    <dd>
-                      <pre className="code-block">{job.pre_render_body}</pre>
-                    </dd>
-                  </>
-                )}
-              </dl>
-            </div>
-          )}
         </div>
 
         <div className="timestamps">

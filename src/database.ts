@@ -12,9 +12,6 @@ export interface InferenceJob {
   thinking_budget?: number;
   samples: number;
   strategy: string;
-  pre_render_url?: string;
-  pre_render_timeout?: number;
-  pre_render_body?: string;
   json_schema_file?: string;
   status: string;
   error_message?: string;

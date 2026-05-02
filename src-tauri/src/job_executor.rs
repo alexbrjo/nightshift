@@ -1,4 +1,4 @@
-use minijinja::{context, Environment};
+use minijinja::{Environment, UndefinedBehavior, Value as MjValue};
 use rand::prelude::SliceRandom;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -143,9 +143,6 @@ pub struct WorkerConfig {
     pub thinking_budget: Option<i32>,
     pub samples: i32,
     pub strategy: SamplingStrategy,
-    pub pre_render_url: Option<String>,
-    pub pre_render_timeout: Option<u64>,
-    pub pre_render_body: Option<String>,
     pub json_schema_file: Option<String>,
 }
 
@@ -168,9 +165,6 @@ impl WorkerConfig {
             thinking_budget: job.thinking_budget,
             samples: job.samples,
             strategy,
-            pre_render_url: job.pre_render_url,
-            pre_render_timeout: job.pre_render_timeout.map(|t| t as u64),
-            pre_render_body: job.pre_render_body,
             json_schema_file: job.json_schema_file,
         }
     }
@@ -302,7 +296,7 @@ impl Default for JobQueue {
     }
 }
 
-/// LLM API request structure
+/// LLM API request structure (OpenAI-compatible Chat Completions).
 #[derive(Debug, Serialize)]
 struct LlmRequest {
     model: String,
@@ -311,12 +305,33 @@ struct LlmRequest {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 struct Message {
     role: String,
     content: String,
+}
+
+/// Map the form's thinking-budget integer to OpenAI's `reasoning_effort` enum.
+/// The form encodes Off/Low/Medium/High as 500/1000/1500/2000 token budgets,
+/// but OpenAI's o-series API takes a categorical value. None or 0 disables it.
+fn thinking_budget_to_effort(budget: Option<i32>) -> Option<String> {
+    let b = budget?;
+    if b <= 0 {
+        return None;
+    }
+    Some(if b <= 750 {
+        "low".to_string()
+    } else if b <= 1250 {
+        "medium".to_string()
+    } else {
+        "high".to_string()
+    })
 }
 
 /// LLM API response structure
@@ -332,7 +347,23 @@ struct Choice {
 
 #[derive(Debug, Deserialize)]
 struct ResponseMessage {
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
+    /// Some thinking-capable models (Qwen3, DeepSeek-R1, etc.) emit the
+    /// answer here and leave `content` empty even when reasoning is meant
+    /// to be off. Fall back to this when `content` is empty.
+    #[serde(default)]
+    reasoning_content: Option<String>,
+}
+
+impl ResponseMessage {
+    fn extract_content(&self) -> &str {
+        let primary = self.content.as_deref().unwrap_or("");
+        if !primary.trim().is_empty() {
+            return primary;
+        }
+        self.reasoning_content.as_deref().unwrap_or("")
+    }
 }
 
 /// Job executor with worker logic
@@ -799,6 +830,24 @@ impl JobExecutor {
         sample_index: usize,
         sample: &serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        // Provider routing. Local / OpenAI / Custom / Google all speak the
+        // OpenAI Chat Completions wire format (Google via its OpenAI-compat
+        // endpoint). Anthropic's /v1/messages API is structurally different
+        // and not yet wired up.
+        match config.provider.to_lowercase().as_str() {
+            "local" | "openai" | "custom" | "google" | "" => {}
+            "anthropic" => {
+                return Err(
+                    "Anthropic provider is not yet supported. Use Local/OpenAI/Custom \
+                     pointed at an OpenAI-compatible endpoint."
+                        .to_string(),
+                );
+            }
+            other => {
+                return Err(format!("Unknown provider: {}", other));
+            }
+        }
+
         // Validate server URL
         if Url::parse(&config.server_url).is_err() {
             return Err(format!("Invalid server URL: {}", config.server_url));
@@ -808,7 +857,9 @@ impl JobExecutor {
         let prompt_content = self.load_prompt_file(&config.prompt_file).await?;
         let rendered_prompt = self.render_prompt(&prompt_content, sample)?;
 
-        // Build request
+        let response_format = self.build_response_format(config).await?;
+        let reasoning_effort = thinking_budget_to_effort(config.thinking_budget);
+
         let messages = vec![Message { role: "user".to_string(), content: rendered_prompt }];
 
         let request = LlmRequest {
@@ -816,6 +867,8 @@ impl JobExecutor {
             messages,
             temperature: config.temperature,
             max_tokens: config.max_tokens,
+            response_format,
+            reasoning_effort,
         };
 
         // Build the full endpoint URL (base URL + /v1/chat/completions)
@@ -861,7 +914,7 @@ impl JobExecutor {
         // Extract content from response
         if let Some(choice) = llm_response.choices.first() {
             Ok(serde_json::json!({
-                "content": choice.message.content,
+                "content": choice.message.extract_content(),
                 "model": config.model,
                 "sample_index": sample_index as i64,
             }))
@@ -883,34 +936,156 @@ impl JobExecutor {
         Ok(content)
     }
 
-    /// Render Jinja2 prompt with sample data
+    /// Build the OpenAI-compatible `response_format` value for this job.
+    /// `Unstructured` → no constraint, `Plain JSON` → JSON-object mode,
+    /// `JSON Schema` → loads the user's schema file and embeds it strictly.
+    async fn build_response_format(
+        &self,
+        config: &WorkerConfig,
+    ) -> Result<Option<serde_json::Value>, String> {
+        match config.output_mode.as_str() {
+            "Plain JSON" => Ok(Some(serde_json::json!({ "type": "json_object" }))),
+            "JSON Schema" => {
+                let schema_file = config.json_schema_file.as_deref().ok_or_else(|| {
+                    "Output mode is 'JSON Schema' but no schema file was selected".to_string()
+                })?;
+                let full_path = self.resolve_within_project(schema_file)?;
+                let raw = tokio::fs::read_to_string(&full_path).await.map_err(|e| {
+                    format!("Failed to read schema file {}: {}", schema_file, e)
+                })?;
+                let schema: serde_json::Value = serde_json::from_str(&raw)
+                    .map_err(|e| format!("Schema file {} is not valid JSON: {}", schema_file, e))?;
+                let name = std::path::Path::new(schema_file)
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "schema".to_string());
+                Ok(Some(serde_json::json!({
+                    "type": "json_schema",
+                    "json_schema": { "name": name, "strict": true, "schema": schema },
+                })))
+            }
+            _ => Ok(None),
+        }
+    }
+
     fn render_prompt(&self, template: &str, sample: &serde_json::Value) -> Result<String, String> {
-        let mut env = Environment::new();
+        render_prompt(template, sample)
+    }
+}
 
-        // Convert serde_json::Value to minijinja context
-        let ctx = context! {
-            data => sample,
-        };
+/// Render Jinja2 prompt with sample data. Sample fields are exposed at the top
+/// level (LangChain convention) so `{{ word }}` works directly. Samples must
+/// be JSON objects — arrays/scalars have no fields to spread and are rejected.
+/// Strict undefined behavior surfaces typos as errors instead of silently
+/// substituting empty strings, which previously caused the LLM to hallucinate
+/// plausible defaults for missing fields.
+fn render_prompt(template: &str, sample: &serde_json::Value) -> Result<String, String> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
 
-        debug!(
-            "Template content (first 300 chars): {}",
-            &template.chars().take(300).collect::<String>()
-        );
-        debug!("Sample data: {:?}", sample);
+    let obj = sample.as_object().ok_or_else(|| {
+        "Sample must be a JSON object (template variables come from its fields)".to_string()
+    })?;
+    let mut ctx_map: std::collections::HashMap<String, MjValue> = std::collections::HashMap::new();
+    for (k, v) in obj {
+        ctx_map.insert(k.clone(), MjValue::from_serialize(v));
+    }
 
-        env.add_template("prompt", template)
-            .map_err(|e| format!("Failed to parse template: {}", e))?;
+    debug!(
+        "Template content (first 300 chars): {}",
+        &template.chars().take(300).collect::<String>()
+    );
+    debug!("Sample data: {:?}", sample);
 
-        let rendered = env
-            .get_template("prompt")
-            .map_err(|e| format!("Failed to load template: {}", e))?
-            .render(&ctx)
-            .map_err(|e| format!("Failed to render template: {}", e))?;
+    env.add_template("prompt", template)
+        .map_err(|e| format!("Failed to parse template: {}", e))?;
 
-        debug!(
-            "Rendered prompt (first 500 chars): {}",
-            &rendered.chars().take(500).collect::<String>()
-        );
-        Ok(rendered)
+    let rendered = env
+        .get_template("prompt")
+        .map_err(|e| format!("Failed to load template: {}", e))?
+        .render(MjValue::from_serialize(&ctx_map))
+        .map_err(|e| format!("Failed to render template: {}", e))?;
+
+    debug!(
+        "Rendered prompt (first 500 chars): {}",
+        &rendered.chars().take(500).collect::<String>()
+    );
+    Ok(rendered)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_content_falls_back_to_reasoning_when_content_empty() {
+        // Real-world Qwen3 response shape: model put the JSON in
+        // reasoning_content and left content empty.
+        let body = r#"{
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "{\"word\":\"gehen\"}"
+                }
+            }]
+        }"#;
+        let resp: LlmResponse = serde_json::from_str(body).unwrap();
+        assert_eq!(resp.choices[0].message.extract_content(), "{\"word\":\"gehen\"}");
+    }
+
+    #[test]
+    fn extract_content_prefers_content_when_present() {
+        let body = r#"{
+            "choices": [{
+                "message": {
+                    "content": "real answer",
+                    "reasoning_content": "internal monologue"
+                }
+            }]
+        }"#;
+        let resp: LlmResponse = serde_json::from_str(body).unwrap();
+        assert_eq!(resp.choices[0].message.extract_content(), "real answer");
+    }
+
+    #[test]
+    fn extract_content_handles_missing_fields() {
+        let body = r#"{"choices": [{"message": {"role": "assistant"}}]}"#;
+        let resp: LlmResponse = serde_json::from_str(body).unwrap();
+        assert_eq!(resp.choices[0].message.extract_content(), "");
+    }
+
+    #[test]
+    fn render_prompt_exposes_sample_fields_at_top_level() {
+        let sample = serde_json::json!({"word": "gehen", "language": "German"});
+        let out = render_prompt("Translate {{ word }} ({{ language }})", &sample).unwrap();
+        assert_eq!(out, "Translate gehen (German)");
+    }
+
+    #[test]
+    fn render_prompt_errors_on_undefined_variable() {
+        // Previously: silently rendered as "" and the LLM hallucinated a default.
+        let sample = serde_json::json!({"word": "gehen"});
+        let err = render_prompt("{{ language }}", &sample).unwrap_err();
+        assert!(err.contains("language") || err.contains("undefined"), "got: {err}");
+    }
+
+    #[test]
+    fn render_prompt_rejects_non_object_sample() {
+        let err = render_prompt("{{ x }}", &serde_json::json!([1, 2, 3])).unwrap_err();
+        assert!(err.contains("must be a JSON object"), "got: {err}");
+    }
+
+    #[test]
+    fn thinking_budget_to_effort_buckets() {
+        assert_eq!(thinking_budget_to_effort(None), None);
+        assert_eq!(thinking_budget_to_effort(Some(0)), None);
+        assert_eq!(thinking_budget_to_effort(Some(-100)), None);
+        assert_eq!(thinking_budget_to_effort(Some(500)), Some("low".to_string()));
+        assert_eq!(thinking_budget_to_effort(Some(750)), Some("low".to_string()));
+        assert_eq!(thinking_budget_to_effort(Some(1000)), Some("medium".to_string()));
+        assert_eq!(thinking_budget_to_effort(Some(1250)), Some("medium".to_string()));
+        assert_eq!(thinking_budget_to_effort(Some(1500)), Some("high".to_string()));
+        assert_eq!(thinking_budget_to_effort(Some(2000)), Some("high".to_string()));
     }
 }

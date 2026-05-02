@@ -20,9 +20,6 @@ pub struct InferenceJob {
     pub thinking_budget: Option<i32>,
     pub samples: i32,
     pub strategy: String,
-    pub pre_render_url: Option<String>,
-    pub pre_render_timeout: Option<i32>,
-    pub pre_render_body: Option<String>,
     pub json_schema_file: Option<String>,
     pub status: String,
     pub error_message: Option<String>,
@@ -61,12 +58,6 @@ pub struct InferenceJobInput {
     pub thinking_budget: Option<i32>,
     pub samples: i32,
     pub strategy: String,
-    #[serde(rename = "preRenderUrl")]
-    pub pre_render_url: Option<String>,
-    #[serde(rename = "preRenderTimeout")]
-    pub pre_render_timeout: Option<i32>,
-    #[serde(rename = "preRenderBody")]
-    pub pre_render_body: Option<String>,
     #[serde(rename = "jsonSchemaFile")]
     pub json_schema_file: Option<String>,
 }
@@ -82,12 +73,6 @@ fn validate_inference_job_input(input: &InferenceJobInput) -> Result<(), String>
 
     if url::Url::parse(&input.server_url).is_err() {
         return Err(format!("Invalid server URL: {}", input.server_url));
-    }
-
-    if let Some(ref pre_render_url) = input.pre_render_url {
-        if url::Url::parse(pre_render_url).is_err() {
-            return Err(format!("Invalid pre-render URL: {}", pre_render_url));
-        }
     }
 
     Ok(())
@@ -244,9 +229,6 @@ impl DatabaseState {
                 thinking_budget INTEGER,
                 samples INTEGER NOT NULL,
                 strategy TEXT NOT NULL,
-                pre_render_url TEXT,
-                pre_render_timeout INTEGER,
-                pre_render_body TEXT,
                 json_schema_file TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 error_message TEXT,
@@ -571,9 +553,6 @@ mod tests {
             thinking_budget: None,
             samples: 1,
             strategy: "single".to_string(),
-            pre_render_url: None,
-            pre_render_timeout: None,
-            pre_render_body: None,
             json_schema_file: None,
         }
     }
@@ -583,10 +562,6 @@ mod tests {
         let mut invalid_server = valid_job_input();
         invalid_server.server_url = "not a url".to_string();
         assert!(validate_inference_job_input(&invalid_server).is_err());
-
-        let mut invalid_pre_render = valid_job_input();
-        invalid_pre_render.pre_render_url = Some("not a url".to_string());
-        assert!(validate_inference_job_input(&invalid_pre_render).is_err());
     }
 
     #[tokio::test]
@@ -776,10 +751,10 @@ pub async fn create_inference_job(
         INSERT INTO inference_jobs (
             name, prompt_file, data_source, provider, model, server_url,
             output_mode, temperature, max_tokens, thinking_budget, samples, strategy,
-            pre_render_url, pre_render_timeout, pre_render_body, json_schema_file, status
+            json_schema_file, status
         )
         VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 'pending'
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'pending'
         )
         "#,
     )
@@ -795,9 +770,6 @@ pub async fn create_inference_job(
     .bind(input.thinking_budget)
     .bind(input.samples)
     .bind(&input.strategy)
-    .bind(&input.pre_render_url)
-    .bind(input.pre_render_timeout)
-    .bind(&input.pre_render_body)
     .bind(&input.json_schema_file)
     .execute(&state.pool())
     .await;
@@ -902,12 +874,9 @@ pub async fn update_inference_job_by_id(
             thinking_budget = ?10,
             samples = ?11,
             strategy = ?12,
-            pre_render_url = ?13,
-            pre_render_timeout = ?14,
-            pre_render_body = ?15,
-            json_schema_file = ?16,
+            json_schema_file = ?13,
             updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?17
+        WHERE id = ?14
         "#,
     )
     .bind(&input.name)
@@ -922,9 +891,6 @@ pub async fn update_inference_job_by_id(
     .bind(input.thinking_budget)
     .bind(input.samples)
     .bind(&input.strategy)
-    .bind(&input.pre_render_url)
-    .bind(input.pre_render_timeout)
-    .bind(&input.pre_render_body)
     .bind(&input.json_schema_file)
     .bind(id)
     .execute(pool)

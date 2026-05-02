@@ -16,9 +16,6 @@ export interface JobConfig {
   thinkingBudget?: number;
   samples: number;
   strategy: string;
-  preRenderUrl?: string;
-  preRenderTimeout?: number;
-  preRenderBody?: string;
   jsonSchemaFile?: string;
 }
 
@@ -211,9 +208,6 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
           thinkingBudget: formData.thinkingBudget,
           samples: formData.samples,
           strategy: formData.strategy.toLowerCase(),
-          preRenderUrl: formData.preRenderUrl || null,
-          preRenderTimeout: formData.preRenderTimeout || null,
-          preRenderBody: formData.preRenderBody || null,
           jsonSchemaFile: formData.jsonSchemaFile || null,
         },
       });
@@ -441,7 +435,6 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
         </div>
       </fieldset>
 
-      <div className="form-fieldsets-stack">
       {/* Sampling Controls */}
       <fieldset className="sampling-section">
         <legend>Samples & Strategy</legend>
@@ -506,49 +499,6 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
           </div>
         </div>
       </fieldset>
-
-      {/* Pre-render Request (Optional) */}
-      <fieldset className="prerender-section">
-        <legend>Pre-render Request (Optional)</legend>
-
-        <div className="form-group">
-          <label htmlFor="pre-render-url">URL</label>
-          <input
-            id="pre-render-url"
-            type="text"
-            value={formData.preRenderUrl || ""}
-            onChange={(e) => updateField("preRenderUrl", e.target.value)}
-            placeholder="http://localhost:8081"
-          />
-        </div>
-
-        <div className="form-row">
-          <div className="form-group">
-            <label htmlFor="pre-render-timeout">Timeout (s)</label>
-            <select
-              id="pre-render-timeout"
-              value={formData.preRenderTimeout?.toString() || ""}
-              onChange={(e) => updateField("preRenderTimeout", e.target.value ? parseInt(e.target.value) : undefined)}
-            >
-              {[5, 10, 15, 30, 60, 120].map((s) => (
-                <option key={s} value={s}>{s}s</option>
-              ))}
-            </select>
-          </div>
-        </div>
-
-        <div className="form-group">
-          <label htmlFor="pre-render-body">Request Body (Jinja2 → JSON)</label>
-          <textarea
-            id="pre-render-body"
-            value={formData.preRenderBody || ""}
-            onChange={(e) => updateField("preRenderBody", e.target.value)}
-            placeholder='{"query_texts": ["{{ topic }}"], "n_results": 3}'
-            rows={4}
-          />
-        </div>
-      </fieldset>
-      </div>
       </div>
 
       {/* Action Buttons */}

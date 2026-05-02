@@ -166,26 +166,8 @@ pub async fn export_job_to_yaml(
         thinking_budget: Option<i32>,
         samples: i32,
         strategy: String,
-        pre_render: Option<PreRenderConfig>,
         json_schema_file: Option<String>,
     }
-
-    #[derive(serde::Serialize)]
-    struct PreRenderConfig {
-        url: String,
-        timeout: Option<i32>,
-        body: Option<String>,
-    }
-
-    let pre_render = if job.pre_render_url.is_some() {
-        Some(PreRenderConfig {
-            url: job.pre_render_url.unwrap_or_default(),
-            timeout: job.pre_render_timeout,
-            body: job.pre_render_body,
-        })
-    } else {
-        None
-    };
 
     let config = JobConfig {
         name: job.name,
@@ -200,7 +182,6 @@ pub async fn export_job_to_yaml(
         thinking_budget: job.thinking_budget,
         samples: job.samples,
         strategy: job.strategy,
-        pre_render,
         json_schema_file: job.json_schema_file,
     };
 

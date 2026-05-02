@@ -143,15 +143,12 @@ describe("Job Management Workflow", () => {
       temperature: 0.7,
       max_tokens: 1024,
       thinking_budget: 500,
-      pre_render_url: "http://localhost:8081",
-      pre_render_timeout: 30,
-      pre_render_body: '{"query": "test"}',
       json_schema_file: "schema.json",
     };
 
     // Both should be valid
     expect(minimalJob.name).toBe("Minimal Job");
     expect(fullJob.thinking_budget).toBe(500);
-    expect(fullJob.pre_render_body).toBe('{"query": "test"}');
+    expect(fullJob.json_schema_file).toBe("schema.json");
   });
 });
