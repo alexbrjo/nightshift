@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { renderHook, act } from "@testing-library/react";
 
 // Integration test for job management workflow
 describe("Job Management Workflow", () => {
@@ -39,15 +38,16 @@ describe("Job Management Workflow", () => {
     const validTransitions: Record<string, string[]> = {
       pending: ["queued", "cancelled"],
       queued: ["running", "cancelled"],
-      running: ["completed", "failed", "cancelled"],
+      running: ["completed", "completed_with_errors", "failed", "cancelled"],
       completed: [],
+      completed_with_errors: [],
       failed: [],
       cancelled: [],
     };
 
     // Test that all statuses have valid transitions defined
     Object.keys(validTransitions).forEach((status) => {
-      expect(status).toMatch(/pending|queued|running|completed|failed|cancelled/);
+      expect(status).toMatch(/pending|queued|running|completed|completed_with_errors|failed|cancelled/);
     });
   });
 

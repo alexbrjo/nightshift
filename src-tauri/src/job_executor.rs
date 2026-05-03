@@ -11,6 +11,7 @@ use tracing::{debug, error, info, instrument, warn};
 use url::Url;
 
 use crate::database::DatabaseState;
+use crate::transform_runner;
 
 /// Job execution status
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -131,6 +132,7 @@ pub enum JobEvent {
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub job_id: i64,
+    pub job_type: String,
     pub name: String,
     pub prompt_file: String,
     pub data_source: String,
@@ -144,6 +146,9 @@ pub struct WorkerConfig {
     pub samples: i32,
     pub strategy: SamplingStrategy,
     pub json_schema_file: Option<String>,
+    pub transform_script_file: Option<String>,
+    pub transform_error_mode: String,
+    pub transform_output_mode: String,
 }
 
 impl WorkerConfig {
@@ -153,6 +158,7 @@ impl WorkerConfig {
 
         WorkerConfig {
             job_id: job.id,
+            job_type: job.job_type,
             name: job.name,
             prompt_file: job.prompt_file,
             data_source: job.data_source,
@@ -166,6 +172,11 @@ impl WorkerConfig {
             samples: job.samples,
             strategy,
             json_schema_file: job.json_schema_file,
+            transform_script_file: job.transform_script_file,
+            transform_error_mode: job.transform_error_mode.unwrap_or_else(|| "stop".to_string()),
+            transform_output_mode: job
+                .transform_output_mode
+                .unwrap_or_else(|| "one_to_one".to_string()),
         }
     }
 }
@@ -405,6 +416,7 @@ impl JobExecutor {
 
         // Flip DB status to "running". Do not rewrite other columns.
         crate::database::update_job_status(&self.db.pool(), job_id, "running").await?;
+        crate::database::clear_job_failures(&self.db.pool(), job_id).await?;
 
         // Enqueue and start in-memory state.
         self.queue.enqueue(job_id).await;
@@ -438,6 +450,10 @@ impl JobExecutor {
         config: WorkerConfig,
         tx: mpsc::Sender<JobEvent>,
     ) -> Result<(), String> {
+        if config.job_type == "transform" {
+            return self.execute_transform_job(config, tx).await;
+        }
+
         let cancellation = self
             .queue
             .get_cancellation_token(config.job_id)
@@ -540,6 +556,12 @@ impl JobExecutor {
                 Err(e) => {
                     failed_count += 1;
                     last_error = Some(e.clone());
+                    if let Err(record_err) =
+                        crate::database::add_job_failure(&self.db.pool(), config.job_id, index, &e)
+                            .await
+                    {
+                        warn!("Failed to record job failure: {}", record_err);
+                    }
                     error!(
                         "Sample {} failed for job {}: {} (progress: {}/{})",
                         index, config.job_id, e, completed_count, total_samples
@@ -609,6 +631,148 @@ impl JobExecutor {
         Ok(())
     }
 
+    async fn execute_transform_job(
+        &self,
+        config: WorkerConfig,
+        tx: mpsc::Sender<JobEvent>,
+    ) -> Result<(), String> {
+        let cancellation = self
+            .queue
+            .get_cancellation_token(config.job_id)
+            .await
+            .ok_or("Cancellation token not found")?;
+        transform_runner::check_transform_runtime().await?;
+
+        let script_file = config
+            .transform_script_file
+            .as_deref()
+            .ok_or("Transform job is missing a script file")?;
+        let script_path = self.resolve_within_project(script_file)?;
+        let script = tokio::fs::read_to_string(&script_path)
+            .await
+            .map_err(|e| format!("Failed to read transform script {}: {}", script_file, e))?;
+
+        let samples = self.load_samples(&config).await?;
+        let total_samples = samples.len();
+        let collection_id = self.ensure_collection(&config).await?;
+
+        let _ = tx
+            .send(JobEvent::Started {
+                job_id: config.job_id,
+                job_name: config.name.clone(),
+                total_samples,
+            })
+            .await;
+
+        let mut completed_count = 0;
+        let mut failed_count = 0;
+        let mut last_error: Option<String> = None;
+
+        for (index, sample) in samples.into_iter().enumerate() {
+            if cancellation.is_cancelled().await {
+                let _ = tx
+                    .send(JobEvent::Cancelled {
+                        job_id: config.job_id,
+                        completed_samples: completed_count,
+                    })
+                    .await;
+                self.queue.complete(config.job_id).await;
+                return Ok(());
+            }
+
+            let _ = tx.send(JobEvent::SampleStarted { sample_index: index, total_samples }).await;
+
+            match transform_runner::run_transform_script(&script, &sample).await {
+                Ok(Some(output)) => {
+                    if let Err(e) =
+                        self.save_transform_output(collection_id, &config, &output).await
+                    {
+                        self.delete_collection(collection_id).await?;
+                        return Err(e);
+                    }
+                    completed_count += 1;
+                    let _ = tx
+                        .send(JobEvent::SampleCompleted {
+                            sample_index: index,
+                            total_samples,
+                            output,
+                        })
+                        .await;
+                }
+                Ok(None) => {
+                    completed_count += 1;
+                    let _ = tx
+                        .send(JobEvent::SampleCompleted {
+                            sample_index: index,
+                            total_samples,
+                            output: serde_json::Value::Null,
+                        })
+                        .await;
+                }
+                Err(e) => {
+                    failed_count += 1;
+                    last_error = Some(e.clone());
+                    if let Err(record_err) =
+                        crate::database::add_job_failure(&self.db.pool(), config.job_id, index, &e)
+                            .await
+                    {
+                        warn!("Failed to record job failure: {}", record_err);
+                    }
+                    let _ = tx
+                        .send(JobEvent::SampleFailed {
+                            sample_index: index,
+                            total_samples,
+                            error: e.clone(),
+                            retry_count: 0,
+                        })
+                        .await;
+                    if config.transform_error_mode != "skip" {
+                        self.delete_collection(collection_id).await?;
+                        let _ = tx.send(JobEvent::Failed { job_id: config.job_id, error: e }).await;
+                        self.queue.complete(config.job_id).await;
+                        return Ok(());
+                    }
+                }
+            }
+
+            let progress = JobProgress {
+                job_id: config.job_id,
+                job_name: config.name.clone(),
+                status: JobStatus::Running,
+                current_sample: index + 1,
+                total_samples,
+                completed_samples: completed_count,
+                failed_samples: failed_count,
+                overall_progress: if total_samples == 0 {
+                    1.0
+                } else {
+                    (index + 1) as f64 / total_samples as f64
+                },
+            };
+            let _ = tx.send(JobEvent::ProgressUpdate(progress)).await;
+        }
+
+        if completed_count == 0 && failed_count > 0 {
+            let _ = tx
+                .send(JobEvent::Failed {
+                    job_id: config.job_id,
+                    error: last_error.unwrap_or_else(|| "All transform items failed".to_string()),
+                })
+                .await;
+        } else {
+            let _ = tx
+                .send(JobEvent::Completed {
+                    job_id: config.job_id,
+                    success_count: completed_count,
+                    failure_count: failed_count,
+                })
+                .await;
+        }
+
+        self.queue.complete(config.job_id).await;
+        Ok(())
+    }
+
     /// Ensure collection exists for job. The UNIQUE(job_id) constraint on the
     /// collections table makes this race-safe even under concurrent calls:
     /// `INSERT OR IGNORE` either creates the row or no-ops if another caller
@@ -642,6 +806,34 @@ impl JobExecutor {
             .execute(&self.db.pool())
             .await
             .map_err(|e| format!("Failed to save collection item: {}", e))?;
+
+        Ok(())
+    }
+
+    async fn save_transform_output(
+        &self,
+        collection_id: i64,
+        config: &WorkerConfig,
+        data: &serde_json::Value,
+    ) -> Result<(), String> {
+        if config.transform_output_mode == "unwrap_arrays" {
+            if let serde_json::Value::Array(items) = data {
+                for item in items {
+                    self.save_to_collection(collection_id, item).await?;
+                }
+                return Ok(());
+            }
+        }
+
+        self.save_to_collection(collection_id, data).await
+    }
+
+    async fn delete_collection(&self, collection_id: i64) -> Result<(), String> {
+        sqlx::query(r#"DELETE FROM collections WHERE id = ?"#)
+            .bind(collection_id)
+            .execute(&self.db.pool())
+            .await
+            .map_err(|e| format!("Failed to delete partial collection: {}", e))?;
 
         Ok(())
     }
@@ -682,9 +874,7 @@ impl JobExecutor {
         );
 
         let samples = if let Some(rest) = config.data_source.strip_prefix("collection:") {
-            let id: i64 = rest
-                .parse()
-                .map_err(|_| format!("Invalid collection id: {}", rest))?;
+            let id: i64 = rest.parse().map_err(|_| format!("Invalid collection id: {}", rest))?;
             self.load_collection_samples(id).await?
         } else {
             self.load_file_samples(&config.data_source).await?
@@ -705,10 +895,7 @@ impl JobExecutor {
         Ok(Self::apply_strategy(samples, &config.strategy, config.samples))
     }
 
-    async fn load_file_samples(
-        &self,
-        data_source: &str,
-    ) -> Result<Vec<serde_json::Value>, String> {
+    async fn load_file_samples(&self, data_source: &str) -> Result<Vec<serde_json::Value>, String> {
         let full_path = self.resolve_within_project(data_source)?;
         debug!("Full data source path: {}", full_path.display());
 
@@ -719,9 +906,8 @@ impl JobExecutor {
         let mut samples: Vec<serde_json::Value> = Vec::new();
 
         if content.trim().starts_with('[') {
-            let parsed: Vec<serde_json::Value> = serde_json::from_str(&content).map_err(|e| {
-                format!("Failed to parse JSON array from {}: {}", data_source, e)
-            })?;
+            let parsed: Vec<serde_json::Value> = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse JSON array from {}: {}", data_source, e))?;
             samples = parsed;
         } else {
             for (line_num, line) in content.lines().enumerate() {
@@ -733,12 +919,7 @@ impl JobExecutor {
                 match serde_json::from_str(trimmed) {
                     Ok(obj) => samples.push(obj),
                     Err(e) => {
-                        warn!(
-                            "Failed to parse line {} in {}: {}",
-                            line_num + 1,
-                            data_source,
-                            e
-                        );
+                        warn!("Failed to parse line {} in {}: {}", line_num + 1, data_source, e);
                     }
                 }
             }
@@ -917,11 +1098,9 @@ impl JobExecutor {
         match config.provider.to_lowercase().as_str() {
             "local" | "openai" | "custom" | "google" | "" => {}
             "anthropic" => {
-                return Err(
-                    "Anthropic provider is not yet supported. Use Local/OpenAI/Custom \
+                return Err("Anthropic provider is not yet supported. Use Local/OpenAI/Custom \
                      pointed at an OpenAI-compatible endpoint."
-                        .to_string(),
-                );
+                    .to_string());
             }
             other => {
                 return Err(format!("Unknown provider: {}", other));
@@ -1030,9 +1209,9 @@ impl JobExecutor {
                     "Output mode is 'JSON Schema' but no schema file was selected".to_string()
                 })?;
                 let full_path = self.resolve_within_project(schema_file)?;
-                let raw = tokio::fs::read_to_string(&full_path).await.map_err(|e| {
-                    format!("Failed to read schema file {}: {}", schema_file, e)
-                })?;
+                let raw = tokio::fs::read_to_string(&full_path)
+                    .await
+                    .map_err(|e| format!("Failed to read schema file {}: {}", schema_file, e))?;
                 let schema: serde_json::Value = serde_json::from_str(&raw)
                     .map_err(|e| format!("Schema file {} is not valid JSON: {}", schema_file, e))?;
                 let name = std::path::Path::new(schema_file)
@@ -1055,20 +1234,15 @@ impl JobExecutor {
 
 /// Collection items store the raw model output as `content: "<string>"`.
 /// When that string is itself JSON (Plain JSON / JSON Schema output modes),
-/// parse it so chained-job templates can write `{{ content.field }}` as a
-/// user would expect — instead of accessing attributes on a JSON-encoded
-/// string and getting `undefined`.
-fn parse_content_field(mut row: serde_json::Value) -> serde_json::Value {
-    let Some(obj) = row.as_object_mut() else { return row };
-    let Some(content) = obj.get("content").and_then(|c| c.as_str()) else {
+/// unwrap it so chained jobs receive the model's JSON object as the item.
+fn parse_content_field(row: serde_json::Value) -> serde_json::Value {
+    let Some(content) = row.get("content").and_then(|c| c.as_str()) else {
         return row;
     };
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content.trim()) {
-        if parsed.is_object() || parsed.is_array() {
-            obj.insert("content".to_string(), parsed);
-        }
+    match serde_json::from_str::<serde_json::Value>(content.trim()) {
+        Ok(parsed) if parsed.is_object() || parsed.is_array() => parsed,
+        _ => row,
     }
-    row
 }
 
 /// Render Jinja2 prompt with sample data. Sample fields are exposed at the top
@@ -1175,24 +1349,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_content_field_parses_json_object_string() {
+    fn parse_content_field_unwraps_json_object_string() {
         let row = serde_json::json!({
             "content": r#"{"word_de": "gehen", "word_en": "to go"}"#,
             "model": "bonsai-8b",
             "sample_index": 0,
         });
         let parsed = parse_content_field(row);
-        assert_eq!(parsed["content"]["word_de"], "gehen");
-        assert_eq!(parsed["content"]["word_en"], "to go");
-        assert_eq!(parsed["model"], "bonsai-8b");
-        assert_eq!(parsed["sample_index"], 0);
+        assert_eq!(parsed["word_de"], "gehen");
+        assert_eq!(parsed["word_en"], "to go");
+        assert!(parsed.get("model").is_none());
+        assert!(parsed.get("sample_index").is_none());
     }
 
     #[test]
-    fn parse_content_field_parses_json_array_string() {
+    fn parse_content_field_unwraps_json_array_string() {
         let row = serde_json::json!({"content": "[1, 2, 3]"});
         let parsed = parse_content_field(row);
-        assert_eq!(parsed["content"], serde_json::json!([1, 2, 3]));
+        assert_eq!(parsed, serde_json::json!([1, 2, 3]));
     }
 
     #[test]
@@ -1236,8 +1410,7 @@ mod tests {
 
     #[test]
     fn apply_strategy_exhaustive_runs_every_row_once_by_default() {
-        let samples =
-            vec![serde_json::json!(1), serde_json::json!(2), serde_json::json!(3)];
+        let samples = vec![serde_json::json!(1), serde_json::json!(2), serde_json::json!(3)];
         let out = JobExecutor::apply_strategy(samples, &SamplingStrategy::Exhaustive, 1);
         assert_eq!(out, vec![serde_json::json!(1), serde_json::json!(2), serde_json::json!(3)]);
     }
@@ -1280,15 +1453,10 @@ mod tests {
     async fn make_executor() -> (JobExecutor, std::path::PathBuf) {
         use std::env;
         use uuid::Uuid;
-        let project_dir =
-            env::temp_dir().join(format!("ns_exec_test_{}", Uuid::new_v4()));
+        let project_dir = env::temp_dir().join(format!("ns_exec_test_{}", Uuid::new_v4()));
         std::fs::create_dir_all(project_dir.join(".nightshift")).unwrap();
         let db = DatabaseState::new(&project_dir).await.expect("db");
-        let exec = JobExecutor {
-            db,
-            queue: Arc::new(JobQueue::new()),
-            client: Client::new(),
-        };
+        let exec = JobExecutor { db, queue: Arc::new(JobQueue::new()), client: Client::new() };
         (exec, project_dir)
     }
 
@@ -1302,16 +1470,23 @@ mod tests {
         .execute(&exec.db.pool()).await.unwrap();
         let job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
             .bind(format!("job-{}", status))
-            .fetch_one(&exec.db.pool()).await.unwrap();
-        let cid: i64 = sqlx::query_scalar(
-            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id",
-        )
-        .bind(job_id).bind(format!("c-{}", status))
-        .fetch_one(&exec.db.pool()).await.unwrap();
+            .fetch_one(&exec.db.pool())
+            .await
+            .unwrap();
+        let cid: i64 =
+            sqlx::query_scalar("INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id")
+                .bind(job_id)
+                .bind(format!("c-{}", status))
+                .fetch_one(&exec.db.pool())
+                .await
+                .unwrap();
         for item in items {
             sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
-                .bind(cid).bind(*item)
-                .execute(&exec.db.pool()).await.unwrap();
+                .bind(cid)
+                .bind(*item)
+                .execute(&exec.db.pool())
+                .await
+                .unwrap();
         }
         cid
     }
@@ -1319,12 +1494,9 @@ mod tests {
     #[tokio::test]
     async fn load_collection_samples_returns_items_for_completed_source() {
         let (exec, dir) = make_executor().await;
-        let cid = make_collection(
-            &exec,
-            "completed",
-            &[r#"{"content":"hi"}"#, r#"{"content":"bye"}"#],
-        )
-        .await;
+        let cid =
+            make_collection(&exec, "completed", &[r#"{"content":"hi"}"#, r#"{"content":"bye"}"#])
+                .await;
 
         let out = exec.load_collection_samples(cid).await.unwrap();
         assert_eq!(out.len(), 2);
@@ -1354,6 +1526,7 @@ mod tests {
         let (exec, dir) = make_executor().await;
         let cfg = WorkerConfig {
             job_id: 1,
+            job_type: "inference".into(),
             name: "n".into(),
             prompt_file: "p".into(),
             data_source: "collection:abc".into(),
@@ -1367,9 +1540,371 @@ mod tests {
             samples: 1,
             strategy: SamplingStrategy::Single,
             json_schema_file: None,
+            transform_script_file: None,
+            transform_error_mode: "stop".into(),
+            transform_output_mode: "one_to_one".into(),
         };
         let err = exec.load_samples(&cfg).await.unwrap_err();
         assert!(err.contains("Invalid collection id"), "got: {err}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn execute_transform_job_writes_non_null_outputs_to_collection() {
+        if crate::transform_runner::check_transform_runtime().await.is_err() {
+            return;
+        }
+
+        let (exec, dir) = make_executor().await;
+        std::fs::write(
+            dir.join("input.jsonl"),
+            r#"{"value":21}
+{"value":0}
+"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("transforms")).unwrap();
+        std::fs::write(
+            dir.join("transforms").join("double.js"),
+            "return item.value ? { value: item.value * 2 } : null;",
+        )
+        .unwrap();
+
+        let job_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO inference_jobs (
+                job_type, name, prompt_file, data_source, provider, model, server_url,
+                output_mode, samples, strategy, transform_script_file, transform_error_mode,
+                transform_output_mode, status
+            )
+            VALUES ('transform', 'double', '', 'input.jsonl', 'Nightshift', 'JavaScript', '',
+                'Transform', 1, 'exhaustive', 'transforms/double.js', 'stop', 'one_to_one',
+                'pending')
+            RETURNING id
+            "#,
+        )
+        .fetch_one(&exec.db.pool())
+        .await
+        .unwrap();
+
+        exec.queue.enqueue(job_id).await;
+        exec.queue.start(job_id).await;
+        let job = crate::database::get_inference_job_by_id(&exec.db.pool(), job_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(16);
+
+        exec.execute_job(WorkerConfig::from_job(job), tx).await.unwrap();
+        while rx.recv().await.is_some() {}
+
+        let rows = sqlx::query_scalar::<_, serde_json::Value>(
+            r#"
+            SELECT ci.data
+            FROM collection_items ci
+            JOIN collections c ON c.id = ci.collection_id
+            WHERE c.job_id = ?
+            ORDER BY ci.id ASC
+            "#,
+        )
+        .bind(job_id)
+        .fetch_all(&exec.db.pool())
+        .await
+        .unwrap();
+
+        assert_eq!(rows, vec![serde_json::json!({ "value": 42 })]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn execute_transform_job_unwraps_array_outputs_when_configured() {
+        if crate::transform_runner::check_transform_runtime().await.is_err() {
+            return;
+        }
+
+        let (exec, dir) = make_executor().await;
+        std::fs::write(
+            dir.join("input.jsonl"),
+            r#"{"questions":[{"content":"A","answer":"a"},{"content":"B","answer":"b"}]}
+"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("transforms")).unwrap();
+        std::fs::write(
+            dir.join("transforms").join("unwrap.js"),
+            "return item.questions.map((q) => ({ content: q.content, answer: q.answer }));",
+        )
+        .unwrap();
+
+        let job_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO inference_jobs (
+                job_type, name, prompt_file, data_source, provider, model, server_url,
+                output_mode, samples, strategy, transform_script_file, transform_error_mode,
+                transform_output_mode, status
+            )
+            VALUES ('transform', 'unwrap', '', 'input.jsonl', 'Nightshift', 'JavaScript', '',
+                'Transform', 1, 'exhaustive', 'transforms/unwrap.js', 'stop', 'unwrap_arrays',
+                'pending')
+            RETURNING id
+            "#,
+        )
+        .fetch_one(&exec.db.pool())
+        .await
+        .unwrap();
+
+        exec.queue.enqueue(job_id).await;
+        exec.queue.start(job_id).await;
+        let job = crate::database::get_inference_job_by_id(&exec.db.pool(), job_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(16);
+
+        exec.execute_job(WorkerConfig::from_job(job), tx).await.unwrap();
+        while rx.recv().await.is_some() {}
+
+        let rows = sqlx::query_scalar::<_, serde_json::Value>(
+            r#"
+            SELECT ci.data
+            FROM collection_items ci
+            JOIN collections c ON c.id = ci.collection_id
+            WHERE c.job_id = ?
+            ORDER BY ci.id ASC
+            "#,
+        )
+        .bind(job_id)
+        .fetch_all(&exec.db.pool())
+        .await
+        .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                serde_json::json!({ "content": "A", "answer": "a" }),
+                serde_json::json!({ "content": "B", "answer": "b" }),
+            ]
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn execute_transform_job_unwraps_json_content_from_source_collection() {
+        if crate::transform_runner::check_transform_runtime().await.is_err() {
+            return;
+        }
+
+        let (exec, dir) = make_executor().await;
+        let source_collection_id = make_collection(
+            &exec,
+            "completed",
+            &[r#"{"content":"{\"questions\":[{\"content\":\"A ___\",\"answer\":\"a\"},{\"content\":\"B ___\",\"answer\":\"b\"}],\"topic\":\"letters\"}","model":"test"}"#],
+        )
+        .await;
+        std::fs::create_dir_all(dir.join("transforms")).unwrap();
+        std::fs::write(
+            dir.join("transforms").join("questions.js"),
+            "return item.questions.map((q) => ({ topic: item.topic, content: q.content, answer: q.answer }));",
+        )
+        .unwrap();
+
+        let job_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO inference_jobs (
+                job_type, name, prompt_file, data_source, provider, model, server_url,
+                output_mode, samples, strategy, transform_script_file, transform_error_mode,
+                transform_output_mode, status
+            )
+            VALUES ('transform', 'collection-unwrap', '', ?, 'Nightshift', 'JavaScript', '',
+                'Transform', 1, 'exhaustive', 'transforms/questions.js', 'stop', 'unwrap_arrays',
+                'pending')
+            RETURNING id
+            "#,
+        )
+        .bind(format!("collection:{}", source_collection_id))
+        .fetch_one(&exec.db.pool())
+        .await
+        .unwrap();
+
+        exec.queue.enqueue(job_id).await;
+        exec.queue.start(job_id).await;
+        let job = crate::database::get_inference_job_by_id(&exec.db.pool(), job_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(16);
+
+        exec.execute_job(WorkerConfig::from_job(job), tx).await.unwrap();
+        while rx.recv().await.is_some() {}
+
+        let rows = sqlx::query_scalar::<_, serde_json::Value>(
+            r#"
+            SELECT ci.data
+            FROM collection_items ci
+            JOIN collections c ON c.id = ci.collection_id
+            WHERE c.job_id = ?
+            ORDER BY ci.id ASC
+            "#,
+        )
+        .bind(job_id)
+        .fetch_all(&exec.db.pool())
+        .await
+        .unwrap();
+
+        assert_eq!(
+            rows,
+            vec![
+                serde_json::json!({ "topic": "letters", "content": "A ___", "answer": "a" }),
+                serde_json::json!({ "topic": "letters", "content": "B ___", "answer": "b" }),
+            ]
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn execute_transform_job_stop_mode_removes_partial_collection() {
+        if crate::transform_runner::check_transform_runtime().await.is_err() {
+            return;
+        }
+
+        let (exec, dir) = make_executor().await;
+        std::fs::write(
+            dir.join("input.jsonl"),
+            r#"{"value":21}
+{"value":0}
+"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("transforms")).unwrap();
+        std::fs::write(
+            dir.join("transforms").join("fail.js"),
+            "if (!item.value) throw new Error('bad row'); return { value: item.value };",
+        )
+        .unwrap();
+
+        let job_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO inference_jobs (
+                job_type, name, prompt_file, data_source, provider, model, server_url,
+                output_mode, samples, strategy, transform_script_file, transform_error_mode,
+                transform_output_mode, status
+            )
+            VALUES ('transform', 'fail', '', 'input.jsonl', 'Nightshift', 'JavaScript', '',
+                'Transform', 1, 'exhaustive', 'transforms/fail.js', 'stop', 'one_to_one',
+                'pending')
+            RETURNING id
+            "#,
+        )
+        .fetch_one(&exec.db.pool())
+        .await
+        .unwrap();
+
+        exec.queue.enqueue(job_id).await;
+        exec.queue.start(job_id).await;
+        let job = crate::database::get_inference_job_by_id(&exec.db.pool(), job_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(16);
+
+        exec.execute_job(WorkerConfig::from_job(job), tx).await.unwrap();
+        while rx.recv().await.is_some() {}
+
+        let collection_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM collections WHERE job_id = ?")
+                .bind(job_id)
+                .fetch_one(&exec.db.pool())
+                .await
+                .unwrap();
+        assert_eq!(collection_count, 0);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn execute_transform_job_skip_mode_records_item_failures() {
+        if crate::transform_runner::check_transform_runtime().await.is_err() {
+            return;
+        }
+
+        let (exec, dir) = make_executor().await;
+        std::fs::write(
+            dir.join("input.jsonl"),
+            r#"{"value":21}
+{"value":0}
+"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.join("transforms")).unwrap();
+        std::fs::write(
+            dir.join("transforms").join("skip.js"),
+            "if (!item.value) throw new Error('bad row'); return { value: item.value };",
+        )
+        .unwrap();
+
+        let job_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO inference_jobs (
+                job_type, name, prompt_file, data_source, provider, model, server_url,
+                output_mode, samples, strategy, transform_script_file, transform_error_mode,
+                transform_output_mode, status
+            )
+            VALUES ('transform', 'skip', '', 'input.jsonl', 'Nightshift', 'JavaScript', '',
+                'Transform', 1, 'exhaustive', 'transforms/skip.js', 'skip', 'one_to_one',
+                'pending')
+            RETURNING id
+            "#,
+        )
+        .fetch_one(&exec.db.pool())
+        .await
+        .unwrap();
+
+        exec.queue.enqueue(job_id).await;
+        exec.queue.start(job_id).await;
+        let job = crate::database::get_inference_job_by_id(&exec.db.pool(), job_id)
+            .await
+            .unwrap()
+            .unwrap();
+        let (tx, mut rx) = mpsc::channel(16);
+
+        exec.execute_job(WorkerConfig::from_job(job), tx).await.unwrap();
+
+        let mut completed_event = None;
+        while let Some(event) = rx.recv().await {
+            if let JobEvent::Completed { success_count, failure_count, .. } = event {
+                completed_event = Some((success_count, failure_count));
+            }
+        }
+
+        assert_eq!(completed_event, Some((1, 1)));
+
+        let failures = sqlx::query_as::<_, crate::database::JobFailure>(
+            r#"
+            SELECT id, job_id, sample_index, error, created_at
+            FROM job_failures
+            WHERE job_id = ?
+            "#,
+        )
+        .bind(job_id)
+        .fetch_all(&exec.db.pool())
+        .await
+        .unwrap();
+        assert_eq!(failures.len(), 1);
+        assert_eq!(failures[0].sample_index, 1);
+        assert!(failures[0].error.contains("bad row"));
+
+        let output_count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM collection_items ci
+            JOIN collections c ON c.id = ci.collection_id
+            WHERE c.job_id = ?
+            "#,
+        )
+        .bind(job_id)
+        .fetch_one(&exec.db.pool())
+        .await
+        .unwrap();
+        assert_eq!(output_count, 1);
         std::fs::remove_dir_all(dir).ok();
     }
 

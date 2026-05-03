@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { InferenceJob } from "../database";
-import { formatDateTime } from "../utils/date";
+import { formatRelativeTime } from "../utils/date";
 
 interface JobListSidebarProps {
   selectedId?: number | null;
@@ -14,6 +14,8 @@ function getStatusClass(status: string): string {
   switch (status.toLowerCase()) {
     case "completed":
       return "status-completed";
+    case "completed_with_errors":
+      return "status-warning";
     case "running":
       return "status-running";
     case "failed":
@@ -26,6 +28,11 @@ function getStatusClass(status: string): string {
     default:
       return "";
   }
+}
+
+function formatStatus(status: string): string {
+  if (status === "completed_with_errors") return "Completed with errors";
+  return status;
 }
 
 export default function JobListSidebar({
@@ -70,7 +77,7 @@ export default function JobListSidebar({
         <div className="loading-indicator">Loading…</div>
       ) : jobs.length === 0 ? (
         <div className="job-list-empty">
-          <p>No inference jobs yet.</p>
+          <p>No jobs yet.</p>
           <button className="btn-secondary btn-small" onClick={onNewJob}>
             Create your first job
           </button>
@@ -78,19 +85,26 @@ export default function JobListSidebar({
       ) : (
         <ul className="job-list">
           {jobs.map((job) => {
-            const date = formatDateTime(job.created_at);
+            const date = formatRelativeTime(job.created_at);
             return (
               <li
                 key={job.id}
-                className={`job-item${selectedId === job.id ? " selected" : ""}`}
+                className={`job-item ${getStatusClass(job.status)}${
+                  selectedId === job.id ? " selected" : ""
+                }`}
                 onClick={() => onSelectJob(job.id)}
               >
-                <div className="job-name">{job.name}</div>
-                <div className="job-meta">
+                <div className="job-primary-line">
+                  <div className="job-name">{job.name}</div>
                   <span className={`status-badge ${getStatusClass(job.status)}`}>
-                    {job.status}
+                    {formatStatus(job.status)}
                   </span>
-                  {date && <span>{date}</span>}
+                </div>
+                <div className="job-meta">
+                  <span className="job-type-badge">
+                    {job.job_type === "transform" ? "Transform" : "Inference"}
+                  </span>
+                  {date && <span className="job-relative-time">{date}</span>}
                 </div>
               </li>
             );

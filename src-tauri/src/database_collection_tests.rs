@@ -514,17 +514,20 @@ mod collection_commands_tests {
     }
 
     #[tokio::test]
-    async fn list_selectable_collections_only_includes_completed_jobs() {
+    async fn list_selectable_collections_includes_successful_terminal_jobs() {
         let (state, dir) = create_test_database().await;
 
         let done_job = insert_job_with_status(&state, "done", "completed").await;
+        let mixed_job = insert_job_with_status(&state, "mixed", "completed_with_errors").await;
         let running_job = insert_job_with_status(&state, "running", "running").await;
         let failed_job = insert_job_with_status(&state, "failed", "failed").await;
         let cancelled_job = insert_job_with_status(&state, "cancelled", "cancelled").await;
 
         let done_col = insert_collection(&state, done_job, "done outputs").await;
+        let mixed_col = insert_collection(&state, mixed_job, "mixed outputs").await;
         insert_item(&state, done_col, r#"{"a":1}"#).await;
         insert_item(&state, done_col, r#"{"a":2}"#).await;
+        insert_item(&state, mixed_col, r#"{"a":3}"#).await;
         let _ = insert_collection(&state, running_job, "running outputs").await;
         let _ = insert_collection(&state, failed_job, "failed outputs").await;
         let _ = insert_collection(&state, cancelled_job, "cancelled outputs").await;
@@ -533,9 +536,9 @@ mod collection_commands_tests {
             .await
             .expect("query");
 
-        assert_eq!(result.len(), 1, "only the completed-job collection should appear");
-        assert_eq!(result[0].name, "done outputs");
-        assert_eq!(result[0].item_count, 2);
+        assert_eq!(result.len(), 2, "successful terminal collections should appear");
+        assert!(result.iter().any(|c| c.name == "done outputs" && c.item_count == 2));
+        assert!(result.iter().any(|c| c.name == "mixed outputs" && c.item_count == 1));
 
         cleanup_test_database(&dir);
     }

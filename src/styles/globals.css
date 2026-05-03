@@ -59,10 +59,12 @@
   /* ----- Status ----- */
   --status-completed: #15803d;
   --status-running: #1d4ed8;
+  --status-warning: #b45309;
   --status-failed: #b91c1c;
   --status-pending: #525964;
   --status-completed-bg: rgba(21, 128, 61, 0.1);
   --status-running-bg: rgba(29, 78, 216, 0.1);
+  --status-warning-bg: rgba(180, 83, 9, 0.12);
   --status-failed-bg: rgba(185, 28, 28, 0.1);
 
   /* ----- Inputs ----- */
@@ -118,10 +120,12 @@
 
   --status-completed: #6be08c;
   --status-running: #6bb4e0;
+  --status-warning: #f0b35a;
   --status-failed: #e06b6b;
   --status-pending: #7a7590;
   --status-completed-bg: rgba(107, 224, 140, 0.15);
   --status-running-bg: rgba(107, 180, 224, 0.15);
+  --status-warning-bg: rgba(240, 179, 90, 0.15);
   --status-failed-bg: rgba(224, 107, 107, 0.15);
 
   --input-bg: rgba(0, 0, 0, 0.2);
@@ -833,7 +837,7 @@ body {
 }
 
 .job-item {
-  padding: 10px 20px;
+  padding: 12px 20px;
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
@@ -846,24 +850,36 @@ body {
   background: var(--bg-hover);
 }
 
+.job-primary-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
 .job-name {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
-  margin-bottom: 4px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .job-meta {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   font-size: 11px;
   color: var(--text-muted);
   font-family: var(--font-mono);
+}
+
+.job-relative-time {
+  justify-self: end;
+  white-space: nowrap;
 }
 
 .status-badge {
@@ -878,12 +894,24 @@ body {
   color: var(--text-muted);
 }
 
+.job-type-badge {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
 .status-badge.status-completed {
   color: var(--status-completed);
 }
 
 .status-badge.status-running {
   color: var(--status-running);
+}
+
+.status-badge.status-warning {
+  color: var(--status-warning);
 }
 
 .status-badge.status-failed {
@@ -956,6 +984,8 @@ body {
 .job-runner-page .inference-job-form-container,
 .job-runner-page .job-view-page,
 .job-runner-page .config-section,
+.job-runner-page .job-failures-section,
+.job-runner-page .job-failure-item,
 .job-runner-page .progress-bar-container,
 .job-runner-page input,
 .job-runner-page select,
@@ -1034,6 +1064,13 @@ body {
   color: inherit;
 }
 
+.status-banner .status-help {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 400;
+  color: inherit;
+}
+
 .status-banner.status-completed {
   background: var(--status-completed-bg);
   border: 1px solid color-mix(in srgb, var(--status-completed) 30%, transparent);
@@ -1044,6 +1081,12 @@ body {
   background: var(--status-running-bg);
   border: 1px solid color-mix(in srgb, var(--status-running) 30%, transparent);
   color: var(--status-running);
+}
+
+.status-banner.status-completed_with_errors {
+  background: var(--status-warning-bg);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 30%, transparent);
+  color: var(--status-warning);
 }
 
 .status-banner.status-failed {
@@ -1177,6 +1220,52 @@ body {
   color: var(--text-secondary);
 }
 
+.job-failures-section {
+  background: var(--bg-elevated);
+  border: 1px solid color-mix(in srgb, var(--status-warning) 24%, var(--border-color));
+  padding: 24px;
+  margin-bottom: 24px;
+}
+
+.job-failures-section h2 {
+  font-size: 20px;
+  color: var(--text-primary);
+  margin: 0 0 8px 0;
+}
+
+.job-failures-section > p {
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+}
+
+.job-failure-list {
+  list-style: none;
+  display: grid;
+  gap: 12px;
+}
+
+.job-failure-item {
+  border: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  padding: 12px;
+}
+
+.job-failure-heading {
+  margin-bottom: 8px;
+  color: var(--status-warning);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.job-failure-item pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
 /* Collections Section */
 .collections-section {
   background: var(--bg-elevated);
@@ -1204,9 +1293,36 @@ body {
 .form-title {
   font-size: 20px;
   color: var(--text-primary);
-  margin-bottom: 20px;
+  margin-bottom: 12px;
   padding-bottom: 12px;
   border-bottom: 1px solid var(--border-color);
+}
+
+.job-type-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  margin-bottom: 20px;
+  background: var(--input-bg-readonly);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.job-type-tabs button {
+  padding: 7px 12px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+
+.job-type-tabs button.active {
+  background: var(--input-bg);
+  color: var(--text-primary);
+  box-shadow: 0 1px 2px color-mix(in srgb, black 20%, transparent);
 }
 
 .inference-job-form {
@@ -1756,6 +1872,34 @@ legend {
   word-break: break-word;
   max-height: 320px;
   overflow: auto;
+}
+
+.collection-viewer .pagination {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 16px 24px 20px;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-deepest);
+  font-family: var(--font-sans);
+}
+
+.collection-viewer .pagination .btn-secondary {
+  min-width: 96px;
+  padding: 8px 14px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
+
+.collection-viewer .pagination .page-info {
+  min-width: 120px;
+  text-align: center;
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .btn-small {

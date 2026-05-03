@@ -8,6 +8,7 @@ use tauri::State;
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct InferenceJob {
     pub id: i64,
+    pub job_type: String,
     pub name: String,
     pub prompt_file: String,
     pub data_source: String,
@@ -21,6 +22,9 @@ pub struct InferenceJob {
     pub samples: i32,
     pub strategy: String,
     pub json_schema_file: Option<String>,
+    pub transform_script_file: Option<String>,
+    pub transform_error_mode: Option<String>,
+    pub transform_output_mode: Option<String>,
     pub status: String,
     pub error_message: Option<String>,
     pub created_at: String,
@@ -33,6 +37,15 @@ pub struct CollectionItem {
     pub id: i64,
     pub collection_id: i64,
     pub data: serde_json::Value,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
+pub struct JobFailure {
+    pub id: i64,
+    pub job_id: i64,
+    pub sample_index: i64,
+    pub error: String,
     pub created_at: String,
 }
 
@@ -62,6 +75,21 @@ pub struct InferenceJobInput {
     pub json_schema_file: Option<String>,
 }
 
+/// Input parameters for creating a transform job.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TransformJobInput {
+    pub name: String,
+    #[serde(rename = "dataSource")]
+    pub data_source: String,
+    #[serde(rename = "scriptFile")]
+    pub script_file: String,
+    #[serde(rename = "errorMode")]
+    pub error_mode: String,
+    #[serde(rename = "outputMode")]
+    pub output_mode: String,
+}
+
 fn validate_inference_job_input(input: &InferenceJobInput) -> Result<(), String> {
     if input.name.trim().is_empty() {
         return Err("Job name cannot be empty".to_string());
@@ -76,6 +104,26 @@ fn validate_inference_job_input(input: &InferenceJobInput) -> Result<(), String>
     }
 
     Ok(())
+}
+
+fn validate_transform_job_input(input: &TransformJobInput) -> Result<(), String> {
+    if input.name.trim().is_empty() {
+        return Err("Job name cannot be empty".to_string());
+    }
+    if input.data_source.trim().is_empty() {
+        return Err("Data source is required".to_string());
+    }
+    if input.script_file.trim().is_empty() {
+        return Err("Transform script file is required".to_string());
+    }
+    match input.error_mode.as_str() {
+        "stop" | "skip" => Ok(()),
+        other => Err(format!("Unknown transform error mode: {}", other)),
+    }?;
+    match input.output_mode.as_str() {
+        "one_to_one" | "unwrap_arrays" => Ok(()),
+        other => Err(format!("Unknown transform output mode: {}", other)),
+    }
 }
 
 /// Database connection state.
@@ -217,6 +265,7 @@ impl DatabaseState {
             r#"
             CREATE TABLE IF NOT EXISTS inference_jobs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_type TEXT NOT NULL DEFAULT 'inference',
                 name TEXT NOT NULL UNIQUE,
                 prompt_file TEXT NOT NULL,
                 data_source TEXT NOT NULL,
@@ -230,6 +279,9 @@ impl DatabaseState {
                 samples INTEGER NOT NULL,
                 strategy TEXT NOT NULL,
                 json_schema_file TEXT,
+                transform_script_file TEXT,
+                transform_error_mode TEXT,
+                transform_output_mode TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 error_message TEXT,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -247,6 +299,19 @@ impl DatabaseState {
         {
             if !e.to_string().contains("duplicate column name") {
                 return Err(e);
+            }
+        }
+        for (column, definition) in [
+            ("job_type", "TEXT NOT NULL DEFAULT 'inference'"),
+            ("transform_script_file", "TEXT"),
+            ("transform_error_mode", "TEXT"),
+            ("transform_output_mode", "TEXT"),
+        ] {
+            let sql = format!("ALTER TABLE inference_jobs ADD COLUMN {} {}", column, definition);
+            if let Err(e) = sqlx::query(&sql).execute(pool).await {
+                if !e.to_string().contains("duplicate column name") {
+                    return Err(e);
+                }
             }
         }
 
@@ -279,6 +344,21 @@ impl DatabaseState {
         .await?;
 
         sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS job_failures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                sample_index INTEGER NOT NULL,
+                error TEXT NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (job_id) REFERENCES inference_jobs(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_inference_jobs_status ON inference_jobs(status)",
         )
         .execute(pool)
@@ -291,6 +371,9 @@ impl DatabaseState {
         .await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_collection_items_collection_id ON collection_items(collection_id)")
             .execute(pool).await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_job_failures_job_id ON job_failures(job_id)")
+            .execute(pool)
+            .await?;
 
         Ok(())
     }
@@ -749,12 +832,12 @@ pub async fn create_inference_job(
     let result = sqlx::query(
         r#"
         INSERT INTO inference_jobs (
-            name, prompt_file, data_source, provider, model, server_url,
+            job_type, name, prompt_file, data_source, provider, model, server_url,
             output_mode, temperature, max_tokens, thinking_budget, samples, strategy,
             json_schema_file, status
         )
         VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'pending'
+            'inference', ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'pending'
         )
         "#,
     )
@@ -795,6 +878,49 @@ pub async fn create_inference_job(
             }
 
             Err(error_msg)
+        }
+    }
+}
+
+/// Tauri command to create a new transform job.
+#[tauri::command]
+pub async fn create_transform_job(
+    state: State<'_, DatabaseState>,
+    input: TransformJobInput,
+) -> Result<i64, String> {
+    validate_transform_job_input(&input)?;
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO inference_jobs (
+            job_type, name, prompt_file, data_source, provider, model, server_url,
+            output_mode, samples, strategy, transform_script_file, transform_error_mode,
+            transform_output_mode, status
+        )
+        VALUES (
+            'transform', ?1, '', ?2, 'Nightshift', 'JavaScript', '', 'Transform',
+            1, 'exhaustive', ?3, ?4, ?5, 'pending'
+        )
+        "#,
+    )
+    .bind(&input.name)
+    .bind(&input.data_source)
+    .bind(&input.script_file)
+    .bind(&input.error_mode)
+    .bind(&input.output_mode)
+    .execute(&state.pool())
+    .await;
+
+    match result {
+        Ok(result) => Ok(result.last_insert_rowid()),
+        Err(e) => {
+            if e.to_string().contains("UNIQUE constraint failed") {
+                return Err(format!(
+                    "A job with the name '{}' already exists. Please choose a different name.",
+                    input.name
+                ));
+            }
+            Err(format!("Failed to create transform job: {}", e))
         }
     }
 }
@@ -950,6 +1076,55 @@ pub async fn update_job_status_with_error(
     Ok(result.rows_affected() > 0)
 }
 
+pub async fn clear_job_failures(pool: &SqlitePool, job_id: i64) -> Result<(), String> {
+    sqlx::query("DELETE FROM job_failures WHERE job_id = ?")
+        .bind(job_id)
+        .execute(pool)
+        .await
+        .map_err(|e| format!("Failed to clear job failures: {}", e))?;
+    Ok(())
+}
+
+pub async fn add_job_failure(
+    pool: &SqlitePool,
+    job_id: i64,
+    sample_index: usize,
+    error: &str,
+) -> Result<(), String> {
+    sqlx::query(
+        r#"
+        INSERT INTO job_failures (job_id, sample_index, error)
+        VALUES (?1, ?2, ?3)
+        "#,
+    )
+    .bind(job_id)
+    .bind(sample_index as i64)
+    .bind(error)
+    .execute(pool)
+    .await
+    .map_err(|e| format!("Failed to record job failure: {}", e))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_job_failures(
+    state: State<'_, DatabaseState>,
+    job_id: i64,
+) -> Result<Vec<JobFailure>, String> {
+    sqlx::query_as::<_, JobFailure>(
+        r#"
+        SELECT id, job_id, sample_index, error, created_at
+        FROM job_failures
+        WHERE job_id = ?
+        ORDER BY sample_index ASC, id ASC
+        "#,
+    )
+    .bind(job_id)
+    .fetch_all(&state.pool())
+    .await
+    .map_err(|e| format!("Failed to fetch job failures: {}", e))
+}
+
 /// Tauri command to delete an inference job
 #[tauri::command]
 pub async fn delete_inference_job(
@@ -1072,7 +1247,7 @@ pub async fn list_selectable_collections_with_pool(
             (SELECT COUNT(*) FROM collection_items WHERE collection_id = c.id) AS item_count
         FROM collections c
         JOIN inference_jobs j ON j.id = c.job_id
-        WHERE j.status = 'completed'
+        WHERE j.status IN ('completed', 'completed_with_errors')
         ORDER BY c.created_at DESC
         "#,
     )
@@ -1082,7 +1257,7 @@ pub async fn list_selectable_collections_with_pool(
 }
 
 /// Tauri command: list collections eligible to be used as a data source.
-/// Only includes collections whose owning job has status='completed'.
+/// Only includes collections whose owning job reached a successful terminal status.
 #[tauri::command]
 pub async fn list_selectable_collections(
     state: State<'_, DatabaseState>,
@@ -1198,7 +1373,10 @@ pub async fn delete_collection_item(
     delete_collection_item_by_id(&state.pool(), item_id).await
 }
 
-pub(crate) async fn delete_collection_item_by_id(pool: &SqlitePool, item_id: i64) -> Result<bool, String> {
+pub(crate) async fn delete_collection_item_by_id(
+    pool: &SqlitePool,
+    item_id: i64,
+) -> Result<bool, String> {
     let result = sqlx::query(
         r#"
         DELETE FROM collection_items WHERE id = ?

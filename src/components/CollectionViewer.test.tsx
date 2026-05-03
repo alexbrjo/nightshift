@@ -280,4 +280,55 @@ describe("CollectionViewer", () => {
     // Both items should display, with empty cell for missing age in Bob's row
     expect(screen.getAllByText("Bob").length).toBeGreaterThan(0);
   });
+
+  it("parses JSON-looking unstructured content for columns", async () => {
+    const unstructuredJsonItems = [
+      {
+        id: 1,
+        collection_id: mockCollectionId,
+        data: {
+          content: '{ "valid": true, "reasoning": "Looks good" }',
+          model: "bonsai-8b",
+        },
+        created_at: "2024-01-01T00:00:00Z",
+      },
+    ];
+
+    (invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(unstructuredJsonItems)
+      .mockResolvedValueOnce(1);
+
+    render(<CollectionViewer collectionId={mockCollectionId} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("reasoning")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Looks good")).toBeInTheDocument();
+    expect(screen.getByText("valid")).toBeInTheDocument();
+    expect(screen.getByText("true")).toBeInTheDocument();
+  });
+
+  it("shows plain unstructured content as text when JSON parsing fails", async () => {
+    const plainTextItems = [
+      {
+        id: 1,
+        collection_id: mockCollectionId,
+        data: { content: "This is plain model output.", model: "bonsai-8b" },
+        created_at: "2024-01-01T00:00:00Z",
+      },
+    ];
+
+    (invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(plainTextItems)
+      .mockResolvedValueOnce(1);
+
+    render(<CollectionViewer collectionId={mockCollectionId} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("This is plain model output.")).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/No items in this collection/i)).not.toBeInTheDocument();
+  });
 });

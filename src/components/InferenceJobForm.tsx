@@ -20,6 +20,85 @@ export interface JobConfig {
   jsonSchemaFile?: string;
 }
 
+interface TransformJobConfig {
+  name: string;
+  dataSource: string;
+  scriptFile: string;
+  errorMode: "stop" | "skip";
+  outputMode: "one_to_one" | "unwrap_arrays";
+}
+
+interface SelectableCollection {
+  id: number;
+  name: string;
+  itemCount: number;
+}
+
+interface DataSourceSelectProps {
+  id: string;
+  value: string;
+  error?: string;
+  dataFiles: string[];
+  collections: SelectableCollection[];
+  onChange: (value: string) => void;
+  onBrowse: () => void;
+}
+
+function DataSourceSelect({
+  id,
+  value,
+  error,
+  dataFiles,
+  collections,
+  onChange,
+  onBrowse,
+}: DataSourceSelectProps) {
+  if (dataFiles.length > 0 || collections.length > 0) {
+    return (
+      <select
+        id={id}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={error ? "error" : ""}
+      >
+        <option value="">Select a data source...</option>
+        {dataFiles.length > 0 && (
+          <optgroup label="Files">
+            {dataFiles.map((file) => (
+              <option key={`f:${file}`} value={file}>{file}</option>
+            ))}
+          </optgroup>
+        )}
+        {collections.length > 0 && (
+          <optgroup label="Collections">
+            {collections.map((c) => (
+              <option key={`c:${c.id}`} value={`collection:${c.id}`}>
+                {c.name} ({c.itemCount})
+              </option>
+            ))}
+          </optgroup>
+        )}
+      </select>
+    );
+  }
+
+  return (
+    <div className="file-picker-row">
+      <input
+        id={id}
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder="path/to/data.jsonl"
+        className={error ? "error" : ""}
+      />
+      <button type="button" className="btn-secondary" onClick={onBrowse}>
+        Browse
+      </button>
+    </div>
+  );
+}
+
 interface InferenceJobFormProps {
   isOpen: boolean;
   onClose: () => void;
@@ -45,15 +124,31 @@ const INITIAL_FORM_STATE: JobConfig = {
   strategy: "Single",
 };
 
+const INITIAL_TRANSFORM_STATE: TransformJobConfig = {
+  name: "",
+  dataSource: "",
+  scriptFile: "",
+  errorMode: "stop",
+  outputMode: "one_to_one",
+};
+
+function formatSubmitError(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message.trim()) return error.message;
+  if (typeof error === "string" && error.trim()) return error;
+  return fallback;
+}
+
 export default function InferenceJobForm({ isOpen, onClose, onSuccess }: InferenceJobFormProps) {
+  const [activeJobType, setActiveJobType] = useState<"inference" | "transform">("inference");
   const [formData, setFormData] = useState<JobConfig>(INITIAL_FORM_STATE);
+  const [transformData, setTransformData] = useState<TransformJobConfig>(INITIAL_TRANSFORM_STATE);
 
   const [promptFiles, setPromptFiles] = useState<string[]>([]);
   const [dataFiles, setDataFiles] = useState<string[]>([]);
   const [schemaFiles, setSchemaFiles] = useState<string[]>([]);
-  const [collections, setCollections] = useState<
-    Array<{ id: number; name: string; itemCount: number }>
-  >([]);
+  const [scriptFiles, setScriptFiles] = useState<string[]>([]);
+  const [collections, setCollections] = useState<SelectableCollection[]>([]);
+  const [transformRuntimeError, setTransformRuntimeError] = useState<string | null>(null);
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -67,10 +162,11 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
     const loadFiles = async () => {
       setIsLoadingPrompts(true);
       try {
-        const [prompts, datas, schemas, cols] = await Promise.all([
+        const [prompts, datas, schemas, scripts, cols] = await Promise.all([
           invoke<string[]>("list_prompt_files"),
           invoke<string[]>("list_data_files"),
           invoke<string[]>("list_schema_files"),
+          invoke<string[]>("list_transform_scripts"),
           invoke<Array<{ id: number; name: string; itemCount: number }>>(
             "list_selectable_collections",
           ),
@@ -79,7 +175,14 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
         setPromptFiles(prompts);
         setDataFiles(datas);
         setSchemaFiles(schemas);
+        setScriptFiles(scripts);
         setCollections(cols);
+        try {
+          await invoke("check_transform_runtime");
+          setTransformRuntimeError(null);
+        } catch (runtimeError) {
+          setTransformRuntimeError(String(runtimeError));
+        }
       } catch (error) {
         if (cancelled) return;
         // No project open yet is expected before FileTree settles; the
@@ -107,6 +210,8 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
   useEffect(() => {
     if (isOpen) {
       setFormData(INITIAL_FORM_STATE);
+      setTransformData(INITIAL_TRANSFORM_STATE);
+      setActiveJobType("inference");
       setErrors({});
     }
   }, [isOpen]);
@@ -149,11 +254,26 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
     if (path) updateField("dataSource", path);
   }, [pickFile]);
 
+  const handleBrowseTransformDataSource = useCallback(async () => {
+    const path = await pickFile([
+      { name: "JSON / JSONL", extensions: ["json", "jsonl", "ndjson"] },
+      { name: "All files", extensions: ["*"] },
+    ]);
+    if (path) updateTransformField("dataSource", path);
+  }, [pickFile]);
+
   const handleBrowseSchemaFile = useCallback(async () => {
     const path = await pickFile([
       { name: "JSON Schema", extensions: ["json"] },
     ]);
     if (path) updateField("jsonSchemaFile", path);
+  }, [pickFile]);
+
+  const handleBrowseTransformScript = useCallback(async () => {
+    const path = await pickFile([
+      { name: "JavaScript", extensions: ["js"] },
+    ]);
+    if (path) updateTransformField("scriptFile", path);
   }, [pickFile]);
 
   const validateForm = (): boolean => {
@@ -193,7 +313,53 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
     return Object.keys(newErrors).length === 0;
   };
 
+  const validateTransformForm = (): boolean => {
+    const newErrors: Record<string, string> = {};
+
+    if (!transformData.name.trim()) {
+      newErrors.name = "Job name is required";
+    }
+    if (!transformData.dataSource.trim()) {
+      newErrors.dataSource = "Data source is required";
+    }
+    if (!transformData.scriptFile.trim()) {
+      newErrors.scriptFile = "Transform script is required";
+    }
+
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
   const handleSubmit = useCallback(async () => {
+    if (activeJobType === "transform") {
+      if (!validateTransformForm()) return;
+      if (transformRuntimeError) {
+        setErrors({ submit: transformRuntimeError });
+        return;
+      }
+
+      setIsSubmitting(true);
+      try {
+        const jobId = await invoke<number>("create_transform_job", {
+          input: {
+            name: transformData.name,
+            dataSource: transformData.dataSource,
+            scriptFile: transformData.scriptFile,
+            errorMode: transformData.errorMode,
+            outputMode: transformData.outputMode,
+          },
+        });
+        onSuccess(jobId);
+      } catch (error) {
+        const errorMessage = formatSubmitError(error, "Failed to create transform job");
+        console.error("Failed to create transform job:", error);
+        setErrors({ submit: errorMessage });
+      } finally {
+        setIsSubmitting(false);
+      }
+      return;
+    }
+
     if (!validateForm()) {
       return;
     }
@@ -223,16 +389,30 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
       console.log("Successfully created job with ID:", jobId);
       onSuccess(jobId);
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : "Failed to create job";
+      const errorMessage = formatSubmitError(error, "Failed to create job");
       console.error("Failed to create inference job:", error);
       setErrors({ submit: errorMessage });
     } finally {
       setIsSubmitting(false);
     }
-  }, [formData, onSuccess]);
+  }, [activeJobType, formData, onSuccess, transformData, transformRuntimeError]);
 
   const updateField = <K extends keyof JobConfig>(field: K, value: JobConfig[K]) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+    if (errors[field]) {
+      setErrors((prev) => {
+        const newErrors = { ...prev };
+        delete newErrors[field];
+        return newErrors;
+      });
+    }
+  };
+
+  const updateTransformField = <K extends keyof TransformJobConfig>(
+    field: K,
+    value: TransformJobConfig[K],
+  ) => {
+    setTransformData((prev) => ({ ...prev, [field]: value }));
     if (errors[field]) {
       setErrors((prev) => {
         const newErrors = { ...prev };
@@ -247,11 +427,149 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
 
   return (
     <div className="inference-job-form-container">
-      <h2 className="form-title">Create New Inference Job</h2>
+      <h2 className="form-title">Create New Job</h2>
+      <div className="job-type-tabs" role="tablist" aria-label="Job type">
+        <button
+          type="button"
+          role="tab"
+          className={activeJobType === "inference" ? "active" : ""}
+          aria-selected={activeJobType === "inference"}
+          onClick={() => setActiveJobType("inference")}
+        >
+          Inference Job
+        </button>
+        <button
+          type="button"
+          role="tab"
+          className={activeJobType === "transform" ? "active" : ""}
+          aria-selected={activeJobType === "transform"}
+          onClick={() => setActiveJobType("transform")}
+        >
+          Transform Job
+        </button>
+      </div>
 
       {errors.submit && (
         <div className="form-error">{errors.submit}</div>
       )}
+
+      {activeJobType === "transform" ? (
+        <>
+          {transformRuntimeError && (
+            <div className="form-error">{transformRuntimeError}</div>
+          )}
+
+          <div className="form-row">
+            <div className="form-group">
+              <label htmlFor="transform-job-name">Job Name *</label>
+              <input
+                id="transform-job-name"
+                type="text"
+                value={transformData.name}
+                onChange={(e) => updateTransformField("name", e.target.value)}
+                placeholder="Enter job name"
+                className={errors.name ? "error" : ""}
+              />
+              {errors.name && <span className="error-message">{errors.name}</span>}
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="transform-script">Transform Script *</label>
+              {scriptFiles.length > 0 ? (
+                <select
+                  id="transform-script"
+                  value={transformData.scriptFile}
+                  onChange={(e) => updateTransformField("scriptFile", e.target.value)}
+                  className={errors.scriptFile ? "error" : ""}
+                >
+                  <option value="">Select a .js file...</option>
+                  {scriptFiles.map((file) => (
+                    <option key={file} value={file}>{file}</option>
+                  ))}
+                </select>
+              ) : (
+                <div className="file-picker-row">
+                  <input
+                    id="transform-script"
+                    type="text"
+                    value={transformData.scriptFile}
+                    onChange={(e) => updateTransformField("scriptFile", e.target.value)}
+                    placeholder="path/to/transform.js"
+                    className={errors.scriptFile ? "error" : ""}
+                  />
+                  <button type="button" className="btn-secondary" onClick={handleBrowseTransformScript}>
+                    Browse
+                  </button>
+                </div>
+              )}
+              {errors.scriptFile && <span className="error-message">{errors.scriptFile}</span>}
+            </div>
+          </div>
+
+          <fieldset className="sampling-section">
+            <legend>Transform Input</legend>
+            <div className="form-row">
+              <div className="form-group">
+                <label htmlFor="transform-data-source">Data Source *</label>
+                <DataSourceSelect
+                  id="transform-data-source"
+                  value={transformData.dataSource}
+                  error={errors.dataSource}
+                  dataFiles={dataFiles}
+                  collections={collections}
+                  onChange={(value) => updateTransformField("dataSource", value)}
+                  onBrowse={handleBrowseTransformDataSource}
+                />
+                {errors.dataSource && <span className="error-message">{errors.dataSource}</span>}
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="transform-output-mode">Output Behavior</label>
+                <select
+                  id="transform-output-mode"
+                  value={transformData.outputMode}
+                  onChange={(e) =>
+                    updateTransformField(
+                      "outputMode",
+                      e.target.value as "one_to_one" | "unwrap_arrays",
+                    )
+                  }
+                >
+                  <option value="one_to_one">One row per input</option>
+                  <option value="unwrap_arrays">Unwrap returned arrays</option>
+                </select>
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="transform-error-mode">On Error</label>
+                <select
+                  id="transform-error-mode"
+                  value={transformData.errorMode}
+                  onChange={(e) => updateTransformField("errorMode", e.target.value as "stop" | "skip")}
+                >
+                  <option value="stop">Stop job</option>
+                  <option value="skip">Skip failed item</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <div className="form-actions">
+            <button type="button" className="btn-secondary" onClick={onClose} disabled={isSubmitting}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={handleSubmit}
+              disabled={isSubmitting || Boolean(transformRuntimeError)}
+            >
+              {isSubmitting ? "Creating..." : "Create Transform Job"}
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
 
       {/* Top: Job Name + Prompt Spec side by side */}
       <div className="form-row">
@@ -485,46 +803,15 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
 
           <div className="form-group">
             <label htmlFor="data-source">Data Source *</label>
-            {dataFiles.length > 0 || collections.length > 0 ? (
-              <select
-                id="data-source"
-                value={formData.dataSource}
-                onChange={(e) => updateField("dataSource", e.target.value)}
-                className={errors.dataSource ? "error" : ""}
-              >
-                <option value="">Select a data source...</option>
-                {dataFiles.length > 0 && (
-                  <optgroup label="Files">
-                    {dataFiles.map((file) => (
-                      <option key={`f:${file}`} value={file}>{file}</option>
-                    ))}
-                  </optgroup>
-                )}
-                {collections.length > 0 && (
-                  <optgroup label="Collections">
-                    {collections.map((c) => (
-                      <option key={`c:${c.id}`} value={`collection:${c.id}`}>
-                        {c.name} ({c.itemCount})
-                      </option>
-                    ))}
-                  </optgroup>
-                )}
-              </select>
-            ) : (
-              <div className="file-picker-row">
-                <input
-                  id="data-source"
-                  type="text"
-                  value={formData.dataSource}
-                  onChange={(e) => updateField("dataSource", e.target.value)}
-                  placeholder="path/to/data.jsonl"
-                  className={errors.dataSource ? "error" : ""}
-                />
-                <button type="button" className="btn-secondary" onClick={handleBrowseDataSource}>
-                  Browse
-                </button>
-              </div>
-            )}
+            <DataSourceSelect
+              id="data-source"
+              value={formData.dataSource}
+              error={errors.dataSource}
+              dataFiles={dataFiles}
+              collections={collections}
+              onChange={(value) => updateField("dataSource", value)}
+              onBrowse={handleBrowseDataSource}
+            />
             {errors.dataSource && <span className="error-message">{errors.dataSource}</span>}
           </div>
         </div>
@@ -551,6 +838,8 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
           )}
         </button>
       </div>
+      </>
+      )}
     </div>
   );
 }

@@ -38,6 +38,38 @@ export function formatDateTime(dateStr?: string): string {
   });
 }
 
+/** Relative time for compact lists (e.g. "Now", "3 Min ago", "1 Hour ago"). */
+export function formatRelativeTime(dateStr?: string, now: Date = new Date()): string {
+  if (!dateStr) return "";
+  const d = parseSqliteDate(dateStr);
+  if (!d) return "";
+
+  const diffMs = Math.max(0, now.getTime() - d.getTime());
+  const diffSeconds = Math.floor(diffMs / 1000);
+  if (diffSeconds < 60) return "Now";
+
+  const diffMinutes = Math.floor(diffSeconds / 60);
+  if (diffMinutes < 60) return `${diffMinutes} Min ago`;
+
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) {
+    return `${diffHours} ${diffHours === 1 ? "Hour" : "Hours"} ago`;
+  }
+
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 30) {
+    return `${diffDays} ${diffDays === 1 ? "day" : "days"} ago`;
+  }
+
+  const diffMonths = Math.floor(diffDays / 30);
+  if (diffMonths < 12) {
+    return `${diffMonths} ${diffMonths === 1 ? "month" : "months"} ago`;
+  }
+
+  const diffYears = Math.floor(diffDays / 365);
+  return `${diffYears} ${diffYears === 1 ? "year" : "years"} ago`;
+}
+
 /** Long, locale-aware date+time (e.g. "4/30/2026, 2:23:45 PM"). Returns "" on parse failure. */
 export function formatLongDateTime(dateStr?: string): string {
   if (!dateStr) return "";

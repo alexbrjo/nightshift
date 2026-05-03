@@ -16,19 +16,16 @@ interface FlatItem {
 
 const CELL_TRUNCATE_LENGTH = 80;
 
-// LLM outputs are often `{...}` or wrapped in ```json fences. Extract a parsable object if possible.
-function tryParseEmbeddedJson(value: unknown): FlatRecord | null {
+// LLM outputs are often `{...}` or wrapped in ```json fences. Extract JSON if possible.
+function tryParseEmbeddedJson(value: unknown): unknown {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
   const fenceMatch = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/);
   const candidate = fenceMatch ? fenceMatch[1] : trimmed;
-  if (!candidate.startsWith("{")) return null;
+  if (!candidate.startsWith("{") && !candidate.startsWith("[")) return null;
   try {
-    const parsed = JSON.parse(candidate);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as FlatRecord;
-    }
+    return JSON.parse(candidate);
   } catch {
     // not JSON
   }
@@ -42,11 +39,15 @@ function flattenItem(item: CollectionItem): FlatItem {
   }
   const record = data as FlatRecord;
   const inner = tryParseEmbeddedJson(record.content);
-  if (inner) {
+  if (inner && typeof inner === "object" && !Array.isArray(inner)) {
     const { content: _content, ...rest } = record;
-    return { id: item.id, flat: { ...inner, ...rest } };
+    return { id: item.id, flat: { ...(inner as FlatRecord), ...rest } };
   }
-  return { id: item.id, flat: record };
+  if (inner !== null) {
+    const { content: _content, ...rest } = record;
+    return { id: item.id, flat: { value: inner, ...rest } };
+  }
+  return { id: item.id, flat: Object.keys(record).length > 0 ? record : { value: data } };
 }
 
 function formatCell(value: unknown): string {
@@ -221,9 +222,13 @@ export default function CollectionViewer({ collectionId, onBack }: CollectionVie
 
       {error && <div className="error-message">{error}</div>}
 
-      {columnKeys.length === 0 ? (
+      {items.length === 0 ? (
         <div className="empty-state">
           <p>No items in this collection.</p>
+        </div>
+      ) : filteredItems.length === 0 ? (
+        <div className="empty-state">
+          <p>No matching items.</p>
         </div>
       ) : (
         <>

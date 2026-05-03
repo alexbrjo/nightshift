@@ -4,16 +4,18 @@ mod commands;
 mod database;
 mod job_executor;
 mod state;
+mod transform_runner;
 mod utils;
 
 use tauri::Manager;
 
 use crate::commands::*;
 use crate::database::{
-    add_collection_item, create_collection, create_inference_job, delete_collection_item,
-    delete_inference_job, export_collection_csv, export_collection_jsonl, get_collection_count,
-    get_collection_items, get_collections_for_job, get_inference_job, list_all_collections,
-    list_inference_jobs, list_selectable_collections, update_inference_job, DatabaseState,
+    add_collection_item, create_collection, create_inference_job, create_transform_job,
+    delete_collection_item, delete_inference_job, export_collection_csv, export_collection_jsonl,
+    get_collection_count, get_collection_items, get_collections_for_job, get_inference_job,
+    get_job_failures, list_all_collections, list_inference_jobs, list_selectable_collections,
+    update_inference_job, DatabaseState,
 };
 use crate::state::{AppState, JobManager};
 use tokio::sync::Mutex as TokioMutex;
@@ -68,7 +70,9 @@ fn main() {
             load_expanded_state,
             // Database commands
             create_inference_job,
+            create_transform_job,
             get_inference_job,
+            get_job_failures,
             list_inference_jobs,
             update_inference_job,
             delete_inference_job,
@@ -90,6 +94,8 @@ fn main() {
             list_prompt_files,
             list_data_files,
             list_schema_files,
+            list_transform_scripts,
+            check_transform_runtime,
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");

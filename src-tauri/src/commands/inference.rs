@@ -4,6 +4,7 @@ use tokio::sync::mpsc;
 use crate::database::{self, DatabaseState};
 use crate::job_executor::{JobEvent, JobExecutor, WorkerConfig};
 use crate::state::JobManager;
+use crate::transform_runner;
 
 /// Spawn the event-broadcast and execution tasks for a job whose queue entry
 /// has already been marked Running via `executor.start_job`.
@@ -33,10 +34,13 @@ fn spawn_job_execution(executor: &JobExecutor, app: AppHandle, config: WorkerCon
                         success_count,
                         failure_count
                     );
-                    if let Err(e) = database::update_job_status(&pool, *job_id, "completed").await {
+                    let status =
+                        if *failure_count > 0 { "completed_with_errors" } else { "completed" };
+                    if let Err(e) = database::update_job_status(&pool, *job_id, status).await {
                         tracing::error!(
-                            "Failed to update job {} status to completed: {}",
+                            "Failed to update job {} status to {}: {}",
                             job_id,
+                            status,
                             e
                         );
                     }
@@ -73,8 +77,11 @@ fn spawn_job_execution(executor: &JobExecutor, app: AppHandle, config: WorkerCon
 
     let executor_clone = executor.clone();
     tokio::spawn(async move {
+        let fail_tx = tx.clone();
+        let job_id = config.job_id;
         if let Err(e) = executor_clone.execute_job(config, tx).await {
             tracing::error!("Job execution failed: {}", e);
+            let _ = fail_tx.send(JobEvent::Failed { job_id, error: e }).await;
         }
     });
 }
@@ -279,6 +286,18 @@ pub async fn list_data_files(db: State<'_, DatabaseState>) -> Result<Vec<String>
 pub async fn list_schema_files(db: State<'_, DatabaseState>) -> Result<Vec<String>, String> {
     let root = project_root_for_listing(&db)?;
     list_files_with_extensions(&root, &["json"])
+}
+
+/// List candidate transform scripts (.js).
+#[tauri::command]
+pub async fn list_transform_scripts(db: State<'_, DatabaseState>) -> Result<Vec<String>, String> {
+    let root = project_root_for_listing(&db)?;
+    list_files_with_extensions(&root, &["js"])
+}
+
+#[tauri::command]
+pub async fn check_transform_runtime() -> Result<(), String> {
+    transform_runner::check_transform_runtime().await
 }
 
 #[cfg(test)]

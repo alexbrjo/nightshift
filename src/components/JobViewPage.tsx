@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { InferenceJob, Collection } from "../database";
+import type { InferenceJob, Collection, JobFailure } from "../database";
 import { formatLongDateTime } from "../utils/date";
 
 interface JobViewPageProps {
@@ -13,6 +13,7 @@ interface JobViewPageProps {
 export default function JobViewPage({ jobId, onBack, onViewCollection }: JobViewPageProps) {
   const [job, setJob] = useState<InferenceJob | null>(null);
   const [collections, setCollections] = useState<Collection[]>([]);
+  const [failures, setFailures] = useState<JobFailure[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [progress, setProgress] = useState({
     currentSample: 0,
@@ -48,10 +49,20 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
     }
   }, [jobId]);
 
+  const loadFailures = useCallback(async () => {
+    try {
+      const failureData = await invoke<JobFailure[]>("get_job_failures", { jobId });
+      setFailures(failureData);
+    } catch (error) {
+      console.error("Failed to load job failures:", error);
+    }
+  }, [jobId]);
+
   useEffect(() => {
     setIsLoading(true);
     loadJob();
     loadCollections();
+    loadFailures();
 
     // Listener registration is async, so an early unmount can race with it.
     // Track the registered unlisten fns and a cancellation flag; if cleanup
@@ -87,18 +98,21 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
             setIsStreaming(false);
             loadJob();
             loadCollections();
+            loadFailures();
           }),
           listen<{ job_id: number }>("job-cancelled", (event) => {
             if (event.payload.job_id !== jobId) return;
             setIsStreaming(false);
             loadJob();
             loadCollections();
+            loadFailures();
           }),
           listen<{ job_id: number }>("job-failed", (event) => {
             if (event.payload.job_id !== jobId) return;
             setIsStreaming(false);
             loadJob();
             loadCollections();
+            loadFailures();
           }),
         ]);
 
@@ -116,7 +130,7 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
       cancelled = true;
       unlistens.forEach((fn) => fn());
     };
-  }, [loadJob, loadCollections, jobId]);
+  }, [loadJob, loadCollections, loadFailures, jobId]);
 
   const handleStartJob = async () => {
     try {
@@ -163,6 +177,11 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
     }
   };
 
+  const formatJobStatus = (status: string) => {
+    if (status === "completed_with_errors") return "Completed with errors";
+    return status;
+  };
+
   if (isLoading) {
     return (
       <div className="job-view-page">
@@ -187,6 +206,8 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
   const progressPercent = progress.totalSamples > 0
     ? ((progress.completedSamples + progress.failedSamples) / progress.totalSamples) * 100
     : 0;
+  const hasTerminalOutput =
+    job.status === "completed" || job.status === "completed_with_errors";
 
   return (
     <div className="job-view-page">
@@ -217,7 +238,13 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
 
       {/* Status Banner */}
       <div className={`status-banner status-${job.status.toLowerCase()}`}>
-        <span className="status-text">{job.status.toUpperCase()}</span>
+        <span className="status-text">{formatJobStatus(job.status)}</span>
+        {job.status === "completed_with_errors" && (
+          <p className="status-help">
+            Job completed and skipped {failures.length} failed{" "}
+            {failures.length === 1 ? "item" : "items"}.
+          </p>
+        )}
         {job.status === "failed" && job.error_message && (
           <pre className="status-error">{job.error_message}</pre>
         )}
@@ -249,20 +276,45 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
         
         <div className="config-grid">
           <div className="config-group">
-            <h3>Prompt & Data</h3>
+            <h3>{job.job_type === "transform" ? "Transform & Data" : "Prompt & Data"}</h3>
             <dl>
-              <dt>Prompt File</dt>
-              <dd>{job.prompt_file}</dd>
+              {job.job_type === "transform" ? (
+                <>
+                  <dt>Script File</dt>
+                  <dd>{job.transform_script_file}</dd>
+                </>
+              ) : (
+                <>
+                  <dt>Prompt File</dt>
+                  <dd>{job.prompt_file}</dd>
+                </>
+              )}
               
               <dt>Data Source</dt>
               <dd>{job.data_source}</dd>
               
-              <dt>Samples</dt>
-              <dd>{job.samples} ({job.strategy})</dd>
+              {job.job_type === "transform" ? (
+                <>
+                  <dt>On Error</dt>
+                  <dd>{job.transform_error_mode === "skip" ? "Skip failed item" : "Stop job"}</dd>
+                  <dt>Output Behavior</dt>
+                  <dd>
+                    {job.transform_output_mode === "unwrap_arrays"
+                      ? "Unwrap returned arrays"
+                      : "One row per input"}
+                  </dd>
+                </>
+              ) : (
+                <>
+                  <dt>Samples</dt>
+                  <dd>{job.samples} ({job.strategy})</dd>
+                </>
+              )}
             </dl>
           </div>
 
-          <div className="config-group">
+          {job.job_type !== "transform" && (
+            <div className="config-group">
             <h3>LLM Configuration</h3>
             <dl>
               <dt>Provider</dt>
@@ -306,6 +358,7 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
               )}
             </dl>
           </div>
+          )}
         </div>
 
         <div className="timestamps">
@@ -314,17 +367,34 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
         </div>
       </div>
 
+      {failures.length > 0 && (
+        <div className="job-failures-section">
+          <h2>Skipped Items</h2>
+          <p>These items failed while the job continued.</p>
+          <ul className="job-failure-list">
+            {failures.map((failure) => (
+              <li key={failure.id} className="job-failure-item">
+                <div className="job-failure-heading">
+                  Item {failure.sample_index + 1}
+                </div>
+                <pre>{failure.error}</pre>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Collections Link */}
       <div className="collections-section">
         <h2>Results</h2>
         <p>
           Job output will be saved to a collection once the job completes.
         </p>
-        {job.status === "completed" && collections.length > 0 ? (
+        {hasTerminalOutput && collections.length > 0 ? (
           <button className="btn-primary" onClick={handleViewCollection}>
             View Collection ({collections.length})
           </button>
-        ) : job.status === "completed" ? (
+        ) : hasTerminalOutput ? (
           <button className="btn-secondary" disabled title="No collections yet">
             View Collection (No data)
           </button>
