@@ -2,7 +2,6 @@ import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { PipetteIcon } from "./icons";
 
 export interface JobConfig {
   name: string;
@@ -427,8 +426,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
 
   return (
     <div className="inference-job-form-container">
-      <h2 className="form-title">Create New Job</h2>
-      <div className="job-type-tabs" role="tablist" aria-label="Job type">
+      <h2 className="form-title job-type-title-tabs" role="tablist" aria-label="Job type">
         <button
           type="button"
           role="tab"
@@ -436,7 +434,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
           aria-selected={activeJobType === "inference"}
           onClick={() => setActiveJobType("inference")}
         >
-          Inference Job
+          Create Inference Job
         </button>
         <button
           type="button"
@@ -445,9 +443,9 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
           aria-selected={activeJobType === "transform"}
           onClick={() => setActiveJobType("transform")}
         >
-          Transform Job
+          Create Transform Job
         </button>
-      </div>
+      </h2>
 
       {errors.submit && (
         <div className="form-error">{errors.submit}</div>
@@ -829,13 +827,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
           onClick={handleSubmit}
           disabled={isSubmitting}
         >
-          {isSubmitting ? (
-            "Creating..."
-          ) : (
-            <>
-              Create <PipetteIcon />
-            </>
-          )}
+          {isSubmitting ? "Creating..." : "Create Inference Job"}
         </button>
       </div>
       </>

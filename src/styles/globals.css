@@ -1298,31 +1298,31 @@ body {
   border-bottom: 1px solid var(--border-color);
 }
 
-.job-type-tabs {
-  display: inline-flex;
-  gap: 4px;
-  padding: 3px;
-  margin-bottom: 20px;
-  background: var(--input-bg-readonly);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+.job-type-title-tabs {
+  display: flex;
+  gap: 24px;
+  align-items: baseline;
 }
 
-.job-type-tabs button {
-  padding: 7px 12px;
+.job-type-title-tabs button {
+  padding: 0;
   background: transparent;
   border: 0;
-  border-radius: 6px;
-  color: var(--text-secondary);
+  color: color-mix(in srgb, var(--text-secondary) 58%, transparent);
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: inherit;
+  font-weight: inherit;
+  line-height: inherit;
 }
 
-.job-type-tabs button.active {
-  background: var(--input-bg);
+.job-type-title-tabs button.active {
   color: var(--text-primary);
-  box-shadow: 0 1px 2px color-mix(in srgb, black 20%, transparent);
+}
+
+.job-type-title-tabs button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
 }
 
 .inference-job-form {

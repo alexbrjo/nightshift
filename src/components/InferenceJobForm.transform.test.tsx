@@ -21,6 +21,36 @@ describe("InferenceJobForm transform jobs", () => {
     vi.clearAllMocks();
   });
 
+  it("renders job type choices as title tabs", () => {
+    vi.mocked(invoke).mockResolvedValue([]);
+
+    render(<InferenceJobForm isOpen onClose={vi.fn()} onSuccess={vi.fn()} />);
+
+    const inferenceTab = screen.getByRole("tab", { name: "Create Inference Job" });
+    const transformTab = screen.getByRole("tab", { name: "Create Transform Job" });
+
+    expect(inferenceTab).toHaveClass("active");
+    expect(inferenceTab).toHaveAttribute("aria-selected", "true");
+    expect(transformTab).not.toHaveClass("active");
+    expect(transformTab).toHaveAttribute("aria-selected", "false");
+
+    fireEvent.click(transformTab);
+
+    expect(inferenceTab).not.toHaveClass("active");
+    expect(inferenceTab).toHaveAttribute("aria-selected", "false");
+    expect(transformTab).toHaveClass("active");
+    expect(transformTab).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("uses a plain text inference create action", () => {
+    vi.mocked(invoke).mockResolvedValue([]);
+
+    render(<InferenceJobForm isOpen onClose={vi.fn()} onSuccess={vi.fn()} />);
+
+    expect(screen.getByRole("button", { name: "Create Inference Job" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create" })).not.toBeInTheDocument();
+  });
+
   it("creates a transform job from the transform tab", async () => {
     const onSuccess = vi.fn();
     vi.mocked(invoke).mockImplementation((command: string) => {
@@ -45,7 +75,7 @@ describe("InferenceJobForm transform jobs", () => {
 
     render(<InferenceJobForm isOpen onClose={vi.fn()} onSuccess={onSuccess} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Transform Job" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Create Transform Job" }));
     fireEvent.change(screen.getByLabelText("Job Name *"), {
       target: { value: "Clean rows" },
     });
@@ -101,7 +131,7 @@ describe("InferenceJobForm transform jobs", () => {
     const onSuccess = vi.fn();
     render(<InferenceJobForm isOpen onClose={vi.fn()} onSuccess={onSuccess} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Transform Job" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Create Transform Job" }));
     fireEvent.change(screen.getByLabelText("Job Name *"), {
       target: { value: "Clean rows" },
     });
@@ -156,7 +186,7 @@ describe("InferenceJobForm transform jobs", () => {
 
     render(<InferenceJobForm isOpen onClose={vi.fn()} onSuccess={onSuccess} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Transform Job" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Create Transform Job" }));
     fireEvent.change(screen.getByLabelText("Job Name *"), {
       target: { value: "Split rows" },
     });
@@ -213,7 +243,7 @@ describe("InferenceJobForm transform jobs", () => {
 
     render(<InferenceJobForm isOpen onClose={vi.fn()} onSuccess={vi.fn()} />);
 
-    fireEvent.click(screen.getByRole("tab", { name: "Transform Job" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Create Transform Job" }));
     fireEvent.change(screen.getByLabelText("Job Name *"), {
       target: { value: "Eval ready questions 3" },
     });
