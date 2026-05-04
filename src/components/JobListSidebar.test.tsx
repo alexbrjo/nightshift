@@ -106,6 +106,32 @@ describe("JobListSidebar", () => {
     expect(screen.getByText(/Mixed Result Job/i)).toBeInTheDocument();
   });
 
+  it("refreshes jobs when the hidden jobs page becomes active", async () => {
+    const { rerender } = render(
+      <JobListSidebar
+        isActive={false}
+        onSelectJob={mockOnSelectJob}
+        onNewJob={mockOnNewJob}
+      />
+    );
+
+    expect(invoke).not.toHaveBeenCalled();
+
+    rerender(
+      <JobListSidebar
+        isActive
+        onSelectJob={mockOnSelectJob}
+        onNewJob={mockOnNewJob}
+      />
+    );
+
+    expect(await screen.findByText(/Test Job 1/i)).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("list_inference_jobs", {
+      page: 1,
+      pageSize: 50,
+    });
+  });
+
   it("shows status badges for each job", async () => {
     render(
       <JobListSidebar

@@ -1,61 +1,56 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Collection } from "../database";
+import { useActiveRefresh } from "../hooks/useActiveRefresh";
 import { formatDate } from "../utils/date";
 
 interface CollectionsListProps {
+  isActive?: boolean;
   selectedId: number | null;
   onSelectCollection: (collectionId: number) => void;
 }
 
-export default function CollectionsList({ selectedId, onSelectCollection }: CollectionsListProps) {
+export default function CollectionsList({
+  isActive = true,
+  selectedId,
+  onSelectCollection,
+}: CollectionsListProps) {
   const [collections, setCollections] = useState<Collection[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const hasLoadedRef = useRef(false);
 
   const loadCollections = useCallback(async () => {
+    if (!hasLoadedRef.current) setIsLoading(true);
+    setError(null);
     try {
       const data = await invoke<Collection[]>("list_all_collections");
       setCollections(Array.isArray(data) ? data : []);
+      hasLoadedRef.current = true;
     } catch (error) {
       console.error("Failed to load collections:", error);
+      setError(error instanceof Error ? error.message : "Failed to load collections");
     } finally {
       setIsLoading(false);
     }
   }, []);
 
-  useEffect(() => {
-    loadCollections();
-
-    // Refresh when any job emits a terminal event — that's when new collections
-    // appear (or a partial collection's item count grows). job-started also
-    // matters because the executor creates the empty collection eagerly.
-    let cancelled = false;
-    const unlistens: Array<() => void> = [];
-
-    (async () => {
-      try {
-        const fns = await Promise.all([
-          listen("job-started", () => loadCollections()),
-          listen("job-completed", () => loadCollections()),
-          listen("job-cancelled", () => loadCollections()),
-          listen("job-failed", () => loadCollections()),
-        ]);
-        if (cancelled) {
-          fns.forEach((fn) => fn());
-        } else {
-          unlistens.push(...fns);
-        }
-      } catch (err) {
-        console.error("Failed to register collection list listeners:", err);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      unlistens.forEach((fn) => fn());
-    };
+  const setupCollectionRefresh = useCallback(async () => {
+    const unlistens = await Promise.all([
+      listen("job-started", () => loadCollections()),
+      listen("job-completed", () => loadCollections()),
+      listen("job-cancelled", () => loadCollections()),
+      listen("job-failed", () => loadCollections()),
+    ]);
+    return () => unlistens.forEach((unlisten) => unlisten());
   }, [loadCollections]);
+
+  useActiveRefresh({
+    isActive,
+    refresh: loadCollections,
+    setup: setupCollectionRefresh,
+  });
 
   return (
     <aside className="collections-sidebar">
@@ -64,9 +59,18 @@ export default function CollectionsList({ selectedId, onSelectCollection }: Coll
         <span className="collections-count">{collections.length}</span>
       </header>
 
+      {error && (
+        <div className="collections-empty">
+          <p>{error}</p>
+          <button type="button" className="btn-secondary btn-small" onClick={loadCollections}>
+            Retry
+          </button>
+        </div>
+      )}
+
       {isLoading ? (
         <div className="loading-indicator">Loading…</div>
-      ) : collections.length === 0 ? (
+      ) : error ? null : collections.length === 0 ? (
         <div className="collections-empty">
           <p>No collections yet.</p>
           <p>Run an inference job to generate one.</p>

@@ -217,6 +217,7 @@ export default function App() {
 
         <main className={`workspace job-runner-workspace full-width${activeSection === "job-runner" ? "" : " hidden"}`}>
           <JobRunnerPage
+            isActive={activeSection === "job-runner"}
             onViewCollection={(collectionId) => {
               setSelectedCollectionId(collectionId);
               setActiveSection("collection-viewer");
@@ -226,6 +227,7 @@ export default function App() {
 
         <main className={`workspace full-width collections-page${activeSection === "collection-viewer" ? "" : " hidden"}`}>
           <CollectionsList
+            isActive={activeSection === "collection-viewer"}
             selectedId={selectedCollectionId}
             onSelectCollection={setSelectedCollectionId}
           />

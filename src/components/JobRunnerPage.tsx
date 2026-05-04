@@ -4,6 +4,7 @@ import JobListSidebar from "./JobListSidebar";
 import JobViewPage from "./JobViewPage";
 
 interface JobRunnerPageProps {
+  isActive?: boolean;
   /**
    * Called when the user clicks "View Collection" on a job. The App-level
    * handler switches to the Collections section and selects the given id, so
@@ -12,7 +13,7 @@ interface JobRunnerPageProps {
   onViewCollection?: (collectionId: number) => void;
 }
 
-export default function JobRunnerPage({ onViewCollection }: JobRunnerPageProps) {
+export default function JobRunnerPage({ isActive = true, onViewCollection }: JobRunnerPageProps) {
   const [selectedJobId, setSelectedJobId] = useState<number | null>(null);
   const [listRefreshKey, setListRefreshKey] = useState(0);
 
@@ -32,6 +33,7 @@ export default function JobRunnerPage({ onViewCollection }: JobRunnerPageProps) 
         onSelectJob={setSelectedJobId}
         onNewJob={handleNewJob}
         refreshKey={listRefreshKey}
+        isActive={isActive}
       />
       <div className="job-runner-main">
         {selectedJobId ? (

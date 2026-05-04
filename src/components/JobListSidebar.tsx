@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { InferenceJob } from "../database";
+import { useActiveRefresh } from "../hooks/useActiveRefresh";
 import { formatRelativeTime } from "../utils/date";
 
 interface JobListSidebarProps {
@@ -8,6 +9,7 @@ interface JobListSidebarProps {
   onSelectJob: (jobId: number) => void;
   onNewJob: () => void;
   refreshKey?: number;
+  isActive?: boolean;
 }
 
 function getStatusClass(status: string): string {
@@ -40,17 +42,21 @@ export default function JobListSidebar({
   onSelectJob,
   onNewJob,
   refreshKey = 0,
+  isActive = true,
 }: JobListSidebarProps) {
   const [jobs, setJobs] = useState<InferenceJob[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
+  const hasLoadedRef = useRef(false);
 
   const loadJobs = useCallback(async () => {
+    if (!hasLoadedRef.current) setIsLoading(true);
     try {
       const jobList = await invoke<InferenceJob[]>("list_inference_jobs", {
         page: 1,
         pageSize: 50,
       });
       setJobs(Array.isArray(jobList) ? jobList : []);
+      hasLoadedRef.current = true;
     } catch (error) {
       console.error("Failed to load jobs:", error);
     } finally {
@@ -58,11 +64,12 @@ export default function JobListSidebar({
     }
   }, []);
 
-  useEffect(() => {
-    loadJobs();
-    const interval = setInterval(loadJobs, 5000);
-    return () => clearInterval(interval);
-  }, [loadJobs, refreshKey]);
+  useActiveRefresh({
+    isActive,
+    refresh: loadJobs,
+    intervalMs: 5000,
+    refreshToken: refreshKey,
+  });
 
   return (
     <aside className="job-list-sidebar">
