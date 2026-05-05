@@ -29,12 +29,19 @@ describe("DefinitionForm", () => {
     });
   });
 
-  it("renders the New Experiment heading and a kind dropdown locked to inference", async () => {
+  it("renders the New Experiment heading and a kind dropdown defaulting to inference", async () => {
     renderForm();
     expect(await screen.findByText("New Experiment")).toBeInTheDocument();
     const kind = screen.getByLabelText(/^Kind$/i) as HTMLSelectElement;
     expect(kind.value).toBe("inference");
-    expect(kind).toBeDisabled();
+    expect(kind).not.toBeDisabled();
+    // All four kinds offered.
+    expect(Array.from(kind.options).map((o) => o.value)).toEqual([
+      "inference",
+      "group",
+      "analysis",
+      "js_action",
+    ]);
   });
 
   it("submits a new definition via definition_create + definition_save_version", async () => {

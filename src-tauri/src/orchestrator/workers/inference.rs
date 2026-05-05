@@ -16,7 +16,7 @@ use crate::orchestrator::execution::{ExecutionService, JobExecution};
 use crate::orchestrator::llm::{
     self, LlmCallOptions,
 };
-use crate::orchestrator::resolver::{self, parse_input_ref};
+use crate::orchestrator::resolver::{self, parse_input_ref, ResolveContext};
 
 use super::{Worker, WorkerContext, WorkerError};
 
@@ -160,8 +160,26 @@ impl InferenceWorker {
             }
         };
         let input_ref = parse_input_ref(&input_ref_value).map_err(WorkerError::InvalidConfig)?;
+
+        // Sibling/concat resolution needs the current definition's parent_id
+        // (so we look up peers under the same group) and the run's root
+        // execution id. File / static / grid don't use these but the resolver
+        // takes them uniformly.
+        let pool = ctx.db.pool();
+        let parent_def_row: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT parent_id FROM job_definition WHERE id = ?")
+                .bind(version.definition_id)
+                .fetch_optional(&pool)
+                .await?;
+        let parent_def_id = parent_def_row.and_then(|(p,)| p).unwrap_or(0);
+        let resolve_ctx = ResolveContext {
+            project_root: &ctx.project_root,
+            pool: &pool,
+            parent_def_id,
+            root_exec_id: exec.root_id,
+        };
         let resolved =
-            resolver::resolve(&ctx.project_root, &input_ref).await.map_err(WorkerError::Failed)?;
+            resolver::resolve(&resolve_ctx, &input_ref).await.map_err(WorkerError::Failed)?;
         let rows = apply_strategy(resolved, &params.strategy, params.samples);
         let total = rows.len() as i64;
 

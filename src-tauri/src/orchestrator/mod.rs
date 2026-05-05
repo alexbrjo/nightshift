@@ -81,6 +81,7 @@ impl OrchestratorState {
             db,
             http: self.http.clone(),
             app: app.clone(),
+            dispatcher: self.dispatcher.clone(),
         };
 
         let _ = app.emit(

@@ -10,9 +10,12 @@ use tauri::{AppHandle, Emitter};
 use crate::database::DatabaseState;
 
 use super::definition_service::JobDefinitionVersion;
+use super::dispatcher::Dispatcher;
 use super::execution::JobExecution;
 
+pub mod group;
 pub mod inference;
+pub mod js_action;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkerError {
@@ -36,14 +39,15 @@ impl From<WorkerError> for String {
 
 /// Shared context handed to every worker invocation. Holds the live DB pool
 /// (via `DatabaseState` so it tracks project reconnects), the project root
-/// path, the HTTP client for LLM calls, and the Tauri AppHandle for emitting
-/// progress events.
+/// path, the HTTP client for LLM calls, the Tauri AppHandle for emitting
+/// progress events, and the dispatcher itself so group workers can recurse.
 #[derive(Clone)]
 pub struct WorkerContext {
     pub db: DatabaseState,
     pub project_root: PathBuf,
     pub http: Client,
     pub app: AppHandle,
+    pub dispatcher: Dispatcher,
 }
 
 impl WorkerContext {
