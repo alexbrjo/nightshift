@@ -11,6 +11,7 @@ pub mod definition_service;
 pub mod dispatcher;
 pub mod execution;
 pub mod llm;
+pub mod planner;
 pub mod resolver;
 pub mod workers;
 
@@ -25,6 +26,7 @@ pub use definition_service::DefinitionService;
 
 use dispatcher::Dispatcher;
 use execution::ExecutionService;
+use planner::Planner;
 use workers::WorkerContext;
 
 #[derive(Clone)]
@@ -74,6 +76,13 @@ impl OrchestratorState {
             .create_root_execution(version_id)
             .await
             .map_err(|e| format!("failed to create execution: {}", e))?;
+
+        // Planner runs synchronously before dispatch so the plan is written to
+        // the root execution row before any worker observes it. Failure is
+        // non-fatal — the planner falls back to an empty plan and the
+        // user-authored tree runs as-is.
+        let planner = Planner::new(self.execution_service.db.clone(), self.http.clone());
+        let _plan = planner.plan(root_def_id, exec_id, &self.definition_service).await;
 
         let db = self.execution_service.db.clone();
         let ctx = WorkerContext {
