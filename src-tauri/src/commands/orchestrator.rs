@@ -223,6 +223,19 @@ pub async fn execution_get_tree(
 }
 
 #[tauri::command]
+pub async fn execution_list_for_definition(
+    state: State<'_, OrchestratorState>,
+    def_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<JobExecution>, String> {
+    state
+        .execution_service
+        .list_for_definition(def_id, limit.unwrap_or(50))
+        .await
+        .map_err(|e| format!("failed to list executions: {}", e))
+}
+
+#[tauri::command]
 pub async fn execution_get_collection(
     state: State<'_, OrchestratorState>,
     exec_id: i64,

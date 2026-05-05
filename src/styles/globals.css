@@ -2024,3 +2024,37 @@ legend {
   margin: 0;
   padding: 0;
 }
+
+/* ---------- Job Executions page ---------- */
+
+.job-executions-page {
+  display: flex;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+}
+
+.executions-list-pane {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.executions-list-pane .job-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+  margin: 0;
+  list-style: none;
+}
+
+.executions-detail-pane {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}

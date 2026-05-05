@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, type ReactNode } from "react"
 import Editor from "./components/Editor";
 import FileTree, { type FsNode } from "./components/FileTree";
 import DefinitionsPage from "./components/DefinitionsPage";
+import JobExecutionsPage from "./components/JobExecutionsPage";
 import { ToastProvider } from "./components/Toast";
 import {
   DropperIcon,
@@ -190,13 +191,13 @@ export default function App() {
             <DefinitionsPage isActive={activeSection === "definitions"} />
           </main>
 
-          {activeSection === "job-executions" && (
-            <main className="workspace full-width">
-              <div className="editor-placeholder">
-                Job Executions page lands in commit C.
-              </div>
-            </main>
-          )}
+          <main
+            className={`workspace job-runner-workspace full-width${
+              activeSection === "job-executions" ? "" : " hidden"
+            }`}
+          >
+            <JobExecutionsPage isActive={activeSection === "job-executions"} />
+          </main>
         </div>
       </div>
     </ToastProvider>

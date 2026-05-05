@@ -51,7 +51,7 @@ describe("ExecutionViewPage", () => {
 
   it("renders the running banner and a Cancel button while not terminal", async () => {
     render(<ExecutionViewPage rootExecId={5} onBack={onBack} />);
-    expect(await screen.findByText("Execution 5")).toBeInTheDocument();
+    expect(await screen.findByText("Job execution 5")).toBeInTheDocument();
     expect(screen.getByText("running")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Cancel/i })).toBeInTheDocument();
   });
@@ -80,9 +80,9 @@ describe("ExecutionViewPage", () => {
       return Promise.resolve();
     });
     render(<ExecutionViewPage rootExecId={7} onBack={onBack} />);
-    expect(await screen.findByText("Execution 7")).toBeInTheDocument();
+    expect(await screen.findByText("Job execution 7")).toBeInTheDocument();
     expect(screen.getByText("completed")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Cancel$/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Back to designer/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^← Back$/ })).toBeInTheDocument();
   });
 });

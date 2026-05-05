@@ -106,6 +106,27 @@ impl ExecutionService {
         .await
     }
 
+    /// Past + active root executions whose pinned version belongs to
+    /// `def_id` (any version). Used by the Job Executions page to list
+    /// runs of the selected definition.
+    pub async fn list_for_definition(
+        &self,
+        def_id: i64,
+        limit: i64,
+    ) -> Result<Vec<JobExecution>, sqlx::Error> {
+        let limit = limit.clamp(1, 500);
+        sqlx::query_as(
+            "SELECT e.* FROM job_execution e \
+             JOIN job_definition_version v ON v.id = e.definition_version_id \
+             WHERE v.definition_id = ? AND e.parent_id IS NULL \
+             ORDER BY e.created_at DESC, e.id DESC LIMIT ?",
+        )
+        .bind(def_id)
+        .bind(limit)
+        .fetch_all(&self.db.pool())
+        .await
+    }
+
     pub async fn mark_running(&self, exec_id: i64) -> Result<(), sqlx::Error> {
         sqlx::query(
             "UPDATE job_execution SET status = 'running', started_at = CURRENT_TIMESTAMP \

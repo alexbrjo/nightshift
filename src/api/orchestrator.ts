@@ -91,6 +91,13 @@ export function executionGetTree(rootExecId: number): Promise<JobExecution[]> {
   return invoke<JobExecution[]>("execution_get_tree", { rootExecId });
 }
 
+export function executionListForDefinition(
+  defId: number,
+  limit?: number,
+): Promise<JobExecution[]> {
+  return invoke<JobExecution[]>("execution_list_for_definition", { defId, limit });
+}
+
 export function executionGetCollection(
   execId: number,
   page: number,

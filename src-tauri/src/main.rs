@@ -81,6 +81,7 @@ fn main() {
             experiment_cancel,
             execution_get,
             execution_get_tree,
+            execution_list_for_definition,
             execution_get_collection,
             execution_get_ledger,
         ])

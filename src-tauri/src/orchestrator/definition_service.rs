@@ -815,6 +815,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_for_definition_returns_root_executions() {
+        use crate::orchestrator::execution::ExecutionService;
+        let (svc, dir) = fresh_service().await;
+        let id = svc.create_definition(None, "r".into(), 0).await.unwrap();
+        let (vid, _) =
+            svc.save_version(id, inference_content(), "user".into(), None).await.unwrap();
+        let exec_svc = ExecutionService::new(svc.db.clone());
+
+        // Two root executions for this definition.
+        let e1 = exec_svc.create_root_execution(vid).await.unwrap();
+        let e2 = exec_svc.create_root_execution(vid).await.unwrap();
+
+        let listed = exec_svc.list_for_definition(id, 50).await.unwrap();
+        let ids: Vec<i64> = listed.iter().map(|e| e.id).collect();
+        // Most recent first.
+        assert!(ids.contains(&e1) && ids.contains(&e2));
+        assert_eq!(ids[0], e2);
+        cleanup(&dir);
+    }
+
+    #[tokio::test]
     async fn soft_delete_marks_deleted_at() {
         let (svc, dir) = fresh_service().await;
         let id = svc.create_definition(None, "x".into(), 0).await.unwrap();

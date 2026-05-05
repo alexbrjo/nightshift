@@ -14,8 +14,8 @@ import LedgerTimeline from "./LedgerTimeline";
 
 interface ExecutionViewPageProps {
   rootExecId: number;
-  /** Returns to designer mode. */
-  onBack: () => void;
+  /** Optional back action; if omitted the back button is hidden. */
+  onBack?: () => void;
 }
 
 interface ProgressState {
@@ -142,10 +142,12 @@ export default function ExecutionViewPage({ rootExecId, onBack }: ExecutionViewP
   return (
     <div className="job-view-page">
       <div className="page-header">
-        <button className="btn-secondary" onClick={onBack}>
-          ← Back to designer
-        </button>
-        <h1>Execution {rootExecId}</h1>
+        {onBack && (
+          <button className="btn-secondary" onClick={onBack}>
+            ← Back
+          </button>
+        )}
+        <h1>Job execution {rootExecId}</h1>
         <div className="header-actions">
           {!isTerminal && (
             <button
