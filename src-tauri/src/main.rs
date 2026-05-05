@@ -3,6 +3,7 @@
 mod commands;
 mod database;
 mod job_executor;
+mod migrations;
 mod state;
 mod transform_runner;
 mod utils;

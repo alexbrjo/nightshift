@@ -375,6 +375,8 @@ impl DatabaseState {
             .execute(pool)
             .await?;
 
+        crate::migrations::run(pool).await?;
+
         Ok(())
     }
 
