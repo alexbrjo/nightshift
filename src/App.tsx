@@ -1,14 +1,18 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import Editor from "./components/Editor";
 import FileTree, { type FsNode } from "./components/FileTree";
-import ExperimentDesignerPage from "./components/ExperimentDesignerPage";
+import DefinitionsPage from "./components/DefinitionsPage";
 import { ToastProvider } from "./components/Toast";
-import { DropperIcon, RackIcon, MoonIcon } from "./components/icons";
+import {
+  DropperIcon,
+  RackIcon,
+  TestTubeIcon,
+  MoonIcon,
+} from "./components/icons";
 
-type Section = "code-editor" | "experiment-designer";
+type Section = "definitions" | "job-executions" | "files";
 
 function getLanguage(filename: string): string | undefined {
-  // Multi-extension files like `prompt.spec.jinja2` → use the FINAL extension.
   const ext = filename.split(".").pop()?.toLowerCase();
   const map: Record<string, string> = {
     js: "javascript",
@@ -41,7 +45,7 @@ function getLanguage(filename: string): string | undefined {
 }
 
 export default function App() {
-  const [activeSection, setActiveSection] = useState<Section>("experiment-designer");
+  const [activeSection, setActiveSection] = useState<Section>("definitions");
   const [activeFile, setActiveFile] = useState<{
     path: string;
     name: string;
@@ -67,13 +71,14 @@ export default function App() {
     }
   }, [isDark]);
 
+  // Section order: Definitions (the primary authoring surface), then Job
+  // Executions (where you watch experiments run), then Files (project
+  // file-system view for editing prompts/evals/scripts). Job Executions
+  // lands in commit C; until then it shows a placeholder.
   const sections: { id: Section; icon: ReactNode; label: string }[] = [
-    {
-      id: "experiment-designer",
-      icon: <RackIcon />,
-      label: "Experiments",
-    },
-    { id: "code-editor", icon: <DropperIcon />, label: "Project" },
+    { id: "definitions", icon: <RackIcon />, label: "Definitions" },
+    { id: "job-executions", icon: <TestTubeIcon />, label: "Job Executions" },
+    { id: "files", icon: <DropperIcon />, label: "Files" },
   ];
 
   const handleFileOpen = useCallback(async (node: FsNode) => {
@@ -142,11 +147,11 @@ export default function App() {
             getActiveContent={(filePath) =>
               fileContentsRef.current.get(filePath || activeFile?.path || "") ?? undefined
             }
-            className={activeSection === "code-editor" ? "" : "hidden"}
+            className={activeSection === "files" ? "" : "hidden"}
           />
 
           <main
-            className={`workspace${activeSection === "code-editor" ? "" : " hidden"}`}
+            className={`workspace${activeSection === "files" ? "" : " hidden"}`}
           >
             {activeFile ? (
               <Editor
@@ -179,11 +184,19 @@ export default function App() {
 
           <main
             className={`workspace job-runner-workspace full-width${
-              activeSection === "experiment-designer" ? "" : " hidden"
+              activeSection === "definitions" ? "" : " hidden"
             }`}
           >
-            <ExperimentDesignerPage isActive={activeSection === "experiment-designer"} />
+            <DefinitionsPage isActive={activeSection === "definitions"} />
           </main>
+
+          {activeSection === "job-executions" && (
+            <main className="workspace full-width">
+              <div className="editor-placeholder">
+                Job Executions page lands in commit C.
+              </div>
+            </main>
+          )}
         </div>
       </div>
     </ToastProvider>

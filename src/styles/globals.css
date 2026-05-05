@@ -1906,3 +1906,121 @@ legend {
   padding: 4px 10px;
   font-size: 12px;
 }
+
+/* ---------- Definition tree sidebar (Definitions + Job Executions pages) ---------- */
+
+.definition-tree-sidebar .definition-tree {
+  list-style: none;
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 0;
+  margin: 0;
+}
+
+.tree-node {
+  list-style: none;
+  margin: 0;
+}
+
+.tree-node-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px 6px 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+  border-radius: 4px;
+  margin: 1px 6px;
+}
+
+.tree-node-row:hover {
+  background: var(--bg-hover);
+}
+
+.tree-node-row.selected {
+  background: var(--bg-hover);
+  outline: 1px solid var(--border-color);
+}
+
+.tree-expand-toggle {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  font-size: 11px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tree-expand-toggle:hover {
+  color: var(--text-primary);
+}
+
+.tree-expand-spacer {
+  display: inline-block;
+  width: 16px;
+}
+
+.tree-node-label {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  background: transparent;
+  border: none;
+  text-align: left;
+  cursor: pointer;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  min-width: 0;
+}
+
+.tree-node-label .job-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-node-add-child {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 6px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.1s ease, background-color 0.15s ease;
+}
+
+.tree-node-row:hover .tree-node-add-child {
+  opacity: 1;
+}
+
+.tree-node-add-child:hover {
+  background: var(--bg-surface);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+.tree-node-add-child:disabled {
+  cursor: progress;
+  opacity: 0.5;
+}
+
+.tree-node-children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}

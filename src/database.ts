@@ -15,6 +15,8 @@ export interface JobDefinition {
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** Joined from the current version's `kind`. NULL until first save. */
+  currentKind: DefinitionKind | null;
 }
 
 export interface JobDefinitionVersion {

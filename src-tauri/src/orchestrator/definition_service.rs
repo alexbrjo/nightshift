@@ -25,6 +25,10 @@ pub struct JobDefinition {
     pub deleted_at: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Joined from `job_definition_version` on read so the tree sidebar can
+    /// render kind chips without an N+1. NULL until the first content save.
+    #[sqlx(default)]
+    pub current_kind: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -93,6 +97,22 @@ impl From<DefinitionError> for String {
         e.to_string()
     }
 }
+
+/// Column list for `JobDefinition` reads with the version's kind joined in.
+/// Used by `read_current`, `list_roots`, and `list_by_root` so the tree
+/// sidebar can render kind chips without an N+1 fetch.
+const SELECT_DEFINITION_WITH_KIND_BASE: &str = "SELECT \
+    d.id, d.parent_id, d.root_id, d.name, d.position, d.current_version_id, \
+    d.source, d.deleted_at, d.created_at, d.updated_at, v.kind AS current_kind \
+    FROM job_definition d \
+    LEFT JOIN job_definition_version v ON v.id = d.current_version_id";
+
+const SELECT_DEFINITION_WITH_KIND_BY_ID: &str = "SELECT \
+    d.id, d.parent_id, d.root_id, d.name, d.position, d.current_version_id, \
+    d.source, d.deleted_at, d.created_at, d.updated_at, v.kind AS current_kind \
+    FROM job_definition d \
+    LEFT JOIN job_definition_version v ON v.id = d.current_version_id \
+    WHERE d.id = ?";
 
 #[derive(Clone)]
 pub struct DefinitionService {
@@ -167,11 +187,10 @@ impl DefinitionService {
 
     pub async fn read_current(&self, def_id: i64) -> Result<DefinitionWithVersion, DefinitionError> {
         let pool = self.db.pool();
-        let definition: Option<JobDefinition> =
-            sqlx::query_as("SELECT * FROM job_definition WHERE id = ?")
-                .bind(def_id)
-                .fetch_optional(&pool)
-                .await?;
+        let definition: Option<JobDefinition> = sqlx::query_as(SELECT_DEFINITION_WITH_KIND_BY_ID)
+            .bind(def_id)
+            .fetch_optional(&pool)
+            .await?;
         let definition = definition.ok_or(DefinitionError::NotFound(def_id))?;
 
         let version = if let Some(vid) = definition.current_version_id {
@@ -215,10 +234,11 @@ impl DefinitionService {
 
     pub async fn list_roots(&self) -> Result<Vec<JobDefinition>, DefinitionError> {
         let pool = self.db.pool();
-        let rows = sqlx::query_as::<_, JobDefinition>(
-            "SELECT * FROM job_definition WHERE parent_id IS NULL AND deleted_at IS NULL \
-             ORDER BY updated_at DESC, id DESC",
-        )
+        let rows = sqlx::query_as::<_, JobDefinition>(&format!(
+            "{} WHERE d.parent_id IS NULL AND d.deleted_at IS NULL \
+             ORDER BY d.updated_at DESC, d.id DESC",
+            SELECT_DEFINITION_WITH_KIND_BASE
+        ))
         .fetch_all(&pool)
         .await?;
         Ok(rows)
@@ -229,10 +249,11 @@ impl DefinitionService {
         root_id: i64,
     ) -> Result<Vec<JobDefinition>, DefinitionError> {
         let pool = self.db.pool();
-        let rows = sqlx::query_as::<_, JobDefinition>(
-            "SELECT * FROM job_definition WHERE root_id = ? AND deleted_at IS NULL \
-             ORDER BY position ASC, id ASC",
-        )
+        let rows = sqlx::query_as::<_, JobDefinition>(&format!(
+            "{} WHERE d.root_id = ? AND d.deleted_at IS NULL \
+             ORDER BY d.position ASC, d.id ASC",
+            SELECT_DEFINITION_WITH_KIND_BASE
+        ))
         .bind(root_id)
         .fetch_all(&pool)
         .await?;

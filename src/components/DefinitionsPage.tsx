@@ -1,31 +1,27 @@
-import { useState, useCallback } from "react";
+import { useCallback, useState } from "react";
 
 import DefinitionForm from "./DefinitionForm";
-import DefinitionListSidebar from "./DefinitionListSidebar";
+import DefinitionTreeSidebar from "./DefinitionTreeSidebar";
 import ExecutionViewPage from "./ExecutionViewPage";
 
-interface ExperimentDesignerPageProps {
+interface DefinitionsPageProps {
   isActive?: boolean;
 }
 
-export default function ExperimentDesignerPage({
-  isActive = true,
-}: ExperimentDesignerPageProps) {
+/**
+ * Definitions section: tree sidebar on the left, per-node form on the right.
+ * The Run button still lives on the form during commit A; commit B moves it
+ * out entirely so executions are exclusively driven from the Job Executions
+ * section.
+ */
+export default function DefinitionsPage({ isActive = true }: DefinitionsPageProps) {
   const [selectedDefId, setSelectedDefId] = useState<number | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
-  // When set, the right pane swaps from the form to ExecutionViewPage. Null
-  // means we're in design mode. Selecting a different definition or clicking
-  // "Back" in ExecutionViewPage clears it.
   const [runExecId, setRunExecId] = useState<number | null>(null);
 
   const handleSaved = useCallback((defId: number) => {
     setSelectedDefId(defId);
     setRefreshKey((k) => k + 1);
-  }, []);
-
-  const handleNew = useCallback(() => {
-    setSelectedDefId(null);
-    setRunExecId(null);
   }, []);
 
   const handleSelect = useCallback((id: number) => {
@@ -39,37 +35,45 @@ export default function ExperimentDesignerPage({
     setRefreshKey((k) => k + 1);
   }, []);
 
+  const handleCancel = useCallback(() => {
+    setRunExecId(null);
+  }, []);
+
   const handleRunStarted = useCallback((execId: number) => {
     setRunExecId(execId);
   }, []);
 
-  const handleBackToDesigner = useCallback(() => {
+  const handleBackFromExecution = useCallback(() => {
     setRunExecId(null);
   }, []);
 
   return (
     <div className="job-runner-page">
-      <DefinitionListSidebar
+      <DefinitionTreeSidebar
         selectedId={selectedDefId}
         onSelectDefinition={handleSelect}
-        onNewDefinition={handleNew}
         refreshKey={refreshKey}
         isActive={isActive}
+        title="Definitions"
       />
       <div className="job-runner-main">
         {runExecId !== null ? (
           <ExecutionViewPage
             key={runExecId}
             rootExecId={runExecId}
-            onBack={handleBackToDesigner}
+            onBack={handleBackFromExecution}
           />
+        ) : selectedDefId === null ? (
+          <div className="editor-placeholder">
+            Select a definition or create a new one to get started.
+          </div>
         ) : (
           <DefinitionForm
-            key={selectedDefId ?? "new"}
+            key={selectedDefId}
             defId={selectedDefId}
             onSaved={handleSaved}
             onDeleted={handleDeleted}
-            onCancel={handleNew}
+            onCancel={handleCancel}
             onRunStarted={handleRunStarted}
           />
         )}
