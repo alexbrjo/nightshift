@@ -8,58 +8,86 @@ function renderForm(props: Partial<React.ComponentProps<typeof DefinitionForm>> 
   return render(
     <ToastProvider>
       <DefinitionForm
-        defId={null}
+        defId={1}
         onSaved={vi.fn()}
         onDeleted={vi.fn()}
-        onCancel={vi.fn()}
         {...props}
       />
     </ToastProvider>,
   );
 }
 
-describe("DefinitionForm", () => {
+function unsavedDefinition(parentId: number | null) {
+  return {
+    definition: {
+      id: 1,
+      parentId,
+      rootId: parentId ?? 1,
+      name: "fresh",
+      position: 0,
+      currentVersionId: null,
+      source: "user",
+      deletedAt: null,
+      createdAt: "",
+      updatedAt: "",
+      currentKind: null,
+    },
+    version: null,
+  };
+}
+
+describe("DefinitionForm (node editor)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it("defaults a new ROOT definition to kind=group", async () => {
     mockInvoke.mockImplementation((cmd: string) => {
-      if (cmd === "list_prompt_files") return Promise.resolve(["greet.jinja2"]);
-      if (cmd === "list_data_files") return Promise.resolve(["data.jsonl"]);
+      if (cmd === "list_prompt_files") return Promise.resolve([]);
+      if (cmd === "list_data_files") return Promise.resolve([]);
       if (cmd === "list_schema_files") return Promise.resolve([]);
+      if (cmd === "definition_read_current") return Promise.resolve(unsavedDefinition(null));
+      if (cmd === "definition_list_versions") return Promise.resolve([]);
       return Promise.resolve();
     });
+    renderForm();
+    expect(await screen.findByText(/New root \(group\)/)).toBeInTheDocument();
+    const kind = screen.getByLabelText(/^Kind$/i) as HTMLSelectElement;
+    expect(kind.value).toBe("group");
   });
 
-  it("renders the New Experiment heading and a kind dropdown defaulting to inference", async () => {
+  it("defaults a new CHILD definition to kind=inference", async () => {
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === "list_prompt_files") return Promise.resolve([]);
+      if (cmd === "list_data_files") return Promise.resolve([]);
+      if (cmd === "list_schema_files") return Promise.resolve([]);
+      if (cmd === "definition_read_current") return Promise.resolve(unsavedDefinition(99));
+      if (cmd === "definition_list_versions") return Promise.resolve([]);
+      return Promise.resolve();
+    });
     renderForm();
-    expect(await screen.findByText("New Experiment")).toBeInTheDocument();
+    expect(await screen.findByText(/New child \(inference\)/)).toBeInTheDocument();
     const kind = screen.getByLabelText(/^Kind$/i) as HTMLSelectElement;
     expect(kind.value).toBe("inference");
-    expect(kind).not.toBeDisabled();
-    // All four kinds offered.
-    expect(Array.from(kind.options).map((o) => o.value)).toEqual([
-      "inference",
-      "group",
-      "analysis",
-      "js_action",
-    ]);
   });
 
-  it("submits a new definition via definition_create + definition_save_version", async () => {
+  it("submits an inference definition via definition_save_version (no Run button)", async () => {
     const onSaved = vi.fn();
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "list_prompt_files") return Promise.resolve(["greet.jinja2"]);
       if (cmd === "list_data_files") return Promise.resolve(["data.jsonl"]);
       if (cmd === "list_schema_files") return Promise.resolve([]);
-      if (cmd === "definition_create") return Promise.resolve(42);
+      if (cmd === "definition_read_current") return Promise.resolve(unsavedDefinition(99));
+      if (cmd === "definition_list_versions") return Promise.resolve([]);
       if (cmd === "definition_save_version") return Promise.resolve(101);
+      if (cmd === "definition_rename") return Promise.resolve();
       return Promise.resolve();
     });
     renderForm({ onSaved });
 
-    // Wait for file lists to load.
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("list_prompt_files"));
 
-    fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "my-exp" } });
+    fireEvent.change(screen.getByLabelText(/Name \*/i), { target: { value: "my-leaf" } });
     fireEvent.change(screen.getByLabelText(/Prompt Spec \*/i), {
       target: { value: "greet.jinja2" },
     });
@@ -70,30 +98,22 @@ describe("DefinitionForm", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /^Create$/ }));
 
-    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(42));
-    expect(mockInvoke).toHaveBeenCalledWith("definition_create", {
-      input: { parentId: null, name: "my-exp", position: 0 },
-    });
-    const saveCall = mockInvoke.mock.calls.find((c: unknown[]) => c[0] === "definition_save_version");
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(1));
+    const saveCall = mockInvoke.mock.calls.find(
+      (c: unknown[]) => c[0] === "definition_save_version",
+    );
     expect(saveCall).toBeDefined();
     expect(saveCall![1]).toMatchObject({
       input: {
-        defId: 42,
+        defId: 1,
         content: { kind: "inference", inputRef: { kind: "file", path: "data.jsonl" } },
       },
     });
+    // No Run button — execution lives on the Job Executions page.
+    expect(screen.queryByRole("button", { name: /^Run$/ })).not.toBeInTheDocument();
   });
 
-  it("renders inline field errors when required fields are empty", async () => {
-    renderForm();
-    await screen.findByText("New Experiment");
-    fireEvent.click(screen.getByRole("button", { name: /^Create$/ }));
-    expect(await screen.findByText(/Name is required/i)).toBeInTheDocument();
-    expect(screen.getByText(/Prompt file is required/i)).toBeInTheDocument();
-    expect(screen.getByText(/Data source is required/i)).toBeInTheDocument();
-  });
-
-  it("loads an existing definition's content when defId is supplied", async () => {
+  it("renders a node-identity heading for a saved definition", async () => {
     mockInvoke.mockImplementation((cmd: string) => {
       if (cmd === "list_prompt_files") return Promise.resolve([]);
       if (cmd === "list_data_files") return Promise.resolve([]);
@@ -111,6 +131,7 @@ describe("DefinitionForm", () => {
             deletedAt: null,
             createdAt: "",
             updatedAt: "",
+            currentKind: "inference",
           },
           version: {
             id: 99,
@@ -143,11 +164,8 @@ describe("DefinitionForm", () => {
 
     renderForm({ defId: 7 });
 
-    expect(await screen.findByText("Edit Experiment")).toBeInTheDocument();
+    expect(await screen.findByText(/loaded · inference/)).toBeInTheDocument();
     expect((screen.getByLabelText(/Name \*/i) as HTMLInputElement).value).toBe("loaded");
     expect((screen.getByLabelText(/Model \*/i) as HTMLInputElement).value).toBe("gpt-4o");
-    expect((screen.getByLabelText(/Data Source \*/i) as HTMLSelectElement | HTMLInputElement).value).toBe(
-      "rows.jsonl",
-    );
   });
 });

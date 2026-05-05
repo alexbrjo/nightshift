@@ -10,27 +10,25 @@ import type {
   JobDefinitionVersion,
 } from "../database";
 import {
-  definitionCreate,
   definitionDelete,
   definitionReadCurrent,
   definitionSaveVersion,
-  experimentStart,
 } from "../api/orchestrator";
 import { useToast } from "./Toast";
 import { pickFile } from "../utils/pickFile";
 import DefinitionHistoryPanel from "./DefinitionHistoryPanel";
 import Editor from "./Editor";
-import GroupChildrenPanel from "./GroupChildrenPanel";
 
 interface DefinitionFormProps {
-  /** Definition to edit; `null` means a new definition is being authored. */
-  defId: number | null;
+  /**
+   * Definition to edit. The form only edits existing definitions —
+   * creation now lives on the tree sidebar (`+ New` for roots,
+   * `+ Add child` for descendants), which creates the row and selects
+   * the new id. The form sees the result via `defId`.
+   */
+  defId: number;
   onSaved: (defId: number) => void;
   onDeleted: () => void;
-  onCancel: () => void;
-  onRunStarted?: (rootExecId: number) => void;
-  /** Notify parent so it can refresh sidebar. */
-  onChildrenChanged?: () => void;
 }
 
 interface InferenceParams {
@@ -106,9 +104,6 @@ export default function DefinitionForm({
   defId,
   onSaved,
   onDeleted,
-  onCancel,
-  onRunStarted,
-  onChildrenChanged,
 }: DefinitionFormProps) {
   const [form, setForm] = useState<FormState>(INITIAL_STATE);
   const [definition, setDefinition] = useState<JobDefinition | null>(null);
@@ -123,16 +118,10 @@ export default function DefinitionForm({
 
   const { showToast } = useToast();
 
-  // Load existing definition state.
+  // Load the current definition state. The form is always in "edit existing"
+  // mode now — creation happens on the tree sidebar.
   useEffect(() => {
     let cancelled = false;
-    if (defId === null) {
-      setForm(INITIAL_STATE);
-      setDefinition(null);
-      setCurrentVersion(null);
-      setErrors({});
-      return;
-    }
     setIsLoadingDef(true);
     void (async () => {
       try {
@@ -189,7 +178,17 @@ export default function DefinitionForm({
             });
           }
         } else {
-          setForm({ ...INITIAL_STATE, name: dv.definition.name });
+          // Unsaved definition: pick a default kind based on whether this is
+          // a root (no parent → group, the experiment topology shape) or a
+          // child (parent set → inference, the typical leaf).
+          const defaultKind: DefinitionKind =
+            dv.definition.parentId === null ? "group" : "inference";
+          setForm({
+            ...INITIAL_STATE,
+            name: dv.definition.name,
+            kind: defaultKind,
+            mode: defaultKind === "group" ? "sequential" : null,
+          });
         }
         setErrors({});
       } catch (error) {
@@ -355,17 +354,14 @@ export default function DefinitionForm({
     if (!validate()) return;
     setIsSubmitting(true);
     try {
-      let id = defId;
-      if (id === null) {
-        id = await definitionCreate({ parentId: null, name: form.name, position: 0 });
-      } else if (definition && definition.name !== form.name) {
+      if (definition && definition.name !== form.name) {
         await invoke<void>("definition_rename", {
-          input: { defId: id, newName: form.name },
+          input: { defId, newName: form.name },
         });
       }
-      await definitionSaveVersion(id, buildContent());
+      await definitionSaveVersion(defId, buildContent());
       showToast("Saved", "success");
-      onSaved(id);
+      onSaved(defId);
     } catch (error) {
       const msg = formatSubmitError(error, "Failed to save");
       console.error("Failed to save definition:", error);
@@ -376,8 +372,7 @@ export default function DefinitionForm({
   }, [defId, definition, form, onSaved, showToast]);
 
   const handleDelete = useCallback(async () => {
-    if (defId === null) return;
-    if (!window.confirm("Delete this experiment? This cannot be undone.")) return;
+    if (!window.confirm("Delete this definition? This cannot be undone.")) return;
     try {
       await definitionDelete(defId);
       showToast("Deleted", "info");
@@ -389,28 +384,23 @@ export default function DefinitionForm({
     }
   }, [defId, onDeleted, showToast]);
 
-  const handleRun = useCallback(async () => {
-    if (defId === null) return;
-    try {
-      const execId = await experimentStart(defId);
-      showToast(`Started experiment (execution ${execId})`, "success");
-      onRunStarted?.(execId);
-    } catch (error) {
-      const msg = formatSubmitError(error, "Failed to start experiment");
-      console.error("Failed to start experiment:", error);
-      showToast(msg, "error");
-    }
-  }, [defId, onRunStarted, showToast]);
-
   if (isLoadingDef) {
     return <div className="inference-job-form-container loading-indicator">Loading…</div>;
   }
 
   const isJsActionStub = form.kind === "js_action";
+  const isUnsaved = currentVersion === null;
+  const heading = (() => {
+    if (isUnsaved) {
+      const role = definition?.parentId === null ? "root" : "child";
+      return `New ${role} (${form.kind})`;
+    }
+    return `${definition?.name ?? form.name} · ${form.kind}`;
+  })();
 
   return (
     <div className="inference-job-form-container">
-      <h2 className="form-title">{defId === null ? "New Experiment" : "Edit Experiment"}</h2>
+      <h2 className="form-title">{heading}</h2>
 
       {errors.submit && <div className="form-error">{errors.submit}</div>}
 
@@ -422,7 +412,7 @@ export default function DefinitionForm({
             type="text"
             value={form.name}
             onChange={(e) => updateTop("name", e.target.value)}
-            placeholder="experiment-name"
+            placeholder="definition-name"
             className={errors.name ? "error" : ""}
           />
           {errors.name && <span className="error-message">{errors.name}</span>}
@@ -499,29 +489,10 @@ export default function DefinitionForm({
         <button
           type="button"
           className="btn-secondary"
-          onClick={onCancel}
+          onClick={handleDelete}
           disabled={isSubmitting}
         >
-          Cancel
-        </button>
-        {defId !== null && (
-          <button
-            type="button"
-            className="btn-secondary"
-            onClick={handleDelete}
-            disabled={isSubmitting}
-          >
-            Delete
-          </button>
-        )}
-        <button
-          type="button"
-          className="btn-secondary"
-          onClick={handleRun}
-          disabled={isSubmitting || defId === null}
-          title={defId === null ? "Save first" : "Run experiment"}
-        >
-          Run
+          Delete
         </button>
         <button
           type="button"
@@ -529,22 +500,9 @@ export default function DefinitionForm({
           onClick={handleSubmit}
           disabled={isSubmitting}
         >
-          {isSubmitting ? "Saving..." : defId === null ? "Create" : "Save Version"}
+          {isSubmitting ? "Saving..." : isUnsaved ? "Create" : "Save Version"}
         </button>
       </div>
-
-      {form.kind === "group" && defId !== null && definition && (
-        <GroupChildrenPanel
-          parentDefId={defId}
-          rootId={definition.rootId}
-          onSelectChild={(childId) => {
-            // Defer selection through the parent; on save the parent's onSaved
-            // re-mounts this form against the child id.
-            onSaved(childId);
-          }}
-          onChildCreated={() => onChildrenChanged?.()}
-        />
-      )}
 
       <DefinitionHistoryPanel
         defId={defId}
