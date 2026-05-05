@@ -119,7 +119,10 @@ export default function DefinitionForm({
   const { showToast } = useToast();
 
   // Load the current definition state. The form is always in "edit existing"
-  // mode now — creation happens on the tree sidebar.
+  // mode now — creation happens on the tree sidebar. `reloadToken` bumps on
+  // save so the form re-reads HEAD and the heading flips from
+  // "New child (kind)" to "name · kind" without forcing a remount.
+  const [reloadToken, setReloadToken] = useState(0);
   useEffect(() => {
     let cancelled = false;
     setIsLoadingDef(true);
@@ -201,7 +204,7 @@ export default function DefinitionForm({
     return () => {
       cancelled = true;
     };
-  }, [defId, showToast]);
+  }, [defId, reloadToken, showToast]);
 
   // Load file-listing dropdowns.
   useEffect(() => {
@@ -361,6 +364,7 @@ export default function DefinitionForm({
       }
       await definitionSaveVersion(defId, buildContent());
       showToast("Saved", "success");
+      setReloadToken((t) => t + 1);
       onSaved(defId);
     } catch (error) {
       const msg = formatSubmitError(error, "Failed to save");

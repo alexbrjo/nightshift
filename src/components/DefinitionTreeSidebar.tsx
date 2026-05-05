@@ -328,10 +328,11 @@ function TreeNodeView({
   const { def, children } = node;
   const isGroup = def.currentKind === "group";
   const isExpanded = depth === 0 ? expanded.has(def.id) : true;
-  const versionBadge =
-    def.currentVersionId === null ? "Unsaved" : `v${def.currentVersionId}`;
-  const versionClass =
-    def.currentVersionId === null ? "status-pending" : "status-completed";
+  // The sidebar only signals saved-vs-unsaved. The numeric "v3" sequence
+  // belongs in the History panel, where it's a per-definition count;
+  // job_definition_version.id is a global autoincrement and putting it here
+  // implied the wrong semantics ("v3 = third save of THIS node").
+  const isUnsaved = def.currentVersionId === null;
   // At depth 0, show the expand toggle for any group (children are
   // lazy-loaded on first expand, so we don't know the count up front)
   // and for any node that already has known children. Non-group leaves
@@ -366,7 +367,9 @@ function TreeNodeView({
         >
           <span className="job-name">{def.name}</span>
           <span className="job-type-badge">{kindLabel(def.currentKind)}</span>
-          <span className={`status-badge ${versionClass}`}>{versionBadge}</span>
+          {isUnsaved && (
+            <span className="status-badge status-pending">Unsaved</span>
+          )}
         </button>
         {isGroup && (
           <button
