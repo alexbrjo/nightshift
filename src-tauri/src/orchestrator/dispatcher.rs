@@ -8,6 +8,7 @@ use tracing::{error, info};
 
 use crate::orchestrator::definition_service::DefinitionService;
 use crate::orchestrator::execution::{ExecutionService, JobExecution};
+use crate::orchestrator::workers::analysis::AnalysisWorker;
 use crate::orchestrator::workers::group::GroupWorker;
 use crate::orchestrator::workers::inference::InferenceWorker;
 use crate::orchestrator::workers::js_action::JsActionWorker;
@@ -35,6 +36,7 @@ impl Dispatcher {
         match version.kind.as_str() {
             "inference" => InferenceWorker::new().execute(exec, version, ctx).await,
             "group" => GroupWorker::new().execute(exec, version, ctx).await,
+            "analysis" => AnalysisWorker::new().execute(exec, version, ctx).await,
             "js_action" => JsActionWorker::new().execute(exec, version, ctx).await,
             other => Err(WorkerError::NotImplemented(other.to_string())),
         }

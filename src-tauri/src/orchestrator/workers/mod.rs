@@ -13,6 +13,7 @@ use super::definition_service::JobDefinitionVersion;
 use super::dispatcher::Dispatcher;
 use super::execution::JobExecution;
 
+pub mod analysis;
 pub mod group;
 pub mod inference;
 pub mod js_action;
