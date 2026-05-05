@@ -81,6 +81,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_upgrades_a_legacy_db_in_place() {
+        // Simulates a user whose .nightshift/nightshift.db was created by
+        // the legacy code: it has the four legacy tables and no
+        // schema_version. The runner should apply m001 + m002 and end at
+        // the canonical orchestrator shape with no legacy tables left.
+        let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON").execute(&pool).await.unwrap();
+        for ddl in &[
+            "CREATE TABLE inference_jobs (id INTEGER PRIMARY KEY, name TEXT)",
+            "CREATE TABLE collections (id INTEGER PRIMARY KEY, job_id INTEGER, \
+             FOREIGN KEY (job_id) REFERENCES inference_jobs(id))",
+            "CREATE TABLE collection_items (id INTEGER PRIMARY KEY, \
+             collection_id INTEGER, FOREIGN KEY (collection_id) REFERENCES collections(id))",
+            "CREATE TABLE job_failures (id INTEGER PRIMARY KEY, job_id INTEGER, \
+             FOREIGN KEY (job_id) REFERENCES inference_jobs(id))",
+        ] {
+            sqlx::query(ddl).execute(&pool).await.unwrap();
+        }
+
+        run(&pool).await.expect("upgrade migration succeeds");
+
+        for legacy in ["inference_jobs", "job_failures", "collections", "collection_items"] {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+                    .bind(legacy)
+                    .fetch_optional(&pool)
+                    .await
+                    .unwrap();
+            assert!(row.is_none(), "legacy table {} should be dropped", legacy);
+        }
+        for table in ["collection", "collection_item", "job_definition", "job_execution"] {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+                    .bind(table)
+                    .fetch_optional(&pool)
+                    .await
+                    .unwrap();
+            assert!(row.is_some(), "{} should exist after upgrade", table);
+        }
+    }
+
+    #[tokio::test]
     async fn orchestrator_tables_exist_after_run() {
         let pool = SqlitePool::connect("sqlite::memory:").await.unwrap();
         sqlx::query("PRAGMA foreign_keys = ON").execute(&pool).await.unwrap();
