@@ -5,6 +5,13 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => mockInvoke(...args),
 }));
 
+export const mockListen = vi.fn().mockResolvedValue(() => {});
+export const mockEmit = vi.fn().mockResolvedValue(undefined);
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: (...args: unknown[]) => mockListen(...args),
+  emit: (...args: unknown[]) => mockEmit(...args),
+}));
+
 export const mockOpen = vi.fn();
 export const mockAsk = vi.fn();
 export const mockSave = vi.fn();

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import Editor from "./components/Editor";
 import FileTree, { type FsNode } from "./components/FileTree";
-import UnderConstruction from "./components/UnderConstruction";
+import ExperimentDesignerPage from "./components/ExperimentDesignerPage";
 import JobRunnerPage from "./components/JobRunnerPage";
 import CollectionViewer from "./components/CollectionViewer";
 import CollectionsList from "./components/CollectionsList";
@@ -19,13 +19,6 @@ type Section =
   | "job-runner"
   | "experiment-designer"
   | "collection-viewer";
-
-const SECTION_LABELS: Record<Section, string> = {
-  "code-editor": "Project",
-  "job-runner": "Inference Jobs",
-  "experiment-designer": "Agent",
-  "collection-viewer": "Collections",
-};
 
 function getLanguage(filename: string): string | undefined {
   // Multi-extension files like `prompt.spec.jinja2` → use the FINAL extension.
@@ -97,12 +90,12 @@ export default function App() {
   const sections: { id: Section; icon: ReactNode; label: string }[] = [
     { id: "code-editor", icon: <DropperIcon />, label: "Project" },
     { id: "collection-viewer", icon: <CabinetIcon />, label: "Collections" },
-    { id: "job-runner", icon: <TestTubeIcon />, label: "Inference Jobs" },
     {
       id: "experiment-designer",
       icon: <RackIcon />,
-      label: "Agent",
+      label: "Experiments",
     },
+    { id: "job-runner", icon: <TestTubeIcon />, label: "Inference Jobs (legacy)" },
   ];
 
   const handleFileOpen = useCallback(async (node: FsNode) => {
@@ -240,11 +233,9 @@ export default function App() {
           )}
         </main>
 
-        {activeSection === "experiment-designer" && (
-          <main className="workspace full-width">
-            <UnderConstruction title={SECTION_LABELS[activeSection]} />
-          </main>
-        )}
+        <main className={`workspace job-runner-workspace full-width${activeSection === "experiment-designer" ? "" : " hidden"}`}>
+          <ExperimentDesignerPage isActive={activeSection === "experiment-designer"} />
+        </main>
         </div>
       </div>
     </ToastProvider>
