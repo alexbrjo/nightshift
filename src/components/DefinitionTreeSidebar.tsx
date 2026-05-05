@@ -94,15 +94,26 @@ export default function DefinitionTreeSidebar({
   const hasLoadedRef = useRef(false);
   const { showToast } = useToast();
 
-  const loadRoots = useCallback(async () => {
+  // Mirror `expanded` and `subtrees` in refs so the polling callback can read
+  // the latest values without re-creating itself on every state change. The
+  // earlier shape closed over the initial empty `subtrees` map and reset
+  // it back to empty every 5s, which collapsed the visible tree.
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  const subtreesRef = useRef(subtrees);
+  subtreesRef.current = subtrees;
+
+  const refreshAll = useCallback(async () => {
     if (!hasLoadedRef.current) setIsLoading(true);
     try {
       const list = await definitionListRoots();
       setRoots(Array.isArray(list) ? list : []);
       hasLoadedRef.current = true;
-      // Refresh any already-expanded subtrees so renames/moves propagate.
-      const ids = Array.from(expanded);
-      const refreshed = new Map(subtrees);
+      // Refresh any already-expanded subtrees so renames/moves propagate
+      // without forcing the user to collapse + re-expand.
+      const ids = Array.from(expandedRef.current);
+      if (ids.length === 0) return;
+      const refreshed = new Map(subtreesRef.current);
       for (const rootId of ids) {
         try {
           refreshed.set(rootId, await definitionListByRoot(rootId));
@@ -116,12 +127,11 @@ export default function DefinitionTreeSidebar({
     } finally {
       setIsLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useActiveRefresh({
     isActive,
-    refresh: loadRoots,
+    refresh: refreshAll,
     intervalMs: 5000,
     refreshToken: refreshKey,
   });
@@ -129,13 +139,13 @@ export default function DefinitionTreeSidebar({
   useEffect(() => {
     if (!isActive) return;
     const unlisteners: Array<Promise<() => void>> = [
-      listen("definition-version-created", () => void loadRoots()),
-      listen("definition-updated", () => void loadRoots()),
+      listen("definition-version-created", () => void refreshAll()),
+      listen("definition-updated", () => void refreshAll()),
     ];
     return () => {
       unlisteners.forEach((p) => void p.then((fn) => fn()));
     };
-  }, [isActive, loadRoots]);
+  }, [isActive, refreshAll]);
 
   const toggleExpand = useCallback(
     async (rootId: number) => {
@@ -177,7 +187,7 @@ export default function DefinitionTreeSidebar({
           name,
           position: roots.length,
         });
-        await loadRoots();
+        await refreshAll();
         onRootCreated?.(id);
         onSelectDefinition(id);
       } catch (e) {
@@ -187,7 +197,7 @@ export default function DefinitionTreeSidebar({
         setNewRootBusy(false);
       }
     },
-    [loadRoots, onRootCreated, onSelectDefinition, roots.length, showToast],
+    [refreshAll, onRootCreated, onSelectDefinition, roots.length, showToast],
   );
 
   const submitAddChild = useCallback(
