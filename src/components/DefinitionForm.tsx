@@ -24,6 +24,8 @@ interface DefinitionFormProps {
   onSaved: (defId: number) => void;
   onDeleted: () => void;
   onCancel: () => void;
+  /** Notify parent when a Run started so it can swap to the execution view. */
+  onRunStarted?: (rootExecId: number) => void;
 }
 
 interface InferenceParams {
@@ -82,6 +84,7 @@ export default function DefinitionForm({
   onSaved,
   onDeleted,
   onCancel,
+  onRunStarted,
 }: DefinitionFormProps) {
   const [form, setForm] = useState<FormState>(INITIAL_STATE);
   const [definition, setDefinition] = useState<JobDefinition | null>(null);
@@ -312,12 +315,13 @@ export default function DefinitionForm({
     try {
       const execId = await experimentStart(defId);
       showToast(`Started experiment (execution ${execId})`, "success");
+      onRunStarted?.(execId);
     } catch (error) {
       const msg = formatSubmitError(error, "Failed to start experiment");
       console.error("Failed to start experiment:", error);
       showToast(msg, "error");
     }
-  }, [defId, showToast]);
+  }, [defId, onRunStarted, showToast]);
 
   if (isLoadingDef) {
     return <div className="inference-job-form-container loading-indicator">Loading…</div>;
