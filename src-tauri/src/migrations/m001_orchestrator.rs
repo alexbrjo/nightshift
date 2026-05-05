@@ -15,11 +15,11 @@ pub fn up(pool: &SqlitePool) -> MigrationFuture<'_> {
             r#"
             CREATE TABLE job_definition (
                 id                  INTEGER PRIMARY KEY AUTOINCREMENT,
-                parent_id           INTEGER REFERENCES job_definition(id),
-                root_id             INTEGER NOT NULL REFERENCES job_definition(id),
+                parent_id           INTEGER REFERENCES job_definition(id) DEFERRABLE INITIALLY DEFERRED,
+                root_id             INTEGER NOT NULL REFERENCES job_definition(id) DEFERRABLE INITIALLY DEFERRED,
                 name                TEXT NOT NULL,
                 position            INTEGER NOT NULL DEFAULT 0,
-                current_version_id  INTEGER REFERENCES job_definition_version(id),
+                current_version_id  INTEGER REFERENCES job_definition_version(id) DEFERRABLE INITIALLY DEFERRED,
                 source              TEXT NOT NULL DEFAULT 'user',
                 deleted_at          DATETIME,
                 created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -63,7 +63,7 @@ pub fn up(pool: &SqlitePool) -> MigrationFuture<'_> {
                 description                 TEXT,
                 message                     TEXT,
                 created_by                  TEXT NOT NULL DEFAULT 'user',
-                triggered_by_execution_id   INTEGER REFERENCES job_execution(id),
+                triggered_by_execution_id   INTEGER REFERENCES job_execution(id) DEFERRABLE INITIALLY DEFERRED,
                 created_at                  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE (definition_id, content_hash)
             )
@@ -90,8 +90,8 @@ pub fn up(pool: &SqlitePool) -> MigrationFuture<'_> {
             CREATE TABLE job_execution (
                 id                       INTEGER PRIMARY KEY AUTOINCREMENT,
                 definition_version_id    INTEGER NOT NULL REFERENCES job_definition_version(id),
-                parent_id                INTEGER REFERENCES job_execution(id),
-                root_id                  INTEGER NOT NULL REFERENCES job_execution(id),
+                parent_id                INTEGER REFERENCES job_execution(id) DEFERRABLE INITIALLY DEFERRED,
+                root_id                  INTEGER NOT NULL REFERENCES job_execution(id) DEFERRABLE INITIALLY DEFERRED,
                 status                   TEXT NOT NULL DEFAULT 'pending',
                 plan                     TEXT,
                 ledger                   TEXT,

@@ -4,6 +4,7 @@ mod commands;
 mod database;
 mod job_executor;
 mod migrations;
+mod orchestrator;
 mod state;
 mod transform_runner;
 mod utils;
@@ -18,6 +19,7 @@ use crate::database::{
     get_job_failures, list_all_collections, list_inference_jobs, list_selectable_collections,
     update_inference_job, DatabaseState,
 };
+use crate::orchestrator::OrchestratorState;
 use crate::state::{AppState, JobManager};
 use tokio::sync::Mutex as TokioMutex;
 
@@ -40,6 +42,7 @@ fn main() {
                 let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
                 match rt.block_on(DatabaseState::empty()) {
                     Ok(db_state) => {
+                        app.manage(OrchestratorState::new(db_state.clone()));
                         app.manage(db_state);
                     }
                     Err(e) => {
@@ -97,6 +100,17 @@ fn main() {
             list_schema_files,
             list_transform_scripts,
             check_transform_runtime,
+            // Orchestrator (definition CRUD)
+            definition_create,
+            definition_save_version,
+            definition_read_current,
+            definition_read_version,
+            definition_list_versions,
+            definition_rename,
+            definition_move,
+            definition_delete,
+            definition_list_roots,
+            definition_list_by_root,
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");

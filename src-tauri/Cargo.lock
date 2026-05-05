@@ -2531,17 +2531,20 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 name = "nightshift"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "minijinja",
  "rand 0.9.4",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2",
  "sqlx",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
  "tracing",
