@@ -61,7 +61,7 @@ impl WorkerContext {
 
 /// Workers receive an immutable view of the execution row and its pinned
 /// version content; they communicate progress through `ctx.emit` and persist
-/// state by writing collection_item_v2 rows.
+/// state by writing collection_item rows.
 #[allow(dead_code)]
 pub trait Worker: Send + Sync {
     fn execute<'a>(

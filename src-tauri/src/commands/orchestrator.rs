@@ -235,7 +235,7 @@ pub async fn execution_get_collection(
     let offset = (page - 1) * page_size;
 
     let collection_id: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM collection_v2 WHERE execution_id = ?")
+        sqlx::query_as("SELECT id FROM collection WHERE execution_id = ?")
             .bind(exec_id)
             .fetch_optional(&pool)
             .await
@@ -246,7 +246,7 @@ pub async fn execution_get_collection(
     };
 
     sqlx::query_as::<_, ExecutionCollectionItem>(
-        "SELECT * FROM collection_item_v2 \
+        "SELECT * FROM collection_item \
          WHERE collection_id = ? \
          ORDER BY item_index ASC \
          LIMIT ? OFFSET ?",

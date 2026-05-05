@@ -234,7 +234,7 @@ impl AnalysisWorker {
         // analysis output via the same execution_id → collection mapping
         // every other worker uses. The single row holds the markdown.
         let collection_id: i64 = sqlx::query_scalar(
-            "INSERT INTO collection_v2 (execution_id, definition_id, name) \
+            "INSERT INTO collection (execution_id, definition_id, name) \
              VALUES (?, ?, ?) RETURNING id",
         )
         .bind(exec.id)
@@ -248,7 +248,7 @@ impl AnalysisWorker {
             "model": params.model,
         });
         sqlx::query(
-            "INSERT INTO collection_item_v2 \
+            "INSERT INTO collection_item \
                 (collection_id, item_index, status, data, finished_at, updated_at) \
              VALUES (?, 0, 'completed', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         )
@@ -394,7 +394,7 @@ async fn sample_collection(
     limit: usize,
 ) -> Result<Vec<Value>, sqlx::Error> {
     let rows = sqlx::query(
-        "SELECT data FROM collection_item_v2 \
+        "SELECT data FROM collection_item \
          WHERE collection_id = ? AND status = 'completed' \
          ORDER BY item_index ASC LIMIT ?",
     )

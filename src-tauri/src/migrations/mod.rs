@@ -12,6 +12,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 mod m001_orchestrator;
+mod m002_drop_legacy;
 
 pub type MigrationFuture<'a> =
     Pin<Box<dyn Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
@@ -22,8 +23,10 @@ pub struct Migration {
     pub up: for<'a> fn(&'a SqlitePool) -> MigrationFuture<'a>,
 }
 
-const MIGRATIONS: &[Migration] =
-    &[Migration { version: 1, description: "orchestrator schema", up: m001_orchestrator::up }];
+const MIGRATIONS: &[Migration] = &[
+    Migration { version: 1, description: "orchestrator schema", up: m001_orchestrator::up },
+    Migration { version: 2, description: "drop legacy tables", up: m002_drop_legacy::up },
+];
 
 pub async fn run(pool: &SqlitePool) -> Result<(), sqlx::Error> {
     sqlx::query(
@@ -83,12 +86,14 @@ mod tests {
         sqlx::query("PRAGMA foreign_keys = ON").execute(&pool).await.unwrap();
         run(&pool).await.unwrap();
 
+        // After the cutover migration, the final names are in place and the
+        // _v2 names + legacy tables are gone.
         for table in [
             "job_definition",
             "job_definition_version",
             "job_execution",
-            "collection_v2",
-            "collection_item_v2",
+            "collection",
+            "collection_item",
             "schema_version",
         ] {
             let row: Option<(String,)> =
@@ -98,6 +103,15 @@ mod tests {
                     .await
                     .unwrap();
             assert!(row.is_some(), "table {} should exist", table);
+        }
+        for legacy in ["inference_jobs", "job_failures", "collections", "collection_items"] {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM sqlite_master WHERE type='table' AND name=?")
+                    .bind(legacy)
+                    .fetch_optional(&pool)
+                    .await
+                    .unwrap();
+            assert!(row.is_none(), "legacy table {} should be gone", legacy);
         }
     }
 }

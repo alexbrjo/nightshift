@@ -1,4 +1,4 @@
-//! Row types for `job_execution` / `collection_v2` / `collection_item_v2`,
+//! Row types for `job_execution` / `collection` / `collection_item`,
 //! plus a thin `ExecutionService` for status transitions, cancellation
 //! polling, and event emission.
 

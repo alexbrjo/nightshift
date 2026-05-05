@@ -1,6 +1,6 @@
 //! `InferenceWorker` — executes a `kind=inference` leaf. For each input row
 //! resolved from the version's `input_ref`, render the prompt template, call
-//! the LLM, and write a `collection_item_v2` row with full per-row execution
+//! the LLM, and write a `collection_item` row with full per-row execution
 //! state (status, attempt, backend, tokens, latency, error). Refactor of the
 //! legacy `JobExecutor::execute_job` body for the orchestrator path.
 
@@ -201,7 +201,7 @@ impl InferenceWorker {
         // version row.
         let pool = ctx.db.pool();
         let collection_id: i64 = sqlx::query_scalar(
-            "INSERT INTO collection_v2 (execution_id, definition_id, name) \
+            "INSERT INTO collection (execution_id, definition_id, name) \
              VALUES (?, ?, ?) RETURNING id",
         )
         .bind(exec_id)
@@ -213,7 +213,7 @@ impl InferenceWorker {
         // Pre-insert pending rows so the UI sees the full count immediately.
         for (idx, _) in rows.iter().enumerate() {
             sqlx::query(
-                "INSERT INTO collection_item_v2 (collection_id, item_index, status) \
+                "INSERT INTO collection_item (collection_id, item_index, status) \
                  VALUES (?, ?, 'pending')",
             )
             .bind(collection_id)
@@ -266,7 +266,7 @@ impl InferenceWorker {
             }
 
             sqlx::query(
-                "UPDATE collection_item_v2 \
+                "UPDATE collection_item \
                  SET status = 'running', started_at = CURRENT_TIMESTAMP, attempt = attempt + 1 \
                  WHERE collection_id = ? AND item_index = ?",
             )
@@ -294,7 +294,7 @@ impl InferenceWorker {
                         "sample_index": idx as i64,
                     });
                     sqlx::query(
-                        "UPDATE collection_item_v2 \
+                        "UPDATE collection_item \
                          SET status = 'completed', \
                              data = ?, error = NULL, \
                              backend = ?, input_tokens = ?, output_tokens = ?, \
@@ -387,7 +387,7 @@ async fn record_failure(
     error: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "UPDATE collection_item_v2 \
+        "UPDATE collection_item \
          SET status = 'failed', error = ?, finished_at = CURRENT_TIMESTAMP, \
              updated_at = CURRENT_TIMESTAMP \
          WHERE collection_id = ? AND item_index = ?",

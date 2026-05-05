@@ -94,7 +94,7 @@ pub async fn find_sibling_collection(
          JOIN job_execution e ON e.definition_version_id IN ( \
              SELECT id FROM job_definition_version WHERE definition_id = d.id \
          ) \
-         JOIN collection_v2 c ON c.execution_id = e.id \
+         JOIN collection c ON c.execution_id = e.id \
          WHERE d.parent_id = ? AND d.name = ? AND d.deleted_at IS NULL \
            AND e.root_id = ? AND e.status = 'completed' \
          ORDER BY e.id DESC LIMIT 1",
@@ -109,7 +109,7 @@ pub async fn find_sibling_collection(
 
 async fn collection_rows(pool: &SqlitePool, collection_id: i64) -> Result<Vec<serde_json::Value>, String> {
     let rows: Vec<(Option<String>,)> = sqlx::query_as(
-        "SELECT data FROM collection_item_v2 \
+        "SELECT data FROM collection_item \
          WHERE collection_id = ? AND status = 'completed' \
          ORDER BY item_index ASC",
     )

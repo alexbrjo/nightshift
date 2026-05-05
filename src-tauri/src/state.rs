@@ -1,14 +1,8 @@
-use crate::job_executor::JobExecutor;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use tokio::sync::Mutex as TokioMutex;
 
-/// Application state tracking the currently opened folder
+/// Application state tracking the currently opened folder. Run-state for
+/// experiments lives in `OrchestratorState` (declared in `orchestrator/mod.rs`).
 pub struct AppState {
     pub root_path: Mutex<Option<PathBuf>>,
-}
-
-/// Manages background job execution for inference tasks
-pub struct JobManager {
-    pub executor: TokioMutex<Option<JobExecutor>>,
 }
