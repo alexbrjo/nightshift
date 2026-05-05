@@ -17,6 +17,10 @@ export interface JobDefinition {
   updatedAt: string;
   /** Joined from the current version's `kind`. NULL until first save. */
   currentKind: DefinitionKind | null;
+  /** Joined raw JSON string of the current version's `input_ref`. Frontend
+   *  parses this to render data-flow edges in the tree sidebar. NULL when
+   *  unsaved or when the version has no input_ref. */
+  currentInputRef: string | null;
 }
 
 export interface JobDefinitionVersion {

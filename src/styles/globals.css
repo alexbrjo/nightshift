@@ -1968,8 +1968,7 @@ legend {
 
 .tree-node-label {
   flex: 1;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  display: flex;
   align-items: center;
   gap: 8px;
   background: transparent;
@@ -1980,6 +1979,22 @@ legend {
   color: inherit;
   font: inherit;
   min-width: 0;
+}
+
+.tree-node-label .job-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.tree-edge-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+  flex-shrink: 1;
 }
 
 .tree-node-label .job-name {

@@ -44,6 +44,29 @@ function kindLabel(kind: DefinitionKind | null): string {
   }
 }
 
+/** Summarize a definition's `input_ref` for the tree edge label. Returns null
+ *  for groups, unsaved nodes, or input_refs that don't make sense to show
+ *  (e.g. malformed JSON). */
+function inputRefEdgeLabel(raw: string | null): string | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as { kind?: string; path?: string; name?: string };
+    if (!parsed || typeof parsed !== "object") return null;
+    if (parsed.kind === "file" && typeof parsed.path === "string") {
+      // Show the basename only — sidebar space is tight.
+      const idx = parsed.path.lastIndexOf("/");
+      const base = idx >= 0 ? parsed.path.slice(idx + 1) : parsed.path;
+      return `← ${base}`;
+    }
+    if (parsed.kind === "sibling" && typeof parsed.name === "string") {
+      return `← ${parsed.name}`;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** Tree-shape the flat `definition_list_by_root` response. */
 function buildTree(rows: JobDefinition[]): TreeNode[] {
   const byParent = new Map<number | null, JobDefinition[]>();
@@ -366,6 +389,14 @@ function TreeNodeView({
           onClick={() => onSelect(def.id)}
         >
           <span className="job-name">{def.name}</span>
+          {(() => {
+            const edge = inputRefEdgeLabel(def.currentInputRef);
+            return edge ? (
+              <span className="tree-edge-label" title={`Input source: ${edge.slice(2)}`}>
+                {edge}
+              </span>
+            ) : null;
+          })()}
           <span className="job-type-badge">{kindLabel(def.currentKind)}</span>
           {isUnsaved && (
             <span className="status-badge status-pending">Unsaved</span>

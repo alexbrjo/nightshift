@@ -11,6 +11,7 @@ import type {
 } from "../database";
 import {
   definitionDelete,
+  definitionListByRoot,
   definitionReadCurrent,
   definitionSaveVersion,
 } from "../api/orchestrator";
@@ -45,13 +46,19 @@ interface InferenceParams {
   jsonSchemaFile?: string;
 }
 
+type InputSourceKind = "file" | "sibling";
+
 interface FormState {
   name: string;
   kind: DefinitionKind;
   mode: GroupMode | null;
   description: string;
   // Inference-specific (used only when kind === "inference"):
+  inputSourceKind: InputSourceKind;
+  /** Project-relative path when inputSourceKind === "file". */
   dataSource: string;
+  /** Sibling definition name when inputSourceKind === "sibling". */
+  siblingName: string;
   params: InferenceParams;
   // For non-inference kinds: free-form JSON editors so users can author
   // params/input_ref directly. Persisted as strings so partially-typed JSON
@@ -88,7 +95,9 @@ const INITIAL_STATE: FormState = {
   kind: "inference",
   mode: null,
   description: "",
+  inputSourceKind: "file",
   dataSource: "",
+  siblingName: "",
   params: INITIAL_INFERENCE_PARAMS,
   paramsJson: "{}",
   inputRefJson: "null",
@@ -115,6 +124,8 @@ export default function DefinitionForm({
   const [promptFiles, setPromptFiles] = useState<string[]>([]);
   const [dataFiles, setDataFiles] = useState<string[]>([]);
   const [schemaFiles, setSchemaFiles] = useState<string[]>([]);
+  /** Other definitions under the same parent — feeds the Sibling input picker. */
+  const [siblings, setSiblings] = useState<JobDefinition[]>([]);
 
   const { showToast } = useToast();
 
@@ -136,14 +147,21 @@ export default function DefinitionForm({
           const params = JSON.parse(dv.version.params) as Record<string, unknown>;
           const inputRef = dv.version.inputRef ? JSON.parse(dv.version.inputRef) : null;
           if (dv.version.kind === "inference") {
+            const sourceKind: InputSourceKind =
+              inputRef && inputRef.kind === "sibling" ? "sibling" : "file";
             setForm({
               ...INITIAL_STATE,
               name: dv.definition.name,
               kind: "inference",
               description: dv.version.description ?? "",
+              inputSourceKind: sourceKind,
               dataSource:
                 inputRef && inputRef.kind === "file"
                   ? String(inputRef.path ?? "")
+                  : "",
+              siblingName:
+                inputRef && inputRef.kind === "sibling"
+                  ? String(inputRef.name ?? "")
                   : "",
               params: {
                 promptFile: String(params.prompt_file ?? ""),
@@ -235,6 +253,40 @@ export default function DefinitionForm({
     };
   }, []);
 
+  // Load siblings (peers under the same parent) so the Sibling input picker
+  // has the choices. Refetched whenever this definition's parent changes (via
+  // reloadToken bumps after save) and on definition-updated events so the
+  // picker stays current with renames/moves.
+  useEffect(() => {
+    if (!definition) {
+      setSiblings([]);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const all = await definitionListByRoot(definition.rootId);
+        if (cancelled) return;
+        setSiblings(
+          all.filter(
+            (d) =>
+              d.parentId === definition.parentId &&
+              d.id !== definition.id &&
+              d.deletedAt === null,
+          ),
+        );
+      } catch (e) {
+        console.error("Failed to load siblings:", e);
+      }
+    };
+    void load();
+    const p = listen("definition-updated", () => void load());
+    return () => {
+      cancelled = true;
+      void p.then((fn) => fn());
+    };
+  }, [definition]);
+
   const updateParam = <K extends keyof InferenceParams>(field: K, value: InferenceParams[K]) => {
     setForm((prev) => ({ ...prev, params: { ...prev.params, [field]: value } }));
     setErrors((prev) => {
@@ -278,7 +330,11 @@ export default function DefinitionForm({
     if (!form.name.trim()) next.name = "Name is required";
     if (form.kind === "inference") {
       if (!form.params.promptFile.trim()) next.promptFile = "Prompt file is required";
-      if (!form.dataSource.trim()) next.dataSource = "Data source is required";
+      if (form.inputSourceKind === "file") {
+        if (!form.dataSource.trim()) next.dataSource = "Data source is required";
+      } else {
+        if (!form.siblingName.trim()) next.siblingName = "Pick a sibling";
+      }
       if (!form.params.model.trim()) next.model = "Model name is required";
       if (!form.params.serverUrl.trim()) {
         next.serverUrl = "Server URL is required";
@@ -333,7 +389,10 @@ export default function DefinitionForm({
           strategy: p.strategy.toLowerCase(),
           json_schema_file: p.jsonSchemaFile || null,
         },
-        inputRef: { kind: "file", path: form.dataSource },
+        inputRef:
+          form.inputSourceKind === "sibling"
+            ? { kind: "sibling", name: form.siblingName }
+            : { kind: "file", path: form.dataSource },
         description: form.description || null,
         message: null,
       };
@@ -480,8 +539,10 @@ export default function DefinitionForm({
           promptFiles={promptFiles}
           dataFiles={dataFiles}
           schemaFiles={schemaFiles}
+          siblings={siblings}
           updateParam={updateParam}
           updateTop={updateTop}
+          setForm={setForm}
           handleBrowseDataSource={handleBrowseDataSource}
           handleBrowseSchemaFile={handleBrowseSchemaFile}
         />
@@ -528,8 +589,10 @@ interface InferenceFieldsProps {
   promptFiles: string[];
   dataFiles: string[];
   schemaFiles: string[];
+  siblings: JobDefinition[];
   updateParam: <K extends keyof InferenceParams>(field: K, value: InferenceParams[K]) => void;
   updateTop: (field: "dataSource", value: string) => void;
+  setForm: React.Dispatch<React.SetStateAction<FormState>>;
   handleBrowseDataSource: () => void;
   handleBrowseSchemaFile: () => void;
 }
@@ -540,8 +603,10 @@ function InferenceFields({
   promptFiles,
   dataFiles,
   schemaFiles,
+  siblings,
   updateParam,
   updateTop,
+  setForm,
   handleBrowseDataSource,
   handleBrowseSchemaFile,
 }: InferenceFieldsProps) {
@@ -759,36 +824,88 @@ function InferenceFields({
               </select>
             </div>
             <div className="form-group">
-              <label htmlFor="data-source">Data Source *</label>
-              {dataFiles.length > 0 ? (
-                <select
-                  id="data-source"
-                  value={form.dataSource}
-                  onChange={(e) => updateTop("dataSource", e.target.value)}
-                  className={errors.dataSource ? "error" : ""}
-                >
-                  <option value="">Select a data file...</option>
-                  {dataFiles.map((file) => (
-                    <option key={file} value={file}>{file}</option>
-                  ))}
-                </select>
-              ) : (
-                <div className="file-picker-row">
-                  <input
+              <label htmlFor="input-source-kind">Input</label>
+              <select
+                id="input-source-kind"
+                value={form.inputSourceKind}
+                onChange={(e) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    inputSourceKind: e.target.value as InputSourceKind,
+                  }))
+                }
+              >
+                <option value="file">File</option>
+                <option value="sibling" disabled={siblings.length === 0}>
+                  {siblings.length === 0 ? "Sibling (none available)" : "Sibling output"}
+                </option>
+              </select>
+              <span className="hint">
+                {form.inputSourceKind === "sibling"
+                  ? "Iterate the rows produced by a peer in the same group."
+                  : "Read JSONL/JSON rows from a project file."}
+              </span>
+            </div>
+            {form.inputSourceKind === "file" ? (
+              <div className="form-group">
+                <label htmlFor="data-source">Data Source *</label>
+                {dataFiles.length > 0 ? (
+                  <select
                     id="data-source"
-                    type="text"
                     value={form.dataSource}
                     onChange={(e) => updateTop("dataSource", e.target.value)}
-                    placeholder="path/to/data.jsonl"
                     className={errors.dataSource ? "error" : ""}
-                  />
-                  <button type="button" className="btn-secondary" onClick={handleBrowseDataSource}>
-                    Browse
-                  </button>
-                </div>
-              )}
-              {errors.dataSource && <span className="error-message">{errors.dataSource}</span>}
-            </div>
+                  >
+                    <option value="">Select a data file...</option>
+                    {dataFiles.map((file) => (
+                      <option key={file} value={file}>{file}</option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="file-picker-row">
+                    <input
+                      id="data-source"
+                      type="text"
+                      value={form.dataSource}
+                      onChange={(e) => updateTop("dataSource", e.target.value)}
+                      placeholder="path/to/data.jsonl"
+                      className={errors.dataSource ? "error" : ""}
+                    />
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={handleBrowseDataSource}
+                    >
+                      Browse
+                    </button>
+                  </div>
+                )}
+                {errors.dataSource && <span className="error-message">{errors.dataSource}</span>}
+              </div>
+            ) : (
+              <div className="form-group">
+                <label htmlFor="sibling-name">Sibling *</label>
+                <select
+                  id="sibling-name"
+                  value={form.siblingName}
+                  onChange={(e) =>
+                    setForm((prev) => ({ ...prev, siblingName: e.target.value }))
+                  }
+                  className={errors.siblingName ? "error" : ""}
+                >
+                  <option value="">Pick a sibling…</option>
+                  {siblings.map((s) => (
+                    <option key={s.id} value={s.name}>
+                      {s.name}
+                      {s.currentKind ? ` (${s.currentKind})` : ""}
+                    </option>
+                  ))}
+                </select>
+                {errors.siblingName && (
+                  <span className="error-message">{errors.siblingName}</span>
+                )}
+              </div>
+            )}
           </div>
         </fieldset>
       </div>

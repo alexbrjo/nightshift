@@ -29,6 +29,11 @@ pub struct JobDefinition {
     /// render kind chips without an N+1. NULL until the first content save.
     #[sqlx(default)]
     pub current_kind: Option<String>,
+    /// Raw JSON-string of the current version's `input_ref`, joined alongside
+    /// `current_kind`. Frontend parses this to render data-flow edges in the
+    /// tree (e.g. "← gen-low" for a sibling ref) without an N+1 fetch.
+    #[sqlx(default)]
+    pub current_input_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
@@ -98,18 +103,20 @@ impl From<DefinitionError> for String {
     }
 }
 
-/// Column list for `JobDefinition` reads with the version's kind joined in.
-/// Used by `read_current`, `list_roots`, and `list_by_root` so the tree
-/// sidebar can render kind chips without an N+1 fetch.
+/// Column list for `JobDefinition` reads with the version's kind + input_ref
+/// joined in. Used by `read_current`, `list_roots`, and `list_by_root` so the
+/// tree sidebar can render kind chips and data-flow edges without an N+1.
 const SELECT_DEFINITION_WITH_KIND_BASE: &str = "SELECT \
     d.id, d.parent_id, d.root_id, d.name, d.position, d.current_version_id, \
-    d.source, d.deleted_at, d.created_at, d.updated_at, v.kind AS current_kind \
+    d.source, d.deleted_at, d.created_at, d.updated_at, \
+    v.kind AS current_kind, v.input_ref AS current_input_ref \
     FROM job_definition d \
     LEFT JOIN job_definition_version v ON v.id = d.current_version_id";
 
 const SELECT_DEFINITION_WITH_KIND_BY_ID: &str = "SELECT \
     d.id, d.parent_id, d.root_id, d.name, d.position, d.current_version_id, \
-    d.source, d.deleted_at, d.created_at, d.updated_at, v.kind AS current_kind \
+    d.source, d.deleted_at, d.created_at, d.updated_at, \
+    v.kind AS current_kind, v.input_ref AS current_input_ref \
     FROM job_definition d \
     LEFT JOIN job_definition_version v ON v.id = d.current_version_id \
     WHERE d.id = ?";

@@ -1,12 +1,16 @@
 //! Resolves an `input_ref` (stored on a `job_definition_version`) to a
-//! concrete stream of input rows at execution time. v1 supports all five
-//! design kinds: file, sibling, siblings, concat, static, grid.
+//! concrete stream of input rows at execution time.
 //!
-//! `sibling` / `siblings` look up by *name*, so they're stable across
-//! definition renames within a single run (executions pin to versions, not
-//! identity, but the lookup happens against `root_id` of the current run).
+//! Two kinds are supported, the minimum needed to author a real pipeline
+//! end-to-end:
+//!   - `file`    — read JSONL/JSON from a project-relative path.
+//!   - `sibling` — feed me the rows of a named sibling's completed collection
+//!                 in the same run.
+//!
+//! The original design's `siblings` / `concat` / `static` / `grid` kinds were
+//! removed in favor of shipping less. Add them back when there's a real call
+//! site that needs them.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -18,31 +22,9 @@ use super::llm::resolve_within_project;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum InputRef {
-    File {
-        path: String,
-    },
+    File { path: String },
     /// Pull rows from a single sibling's completed collection.
-    Sibling {
-        name: String,
-    },
-    /// Resolve a list of sibling names; consumers (analysis worker) use this
-    /// for cross-collection SQL queries. The resolver itself returns nothing
-    /// for this kind — analysis workers look up the collection ids directly.
-    Siblings {
-        names: Vec<String>,
-    },
-    /// Concatenate the rows of multiple sources in order.
-    Concat {
-        sources: Vec<InputRef>,
-    },
-    /// Pin to a specific past collection by id.
-    Static {
-        collection_id: i64,
-    },
-    /// Synthesize rows from a Cartesian product of named axes.
-    Grid {
-        dims: BTreeMap<String, Vec<serde_json::Value>>,
-    },
+    Sibling { name: String },
 }
 
 pub fn parse_input_ref(value: &serde_json::Value) -> Result<InputRef, String> {
@@ -107,7 +89,10 @@ pub async fn find_sibling_collection(
     Ok(row.map(|(id,)| id))
 }
 
-async fn collection_rows(pool: &SqlitePool, collection_id: i64) -> Result<Vec<serde_json::Value>, String> {
+async fn collection_rows(
+    pool: &SqlitePool,
+    collection_id: i64,
+) -> Result<Vec<serde_json::Value>, String> {
     let rows: Vec<(Option<String>,)> = sqlx::query_as(
         "SELECT data FROM collection_item \
          WHERE collection_id = ? AND status = 'completed' \
@@ -119,12 +104,11 @@ async fn collection_rows(pool: &SqlitePool, collection_id: i64) -> Result<Vec<se
     .map_err(|e| format!("Failed to load collection items: {}", e))?;
     let mut out = Vec::with_capacity(rows.len());
     for (data_str,) in rows {
-        match data_str {
-            Some(s) => match serde_json::from_str::<serde_json::Value>(&s) {
+        if let Some(s) = data_str {
+            match serde_json::from_str::<serde_json::Value>(&s) {
                 Ok(v) => out.push(v),
                 Err(e) => warn!(error = %e, "skipping unparseable collection_item"),
-            },
-            None => {}
+            }
         }
     }
     Ok(out)
@@ -141,9 +125,6 @@ pub struct ResolveContext<'a> {
     pub root_exec_id: i64,
 }
 
-/// Materialize the rows for `input_ref`. Some kinds (siblings) deliberately
-/// produce no rows — they're for downstream code that wants collection ids
-/// rather than row streams.
 pub async fn resolve(
     ctx: &ResolveContext<'_>,
     input_ref: &InputRef,
@@ -162,45 +143,7 @@ pub async fn resolve(
                 )),
             }
         }
-        InputRef::Siblings { .. } => {
-            // Analysis workers use the names list directly; the resolver
-            // returns nothing here so generic iteration callers don't get a
-            // misleading flat stream.
-            Ok(Vec::new())
-        }
-        InputRef::Concat { sources } => {
-            let mut out = Vec::new();
-            for src in sources {
-                let chunk = Box::pin(resolve(ctx, src)).await?;
-                out.extend(chunk);
-            }
-            Ok(out)
-        }
-        InputRef::Static { collection_id } => collection_rows(ctx.pool, *collection_id).await,
-        InputRef::Grid { dims } => Ok(grid_product(dims)),
     }
-}
-
-fn grid_product(dims: &BTreeMap<String, Vec<serde_json::Value>>) -> Vec<serde_json::Value> {
-    let keys: Vec<&String> = dims.keys().collect();
-    if keys.is_empty() {
-        return Vec::new();
-    }
-    let mut current: Vec<serde_json::Map<String, serde_json::Value>> =
-        vec![serde_json::Map::new()];
-    for key in &keys {
-        let values = &dims[*key];
-        let mut next = Vec::with_capacity(current.len() * values.len());
-        for partial in &current {
-            for v in values {
-                let mut row = partial.clone();
-                row.insert(key.to_string(), v.clone());
-                next.push(row);
-            }
-        }
-        current = next;
-    }
-    current.into_iter().map(serde_json::Value::Object).collect()
 }
 
 #[cfg(test)]
@@ -216,43 +159,28 @@ mod tests {
     }
 
     #[test]
-    fn parse_input_ref_accepts_file_kind() {
+    fn parse_input_ref_accepts_file() {
         let v = serde_json::json!({"kind": "file", "path": "data.jsonl"});
-        let ir = parse_input_ref(&v).unwrap();
-        assert!(matches!(ir, InputRef::File { .. }));
+        assert!(matches!(parse_input_ref(&v).unwrap(), InputRef::File { .. }));
     }
 
     #[test]
-    fn parse_input_ref_accepts_sibling_concat_grid() {
-        assert!(matches!(
-            parse_input_ref(&serde_json::json!({"kind": "sibling", "name": "x"})).unwrap(),
-            InputRef::Sibling { .. }
-        ));
-        assert!(matches!(
-            parse_input_ref(&serde_json::json!({
-                "kind": "concat",
-                "sources": [
-                    {"kind": "sibling", "name": "a"},
-                    {"kind": "sibling", "name": "b"}
-                ]
-            }))
-            .unwrap(),
-            InputRef::Concat { .. }
-        ));
-        assert!(matches!(
-            parse_input_ref(&serde_json::json!({
-                "kind": "grid",
-                "dims": {"temp": [0.1, 0.5], "top_p": [0.9]}
-            }))
-            .unwrap(),
-            InputRef::Grid { .. }
-        ));
+    fn parse_input_ref_accepts_sibling() {
+        let v = serde_json::json!({"kind": "sibling", "name": "gen-low"});
+        assert!(matches!(parse_input_ref(&v).unwrap(), InputRef::Sibling { .. }));
     }
 
     #[test]
     fn parse_input_ref_rejects_unknown_kind() {
-        let v = serde_json::json!({"kind": "garbage"});
-        assert!(parse_input_ref(&v).is_err());
+        for v in [
+            serde_json::json!({"kind": "siblings", "names": ["a"]}),
+            serde_json::json!({"kind": "concat", "sources": []}),
+            serde_json::json!({"kind": "static", "collection_id": 1}),
+            serde_json::json!({"kind": "grid", "dims": {}}),
+            serde_json::json!({"kind": "garbage"}),
+        ] {
+            assert!(parse_input_ref(&v).is_err(), "should reject {}", v);
+        }
     }
 
     #[tokio::test]
@@ -274,24 +202,5 @@ mod tests {
         let err = resolve_file(&root, "../etc/passwd").await.unwrap_err();
         assert!(err.contains("'..'") || err.contains("escapes"));
         fs::remove_dir_all(&root).ok();
-    }
-
-    #[test]
-    fn grid_product_yields_cartesian() {
-        let mut dims: BTreeMap<String, Vec<serde_json::Value>> = BTreeMap::new();
-        dims.insert("a".into(), vec![serde_json::json!(1), serde_json::json!(2)]);
-        dims.insert("b".into(), vec![serde_json::json!("x"), serde_json::json!("y")]);
-        let rows = grid_product(&dims);
-        assert_eq!(rows.len(), 4);
-        // BTreeMap orders keys lexically: a then b.
-        let first = rows[0].as_object().unwrap();
-        assert_eq!(first.get("a").unwrap(), &serde_json::json!(1));
-        assert_eq!(first.get("b").unwrap(), &serde_json::json!("x"));
-    }
-
-    #[test]
-    fn grid_product_empty_dims_returns_empty() {
-        let dims = BTreeMap::new();
-        assert!(grid_product(&dims).is_empty());
     }
 }
