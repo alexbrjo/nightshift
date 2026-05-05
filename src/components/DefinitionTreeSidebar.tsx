@@ -8,6 +8,8 @@ import {
   definitionListByRoot,
   definitionListRoots,
 } from "../api/orchestrator";
+import InputDialog from "./InputDialog";
+import { useToast } from "./Toast";
 
 interface DefinitionTreeSidebarProps {
   selectedId?: number | null;
@@ -81,7 +83,16 @@ export default function DefinitionTreeSidebar({
   const [isLoading, setIsLoading] = useState(false);
   const [creatingChildOf, setCreatingChildOf] = useState<number | null>(null);
   const [newRootBusy, setNewRootBusy] = useState(false);
+  // Tauri 2 webviews don't expose window.prompt — use the in-app InputDialog
+  // for the name prompt. `dialog` carries the kind of action we're in the
+  // middle of so a single component handles both flows.
+  const [dialog, setDialog] = useState<
+    | { kind: "new-root" }
+    | { kind: "add-child"; parent: JobDefinition }
+    | null
+  >(null);
   const hasLoadedRef = useRef(false);
+  const { showToast } = useToast();
 
   const loadRoots = useCallback(async () => {
     if (!hasLoadedRef.current) setIsLoading(true);
@@ -148,41 +159,49 @@ export default function DefinitionTreeSidebar({
     [expanded, subtrees],
   );
 
-  const handleNewRoot = useCallback(async () => {
-    const name = window.prompt("Name for the new experiment (group):");
-    if (!name?.trim()) return;
-    setNewRootBusy(true);
-    try {
-      const id = await definitionCreate({
-        parentId: null,
-        name: name.trim(),
-        position: roots.length,
-      });
-      await loadRoots();
-      onRootCreated?.(id);
-      onSelectDefinition(id);
-    } catch (e) {
-      console.error("Failed to create root:", e);
-      window.alert(`Failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setNewRootBusy(false);
-    }
-  }, [loadRoots, onRootCreated, onSelectDefinition, roots.length]);
+  const handleNewRoot = useCallback(() => {
+    setDialog({ kind: "new-root" });
+  }, []);
 
-  const handleAddChild = useCallback(
-    async (parentDef: JobDefinition) => {
-      const name = window.prompt(`Name for new child of '${parentDef.name}':`);
-      if (!name?.trim()) return;
+  const handleAddChild = useCallback((parentDef: JobDefinition) => {
+    setDialog({ kind: "add-child", parent: parentDef });
+  }, []);
+
+  const submitNewRoot = useCallback(
+    async (name: string) => {
+      setDialog(null);
+      setNewRootBusy(true);
+      try {
+        const id = await definitionCreate({
+          parentId: null,
+          name,
+          position: roots.length,
+        });
+        await loadRoots();
+        onRootCreated?.(id);
+        onSelectDefinition(id);
+      } catch (e) {
+        console.error("Failed to create root:", e);
+        showToast(`Failed to create: ${e instanceof Error ? e.message : String(e)}`, "error");
+      } finally {
+        setNewRootBusy(false);
+      }
+    },
+    [loadRoots, onRootCreated, onSelectDefinition, roots.length, showToast],
+  );
+
+  const submitAddChild = useCallback(
+    async (parentDef: JobDefinition, name: string) => {
+      setDialog(null);
       setCreatingChildOf(parentDef.id);
       try {
         const existing = subtrees.get(parentDef.rootId) ?? [];
         const sibCount = existing.filter((d) => d.parentId === parentDef.id).length;
         const id = await definitionCreate({
           parentId: parentDef.id,
-          name: name.trim(),
+          name,
           position: sibCount,
         });
-        // Force the parent to be expanded so the new child is visible.
         setExpanded((prev) => new Set(prev).add(parentDef.rootId));
         const subtree = await definitionListByRoot(parentDef.rootId);
         setSubtrees((prev) => new Map(prev).set(parentDef.rootId, subtree));
@@ -190,12 +209,12 @@ export default function DefinitionTreeSidebar({
         onSelectDefinition(id);
       } catch (e) {
         console.error("Failed to add child:", e);
-        window.alert(`Failed: ${e instanceof Error ? e.message : String(e)}`);
+        showToast(`Failed to add: ${e instanceof Error ? e.message : String(e)}`, "error");
       } finally {
         setCreatingChildOf(null);
       }
     },
-    [onChildCreated, onSelectDefinition, subtrees],
+    [onChildCreated, onSelectDefinition, subtrees, showToast],
   );
 
   const trees = useMemo(() => {
@@ -251,6 +270,25 @@ export default function DefinitionTreeSidebar({
             />
           ))}
         </ul>
+      )}
+
+      {dialog?.kind === "new-root" && (
+        <InputDialog
+          title="New experiment"
+          label="Name (defaults to a group root)"
+          defaultValue=""
+          onSubmit={(name) => void submitNewRoot(name)}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.kind === "add-child" && (
+        <InputDialog
+          title={`Add child under '${dialog.parent.name}'`}
+          label="Name"
+          defaultValue=""
+          onSubmit={(name) => void submitAddChild(dialog.parent, name)}
+          onCancel={() => setDialog(null)}
+        />
       )}
     </aside>
   );

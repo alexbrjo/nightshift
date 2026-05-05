@@ -372,7 +372,13 @@ export default function DefinitionForm({
   }, [defId, definition, form, onSaved, showToast]);
 
   const handleDelete = useCallback(async () => {
-    if (!window.confirm("Delete this definition? This cannot be undone.")) return;
+    // Tauri 2 webview doesn't expose window.confirm — use the dialog plugin.
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    const confirmed = await ask("Delete this definition? This cannot be undone.", {
+      title: "Confirm delete",
+      kind: "warning",
+    });
+    if (!confirmed) return;
     try {
       await definitionDelete(defId);
       showToast("Deleted", "info");
