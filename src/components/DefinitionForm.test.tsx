@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mockInvoke } from "../setupTests";
 import DefinitionForm from "./DefinitionForm";
 import { ToastProvider } from "./Toast";
@@ -67,7 +67,7 @@ describe("DefinitionForm", () => {
     expect(mockInvoke).toHaveBeenCalledWith("definition_create", {
       input: { parentId: null, name: "my-exp", position: 0 },
     });
-    const saveCall = mockInvoke.mock.calls.find((c) => c[0] === "definition_save_version");
+    const saveCall = mockInvoke.mock.calls.find((c: unknown[]) => c[0] === "definition_save_version");
     expect(saveCall).toBeDefined();
     expect(saveCall![1]).toMatchObject({
       input: {

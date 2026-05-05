@@ -111,6 +111,13 @@ fn main() {
             definition_delete,
             definition_list_roots,
             definition_list_by_root,
+            // Orchestrator (experiment lifecycle + execution reads)
+            experiment_start,
+            experiment_cancel,
+            execution_get,
+            execution_get_tree,
+            execution_get_collection,
+            execution_get_ledger,
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");

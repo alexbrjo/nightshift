@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, State};
 use crate::orchestrator::definition_service::{
     DefinitionContent, DefinitionWithVersion, JobDefinition, JobDefinitionVersion,
 };
+use crate::orchestrator::execution::{ExecutionCollectionItem, JobExecution};
 use crate::orchestrator::OrchestratorState;
 
 #[derive(Serialize, Clone)]
@@ -173,4 +174,109 @@ pub async fn definition_list_by_root(
     root_id: i64,
 ) -> Result<Vec<JobDefinition>, String> {
     state.definition_service.list_by_root(root_id).await.map_err(Into::into)
+}
+
+// ----- experiment lifecycle -----
+
+#[tauri::command]
+pub async fn experiment_start(
+    app: AppHandle,
+    state: State<'_, OrchestratorState>,
+    root_def_id: i64,
+) -> Result<i64, String> {
+    state.start_run(root_def_id, app).await
+}
+
+#[tauri::command]
+pub async fn experiment_cancel(
+    state: State<'_, OrchestratorState>,
+    root_exec_id: i64,
+) -> Result<(), String> {
+    state.cancel_run(root_exec_id).await
+}
+
+// ----- execution reads -----
+
+#[tauri::command]
+pub async fn execution_get(
+    state: State<'_, OrchestratorState>,
+    exec_id: i64,
+) -> Result<JobExecution, String> {
+    state
+        .execution_service
+        .get(exec_id)
+        .await
+        .map_err(|e| format!("failed to read execution: {}", e))?
+        .ok_or_else(|| format!("execution {} not found", exec_id))
+}
+
+#[tauri::command]
+pub async fn execution_get_tree(
+    state: State<'_, OrchestratorState>,
+    root_exec_id: i64,
+) -> Result<Vec<JobExecution>, String> {
+    state
+        .execution_service
+        .get_tree(root_exec_id)
+        .await
+        .map_err(|e| format!("failed to read execution tree: {}", e))
+}
+
+#[tauri::command]
+pub async fn execution_get_collection(
+    state: State<'_, OrchestratorState>,
+    exec_id: i64,
+    page: i64,
+    page_size: i64,
+) -> Result<Vec<ExecutionCollectionItem>, String> {
+    let pool = state.execution_service.db.pool();
+    let page = page.max(1);
+    let page_size = page_size.clamp(1, 500);
+    let offset = (page - 1) * page_size;
+
+    let collection_id: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM collection_v2 WHERE execution_id = ?")
+            .bind(exec_id)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| format!("failed to find collection: {}", e))?;
+
+    let Some((cid,)) = collection_id else {
+        return Ok(Vec::new());
+    };
+
+    sqlx::query_as::<_, ExecutionCollectionItem>(
+        "SELECT * FROM collection_item_v2 \
+         WHERE collection_id = ? \
+         ORDER BY item_index ASC \
+         LIMIT ? OFFSET ?",
+    )
+    .bind(cid)
+    .bind(page_size)
+    .bind(offset)
+    .fetch_all(&pool)
+    .await
+    .map_err(|e| format!("failed to read collection items: {}", e))
+}
+
+#[tauri::command]
+pub async fn execution_get_ledger(
+    state: State<'_, OrchestratorState>,
+    exec_id: i64,
+) -> Result<Option<serde_json::Value>, String> {
+    let pool = state.execution_service.db.pool();
+    let row: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT ledger FROM job_execution WHERE id = ?")
+            .bind(exec_id)
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| format!("failed to read ledger: {}", e))?;
+    let Some((maybe,)) = row else {
+        return Err(format!("execution {} not found", exec_id));
+    };
+    Ok(maybe
+        .as_deref()
+        .map(serde_json::from_str)
+        .transpose()
+        .map_err(|e| format!("invalid ledger JSON: {}", e))?)
 }

@@ -3,8 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   DefinitionContentInput,
   DefinitionWithVersion,
+  ExecutionCollectionItem,
   JobDefinition,
   JobDefinitionVersion,
+  JobExecution,
 } from "../database";
 
 // CRUD wrappers over the Tauri orchestrator surface. Frontend code reaches
@@ -69,7 +71,45 @@ export function definitionListByRoot(rootId: number): Promise<JobDefinition[]> {
   return invoke<JobDefinition[]>("definition_list_by_root", { rootId });
 }
 
-// Event payload types for `listen()` consumers.
+// ----- experiment lifecycle -----
+
+export function experimentStart(rootDefId: number): Promise<number> {
+  return invoke<number>("experiment_start", { rootDefId });
+}
+
+export function experimentCancel(rootExecId: number): Promise<void> {
+  return invoke<void>("experiment_cancel", { rootExecId });
+}
+
+// ----- execution reads -----
+
+export function executionGet(execId: number): Promise<JobExecution> {
+  return invoke<JobExecution>("execution_get", { execId });
+}
+
+export function executionGetTree(rootExecId: number): Promise<JobExecution[]> {
+  return invoke<JobExecution[]>("execution_get_tree", { rootExecId });
+}
+
+export function executionGetCollection(
+  execId: number,
+  page: number,
+  pageSize: number,
+): Promise<ExecutionCollectionItem[]> {
+  return invoke<ExecutionCollectionItem[]>("execution_get_collection", {
+    execId,
+    page,
+    pageSize,
+  });
+}
+
+export function executionGetLedger(
+  execId: number,
+): Promise<Record<string, unknown> | null> {
+  return invoke<Record<string, unknown> | null>("execution_get_ledger", { execId });
+}
+
+// ----- event payload types for `listen()` consumers -----
 
 export interface DefinitionVersionCreatedPayload {
   defId: number;
@@ -79,4 +119,28 @@ export interface DefinitionVersionCreatedPayload {
 export interface DefinitionUpdatedPayload {
   defId: number;
   change: "rename" | "move" | "delete";
+}
+
+export interface ExecutionStatusPayload {
+  execId: number;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  parentId: number | null;
+  error?: string;
+}
+
+export interface ExecutionProgressPayload {
+  execId: number;
+  completed: number;
+  failed: number;
+  total: number;
+}
+
+export interface ExperimentStartedPayload {
+  rootExecId: number;
+  rootDefId: number;
+}
+
+export interface ExperimentTerminalPayload {
+  rootExecId: number;
+  error?: string;
 }

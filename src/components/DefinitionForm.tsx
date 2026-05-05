@@ -12,6 +12,7 @@ import {
   definitionDelete,
   definitionReadCurrent,
   definitionSaveVersion,
+  experimentStart,
 } from "../api/orchestrator";
 import { useToast } from "./Toast";
 import { pickFile } from "../utils/pickFile";
@@ -306,9 +307,17 @@ export default function DefinitionForm({
     }
   }, [defId, onDeleted, showToast]);
 
-  const handleRun = useCallback(() => {
-    showToast("Run lands in the next checkpoint — definition CRUD only for now.", "info");
-  }, [showToast]);
+  const handleRun = useCallback(async () => {
+    if (defId === null) return;
+    try {
+      const execId = await experimentStart(defId);
+      showToast(`Started experiment (execution ${execId})`, "success");
+    } catch (error) {
+      const msg = formatSubmitError(error, "Failed to start experiment");
+      console.error("Failed to start experiment:", error);
+      showToast(msg, "error");
+    }
+  }, [defId, showToast]);
 
   if (isLoadingDef) {
     return <div className="inference-job-form-container loading-indicator">Loading…</div>;
