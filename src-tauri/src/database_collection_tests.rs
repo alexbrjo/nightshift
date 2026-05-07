@@ -494,14 +494,12 @@ mod collection_commands_tests {
     }
 
     async fn insert_collection(state: &DatabaseState, job_id: i64, name: &str) -> i64 {
-        sqlx::query_scalar(
-            "INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id",
-        )
-        .bind(job_id)
-        .bind(name)
-        .fetch_one(&state.pool())
-        .await
-        .expect("insert collection")
+        sqlx::query_scalar("INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id")
+            .bind(job_id)
+            .bind(name)
+            .fetch_one(&state.pool())
+            .await
+            .expect("insert collection")
     }
 
     async fn insert_item(state: &DatabaseState, collection_id: i64, data: &str) {
@@ -532,9 +530,7 @@ mod collection_commands_tests {
         let _ = insert_collection(&state, failed_job, "failed outputs").await;
         let _ = insert_collection(&state, cancelled_job, "cancelled outputs").await;
 
-        let result = list_selectable_collections_with_pool(&state.pool())
-            .await
-            .expect("query");
+        let result = list_selectable_collections_with_pool(&state.pool()).await.expect("query");
 
         assert_eq!(result.len(), 2, "successful terminal collections should appear");
         assert!(result.iter().any(|c| c.name == "done outputs" && c.item_count == 2));
@@ -550,9 +546,7 @@ mod collection_commands_tests {
         let pending = insert_job_with_status(&state, "pending", "pending").await;
         let _ = insert_collection(&state, pending, "pending outputs").await;
 
-        let result = list_selectable_collections_with_pool(&state.pool())
-            .await
-            .expect("query");
+        let result = list_selectable_collections_with_pool(&state.pool()).await.expect("query");
         assert!(result.is_empty());
 
         cleanup_test_database(&dir);

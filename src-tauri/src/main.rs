@@ -1,14 +1,17 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod codex_app_server;
 mod commands;
 mod database;
 mod job_executor;
+mod methods;
 mod state;
 mod transform_runner;
 mod utils;
 
 use tauri::Manager;
 
+use crate::codex_app_server::CodexAppServerManager;
 use crate::commands::*;
 use crate::database::{
     add_collection_item, create_collection, create_inference_job, create_transform_job,
@@ -32,6 +35,7 @@ fn main() {
         .manage(AppState { root_path: std::sync::Mutex::new(None) })
         .manage(JobManager { executor: TokioMutex::new(None) })
         .manage(MethodExecutionManager { controls: Arc::new(TokioMutex::new(HashMap::new())) })
+        .manage(CodexAppServerManager::new())
         .setup(|app| {
             // The DB starts as an in-memory SQLite scratch pool — no .nightshift
             // directory is created until the user opens a project, at which
@@ -100,8 +104,9 @@ fn main() {
             list_transform_scripts,
             check_transform_runtime,
             // Methods
+            start_design_session,
+            send_design_chat_message,
             save_method,
-            chat_method_agent,
             preflight_method,
             list_methods,
             get_method,

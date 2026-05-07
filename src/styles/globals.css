@@ -2130,7 +2130,7 @@ legend {
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   background: var(--bg-deepest);
   color: var(--text-primary);
 }
@@ -2244,6 +2244,17 @@ legend {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--text-on-accent);
+}
+
+.agent-message.system {
+  max-width: 620px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.agent-message.pending,
+.agent-message.streaming {
+  border-color: var(--status-running);
 }
 
 .agent-message.error {

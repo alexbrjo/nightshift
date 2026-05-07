@@ -25,6 +25,9 @@
   },
   "bundle": {
     "active": false,
-    "targets": "all"
+    "targets": "all",
+    "externalBin": [
+      "binaries/codex-app-server"
+    ]
   }
 }

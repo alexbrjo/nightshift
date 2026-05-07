@@ -92,10 +92,25 @@ export interface MethodPreflightResult {
   blockers: MethodPreflightBlocker[];
 }
 
-export interface ChatMethodAgentOutput {
-  message: string;
-  method?: MethodManifest | null;
-  questions: string[];
+export interface CodexAppServerSession {
+  threadId: string;
+}
+
+export interface CodexTurnSummary {
+  threadId: string;
+  turnId: string;
+}
+
+export interface CodexAppServerEvent {
+  eventType: string;
+  threadId?: string;
+  turnId?: string;
+  itemId?: string;
+  textDelta?: string;
+  messageText?: string;
+  status?: string;
+  errorMessage?: string;
+  raw: Record<string, unknown>;
 }
 
 export interface MethodExecutionSummary {
