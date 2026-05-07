@@ -359,6 +359,91 @@ impl DatabaseState {
         .await?;
 
         sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS methods (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                folder_path TEXT NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS method_executions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                method_id TEXT NOT NULL,
+                method_content_hash TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                error_message TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                started_at DATETIME,
+                completed_at DATETIME
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS method_execution_nodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                node_id TEXT NOT NULL,
+                node_type TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                output_ref TEXT,
+                error_message TEXT,
+                started_at DATETIME,
+                completed_at DATETIME,
+                FOREIGN KEY (execution_id) REFERENCES method_executions(id) ON DELETE CASCADE,
+                UNIQUE(execution_id, node_id)
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS method_execution_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                node_id TEXT,
+                event_type TEXT NOT NULL,
+                payload_json JSON NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (execution_id) REFERENCES method_executions(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS method_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                node_id TEXT,
+                artifact_type TEXT NOT NULL,
+                storage_kind TEXT NOT NULL,
+                storage_ref TEXT NOT NULL,
+                content_hash TEXT,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (execution_id) REFERENCES method_executions(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_inference_jobs_status ON inference_jobs(status)",
         )
         .execute(pool)
@@ -374,6 +459,29 @@ impl DatabaseState {
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_job_failures_job_id ON job_failures(job_id)")
             .execute(pool)
             .await?;
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_methods_content_hash ON methods(content_hash)")
+            .execute(pool)
+            .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_method_executions_method_id ON method_executions(method_id)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_method_execution_nodes_execution_id ON method_execution_nodes(execution_id)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_method_execution_events_execution_id ON method_execution_events(execution_id)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_method_artifacts_execution_id ON method_artifacts(execution_id)",
+        )
+        .execute(pool)
+        .await?;
 
         Ok(())
     }

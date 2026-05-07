@@ -44,3 +44,99 @@ export interface JobFailure {
   error: string;
   created_at: string;
 }
+
+export interface MethodFileRef {
+  id: string;
+  kind: string;
+  path: string;
+}
+
+export interface MethodWorkflowNode {
+  id: string;
+  type: string;
+  depends_on?: string[];
+  config?: Record<string, unknown>;
+}
+
+export interface MethodManifest {
+  schema_version: number;
+  id: string;
+  title: string;
+  objective?: string;
+  files?: MethodFileRef[];
+  workflow: {
+    nodes: MethodWorkflowNode[];
+  };
+  parameters?: Record<string, unknown>;
+  provider?: Record<string, unknown>;
+}
+
+export interface MethodSummary {
+  id: string;
+  title: string;
+  contentHash: string;
+  folderPath: string;
+  createdAt: string;
+}
+
+export interface MethodPreflightBlocker {
+  code: string;
+  message: string;
+  fileId?: string;
+  fileKind?: string;
+  path?: string;
+}
+
+export interface MethodPreflightResult {
+  status: "drafting" | "ready";
+  blockers: MethodPreflightBlocker[];
+}
+
+export interface ChatMethodAgentOutput {
+  message: string;
+  method?: MethodManifest | null;
+  questions: string[];
+}
+
+export interface MethodExecutionSummary {
+  id: number;
+  methodId: string;
+  methodContentHash: string;
+  status: string;
+  errorMessage?: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface MethodExecutionNodeSummary {
+  id: number;
+  executionId: number;
+  nodeId: string;
+  nodeType: string;
+  status: string;
+  outputRef?: string;
+  errorMessage?: string;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export interface MethodExecutionEventSummary {
+  id: number;
+  executionId: number;
+  nodeId?: string;
+  eventType: string;
+  payloadJson: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface MethodArtifactSummary {
+  id: number;
+  executionId: number;
+  nodeId?: string;
+  artifactType: string;
+  storageKind: string;
+  storageRef: string;
+  contentHash: string;
+  createdAt: string;
+}

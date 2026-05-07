@@ -5,8 +5,10 @@ import reactHooks from "eslint-plugin-react-hooks";
 
 export default [
   {
-    files: ["src/**/*.ts", "src/**/*.tsx"],
     ignores: ["src/setupTests.ts"],
+  },
+  {
+    files: ["src/**/*.ts", "src/**/*.tsx"],
     languageOptions: {
       parser: typescriptParser,
       parserOptions: {

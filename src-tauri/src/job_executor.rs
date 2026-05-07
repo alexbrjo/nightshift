@@ -387,7 +387,10 @@ pub struct JobExecutor {
 
 impl JobExecutor {
     pub fn new(db: State<'_, DatabaseState>) -> Result<Self, String> {
-        let db_state = (*db).clone();
+        Self::from_database((*db).clone())
+    }
+
+    pub fn from_database(db_state: DatabaseState) -> Result<Self, String> {
         let client = Client::builder()
             .timeout(Duration::from_secs(60))
             .build()

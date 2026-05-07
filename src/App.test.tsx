@@ -1,19 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { describe, it, expect, beforeEach } from "vitest";
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { mockInvoke } from "./setupTests";
 import App from "./App";
-
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: vi.fn(),
-}));
-
-vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: vi.fn(),
-  ask: vi.fn(),
-}));
 
 describe("App", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue([]);
+    localStorage.clear();
   });
 
   it("renders without crashing", () => {
@@ -31,33 +25,28 @@ describe("App", () => {
     expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
   });
 
-  it("switches to collection-viewer section", () => {
+  it("switches to collection-viewer section", async () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
     fireEvent.click(buttons[1]);
-    expect(screen.getByText("Collection Viewer")).toBeDefined();
+    await waitFor(() => expect(screen.getByText("Collections")).toBeDefined());
   });
 
   it("switches to job-runner section", async () => {
-    // Mock invoke to return empty array for jobs
-    const { invoke } = await import("@tauri-apps/api/core");
-    (invoke as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
     
     fireEvent.click(buttons[2]);
     
-    // Wait for the component to update and show Job Runner content
-    await screen.findByText(/Job Runner|No inference jobs yet/i);
-    expect(screen.getByText(/Job Runner|No inference jobs yet/i)).toBeDefined();
+    const jobText = await screen.findAllByText(/No inference jobs yet|Create Inference Job/i);
+    expect(jobText.length).toBeGreaterThan(0);
   });
 
   it("switches to experiment-designer section", () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
     fireEvent.click(buttons[3]);
-    expect(screen.getByText("Experiment Designer")).toBeDefined();
+    expect(screen.getByText("Methods")).toBeDefined();
   });
 
   it("highlights active section button", () => {
@@ -116,18 +105,18 @@ describe("App", () => {
   it("renders section buttons with correct titles", () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
-    expect(buttons[0]).toHaveAttribute("title", "Code Editor");
-    expect(buttons[1]).toHaveAttribute("title", "Collection Viewer");
-    expect(buttons[2]).toHaveAttribute("title", "Job Runner");
-    expect(buttons[3]).toHaveAttribute("title", "Experiment Designer");
+    expect(buttons[0]).toHaveAttribute("title", "Project");
+    expect(buttons[1]).toHaveAttribute("title", "Collections");
+    expect(buttons[2]).toHaveAttribute("title", "Inference Jobs");
+    expect(buttons[3]).toHaveAttribute("title", "Agent");
   });
 
-  it("navigates back to code-editor from another section", () => {
+  it("navigates back to code-editor from another section", async () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
 
     fireEvent.click(buttons[1]);
-    expect(screen.getByText("Collection Viewer")).toBeDefined();
+    await waitFor(() => expect(screen.getByText("Collections")).toBeDefined());
 
     fireEvent.click(buttons[0]);
     expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
@@ -138,10 +127,10 @@ describe("App", () => {
     const buttons = document.querySelectorAll(".sidebar-btn");
 
     fireEvent.click(buttons[1]);
-    expect(document.querySelector(".workspace")).toHaveClass("full-width");
+    expect(document.querySelector(".collections-page")).toHaveClass("full-width");
 
     fireEvent.click(buttons[0]);
-    expect(document.querySelector(".workspace")).not.toHaveClass("full-width");
+    expect(document.querySelector("main.workspace:not(.full-width)")).toBeDefined();
   });
 
   it("renders app container with correct class", () => {

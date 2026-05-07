@@ -17,7 +17,9 @@ use crate::database::{
     get_job_failures, list_all_collections, list_inference_jobs, list_selectable_collections,
     update_inference_job, DatabaseState,
 };
-use crate::state::{AppState, JobManager};
+use crate::state::{AppState, JobManager, MethodExecutionManager};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 
 fn main() {
@@ -29,6 +31,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState { root_path: std::sync::Mutex::new(None) })
         .manage(JobManager { executor: TokioMutex::new(None) })
+        .manage(MethodExecutionManager { controls: Arc::new(TokioMutex::new(HashMap::new())) })
         .setup(|app| {
             // The DB starts as an in-memory SQLite scratch pool — no .nightshift
             // directory is created until the user opens a project, at which
@@ -96,6 +99,22 @@ fn main() {
             list_schema_files,
             list_transform_scripts,
             check_transform_runtime,
+            // Methods
+            save_method,
+            chat_method_agent,
+            preflight_method,
+            list_methods,
+            get_method,
+            read_method_file,
+            execute_method,
+            list_method_executions,
+            get_method_execution_nodes,
+            get_method_execution_events,
+            get_method_execution_artifacts,
+            read_method_artifact,
+            pause_method_execution,
+            resume_method_execution,
+            cancel_method_execution,
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");

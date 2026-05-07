@@ -24,3 +24,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 minijinja = "2"
 url = "2.5"
 serde_yaml = "0.9"
+sha2 = "0.10"

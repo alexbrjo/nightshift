@@ -17,5 +17,6 @@
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"]
+  "include": ["src", "src/vite-env.d.ts"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/__tests__/**", "src/setupTests.ts"]
 }

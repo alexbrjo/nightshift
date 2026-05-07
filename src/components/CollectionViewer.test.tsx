@@ -32,7 +32,7 @@ describe("CollectionViewer", () => {
   ];
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.mocked(invoke).mockReset();
   });
 
   it("renders loading state initially", () => {
