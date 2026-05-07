@@ -116,7 +116,7 @@ Tests:
 
 UX outcome:
 
-- The user can attach or name prompt, data, JSON schema, eval script, collection, and secret-reference resources.
+- The user can attach or name prompt, data, JSON schema, eval script, collection, and API-key resources.
 - The Method panel shows resources, file status, and which nodes consume each resource.
 - The agent asks targeted questions when a needed resource is missing or ambiguous.
 
@@ -127,22 +127,22 @@ Backend components:
   - attach Method resource
   - detach Method resource
   - resolve collection resource
-  - resolve secret reference
+  - resolve API-key resource
 - Add Method resource reference types:
   - prompt file
   - data file
   - JSON schema file
   - eval script
   - collection
-  - secret reference
+  - API key
 - Validate attached file resources are inside the opened project root.
 - Reject generated/dependency folders for attached resources.
 - Validate resource kind matches intended node use.
 - Add local inference server profiles and model defaults to `.nightshift/config.json`.
-- Let Methods reference provider profiles and secret ids.
+- Let Methods reference provider profiles and API-key ids.
 - Local server URLs and model names may live in config.
-- Secret values must not be stored in Method files.
-- Store secrets securely, not in Method files.
+- API-key values may live in Nightshift-managed `.nightshift/config.json`, which is private project configuration and should not be committed.
+- API-key values must not be stored in Method files or frozen Method bundles.
 - Add resource-to-node input contract validation.
 
 Do not add generic file readers or broad file inspectors in this chunk. If execution correctness requires a specific parse check, add that check at attachment, validation, freeze, or execution time for that specific resource type.
@@ -154,18 +154,19 @@ Tests:
 - Integration-test attaching files and collections to a draft Method through App Server-triggered Nightshift Method tools.
 - UI-test missing-resource prompts and resource status display.
 
-### 3. Graph Patch Loop
+### 3. File-Backed Graph Editing
 
 UX outcome:
 
 - The agent can add, remove, or update nodes and edges in response to chat.
-- The graph visibly updates after every accepted patch.
-- Invalid patches produce actionable blockers instead of corrupting the draft.
+- The model edits the canonical Method JSON directly using App Server native project file tools.
+- The graph visibly updates after Nightshift reloads and validates the edited Method JSON.
+- Invalid graph edits produce actionable blockers instead of being treated as executable state.
 
 Backend components:
 
 - Use canonical JSON as the durable Method IR and frozen manifest format.
-- Represent the Method as a DAG with graph-native storage: a node map plus explicit edge list.
+- Represent the Method as a DAG with graph-native JSON: a node map plus explicit edge list.
 - Add top-level Method fields:
   - schema version
   - id
@@ -186,20 +187,25 @@ Backend components:
 - Keep `transform` out of P0 Method execution. Existing transform job functionality may remain as legacy standalone functionality outside the Method harness.
 - Add typed config for each node type.
 - Add typed input/output contracts for each node.
-- Add Nightshift graph tools callable by App Server:
-  - get draft graph
-  - apply graph patch
-  - validate graph patch
-- Validate acyclicity, node existence, edge endpoints, required config, and resource references.
-- Store accepted patches through Tauri state and events.
+- Do not add custom graph patch tools unless direct file editing proves insufficient in product testing.
+- Let App Server use native project file tools to read and edit the canonical Method JSON file.
+- Add Nightshift commands/tools only for product-state operations:
+  - load or reload Method draft from canonical JSON
+  - validate current Method draft
+  - explain graph validation results
+- Validate acyclicity, node existence, edge endpoints, required config, typed contracts, and resource references after each reload/validation.
+- Keep invalid edited graphs renderable as drafts with blockers, but do not allow save/freeze/execute while blockers remain.
+- Emit draft/graph updates through Tauri state and events after successful load or validation.
 
 Tests:
 
-- Unit-test graph patch application and rollback on invalid patches.
+- Unit-test canonical Method JSON parsing and serialization.
+- Unit-test graph validation leaves invalid edited drafts inspectable without marking them executable.
 - Unit-test cycle detection.
 - Unit-test node config validation.
-- Integration-test graph changes from App Server-triggered Nightshift Method tools.
-- UI-test graph updates after a chat request.
+- Unit-test resource reference validation from edited JSON.
+- Integration-test graph changes made through App Server native file-edit flow and Nightshift reload/validation.
+- UI-test graph updates after a chat request edits the Method JSON.
 
 ### 4. Validation And Preflight
 

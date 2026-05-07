@@ -30,7 +30,16 @@ describe("buildMethodGraphElements", () => {
           kind: "prompt_file",
           label: "Prompt",
           status: "missing",
+          path: "prompts/main.md",
           consumedBy: ["generate"],
+        },
+        {
+          id: "schema",
+          kind: "json_schema",
+          label: "Output schema",
+          status: "attached",
+          path: "schemas/out.json",
+          consumedBy: ["score"],
         },
       ],
       nodes: [
@@ -53,22 +62,55 @@ describe("buildMethodGraphElements", () => {
       readiness: {
         status: "drafting",
         blockers: [{ code: "missing_prompt", message: "Attach a prompt.", nodeId: "generate" }],
-        warnings: [{ code: "weak_eval", message: "Eval needs detail.", nodeId: "score" }],
+        warnings: [
+          { code: "weak_eval", message: "Eval needs detail.", nodeId: "score" },
+          { code: "schema_note", message: "Schema is still loose.", resourceId: "schema" },
+        ],
       },
     });
 
     const graph = buildMethodGraphElements(draft);
+    const methodNodes = graph.nodes.filter((node) => node.type === "method");
+    const resourceNodes = graph.nodes.filter((node) => node.type === "resource");
 
-    expect(graph.nodes).toHaveLength(2);
-    expect(graph.edges).toEqual([
+    expect(methodNodes).toHaveLength(2);
+    expect(resourceNodes).toEqual([
+      expect.objectContaining({
+        id: "resource:prompt",
+        type: "resource",
+        position: { x: -340, y: 0 },
+        data: { resources: [expect.objectContaining({ id: "prompt", path: "prompts/main.md" })] },
+      }),
+      expect.objectContaining({
+        id: "resource:schema",
+        type: "resource",
+        data: { resources: [expect.objectContaining({ id: "schema", path: "schemas/out.json" })] },
+      }),
+    ]);
+    expect(graph.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "resource:prompt-generate",
+        source: "resource:prompt",
+        target: "generate",
+        sourceHandle: "right",
+        targetHandle: "left",
+      }),
+      expect.objectContaining({
+        id: "resource:schema-score",
+        source: "resource:schema",
+        target: "score",
+        sourceHandle: "right",
+        targetHandle: "left",
+      }),
       expect.objectContaining({
         id: "generate-score",
         source: "generate",
         target: "score",
         type: "smoothstep",
+        label: "2 issues",
       }),
-    ]);
-    expect(graph.nodes[0]).toEqual(
+    ]));
+    expect(methodNodes[0]).toEqual(
       expect.objectContaining({
         id: "generate",
         type: "method",
@@ -77,14 +119,60 @@ describe("buildMethodGraphElements", () => {
           blockerCount: 1,
           warningCount: 0,
           resourceCount: 1,
+          issues: [expect.objectContaining({ message: "Attach a prompt." })],
           configHints: ["model: gpt-test", "samples: 4"],
         }),
       }),
     );
-    expect(graph.nodes[1].position.x).toBe(graph.nodes[0].position.x);
-    expect(graph.nodes[1].position.y).toBeGreaterThan(graph.nodes[0].position.y);
-    expect(graph.nodes[1].data.incomingLabels).toEqual(["Generate answers"]);
-    expect(graph.nodes[1].data.warningCount).toBe(1);
+    expect(methodNodes[1].position.x).toBe(methodNodes[0].position.x);
+    expect(methodNodes[1].position.y).toBeGreaterThan(methodNodes[0].position.y);
+    expect(methodNodes[1].data.incomingLabels).toEqual(["Generate answers"]);
+    expect(methodNodes[1].data.warningCount).toBe(2);
+    expect(methodNodes[1].data.issues.map((issue) => issue.message)).toEqual([
+      "Eval needs detail.",
+      "Schema is still loose.",
+    ]);
+  });
+
+  it("groups resources with identical consumers into one input bundle", () => {
+    const draft = methodDraft({
+      resources: [
+        { id: "data", kind: "data", label: "Dataset", status: "attached", path: "data.jsonl", consumedBy: ["a", "b"] },
+        { id: "prompt", kind: "prompt", label: "Prompt", status: "attached", path: "prompt.md", consumedBy: ["b", "a"] },
+        { id: "script", kind: "eval_script", label: "Script", status: "attached", path: "eval.js", consumedBy: ["eval"] },
+      ],
+      nodes: [
+        { id: "a", label: "Model A", type: "inference", status: "draft", config: {} },
+        { id: "b", label: "Model B", type: "inference", status: "draft", config: {} },
+        { id: "eval", label: "Evaluate", type: "eval", status: "draft", config: {} },
+      ],
+      edges: [
+        { from: "a", to: "eval" },
+        { from: "b", to: "eval" },
+      ],
+    });
+
+    const graph = buildMethodGraphElements(draft);
+    const resourceNodes = graph.nodes.filter((node) => node.type === "resource");
+
+    expect(resourceNodes).toHaveLength(2);
+    expect(resourceNodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "resource:data+prompt",
+        data: { resources: [
+          expect.objectContaining({ id: "data" }),
+          expect.objectContaining({ id: "prompt" }),
+        ] },
+      }),
+      expect.objectContaining({
+        id: "resource:script",
+      }),
+    ]));
+    expect(graph.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "resource:data+prompt-a", source: "resource:data+prompt", target: "a" }),
+      expect.objectContaining({ id: "resource:data+prompt-b", source: "resource:data+prompt", target: "b" }),
+      expect.objectContaining({ id: "resource:script-eval", source: "resource:script", target: "eval" }),
+    ]));
   });
 
   it("keeps cyclic or incomplete drafts renderable", () => {

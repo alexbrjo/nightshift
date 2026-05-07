@@ -189,6 +189,7 @@ export default function AgentWorkspace() {
     <div className="agent-chat-workspace">
       <main className="agent-chat-main">
         <section className="agent-chat-panel">
+          <div className="agent-chat-title">Methods</div>
           <div className="agent-chat-scroll">
             {messages.map((message) => (
               <div key={message.id} className={`agent-message ${message.role} ${message.status ?? ""}`}>
@@ -217,7 +218,20 @@ export default function AgentWorkspace() {
         </section>
 
         <aside className="agent-visual-panel agent-graph-sidebar">
-          {draft ? <MethodGraph draft={draft} /> : <div className="agent-empty-visual">No Method draft exists yet.</div>}
+          {draft ? (
+            <div className="method-draft-panel">
+              <div className="method-draft-header">
+                <div>
+                  <span>{draft.lifecycle}</span>
+                  <strong>{draft.title}</strong>
+                </div>
+                <span>{draft.readiness.blockers.length} blockers</span>
+              </div>
+              <MethodGraph draft={draft} />
+            </div>
+          ) : (
+            <div className="agent-empty-visual">No Method draft exists yet.</div>
+          )}
         </aside>
       </main>
     </div>

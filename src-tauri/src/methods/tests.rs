@@ -6,9 +6,13 @@ use uuid::Uuid;
 
 use crate::database::DatabaseState;
 
-use super::config::model_values;
+use super::config::{
+    load_nightshift_config, model_values, resolve_api_key_id, resolve_default_provider_profile,
+    resolve_provider_profile,
+};
 use super::draft::{
-    create_draft_for_root, default_draft, get_current_draft_for_root, validate_graph,
+    attach_resource_for_root, create_draft_for_root, default_draft, get_current_draft_for_root,
+    resolve_api_key_resource_for_root, validate_graph,
 };
 use super::execution::{
     create_inference_job_for_node, create_transform_job_for_node, insert_artifact,
@@ -137,6 +141,283 @@ fn agent_tool_style_draft_creation_persists_current_draft() {
     assert_eq!(persisted.id, draft.id);
     assert_eq!(persisted.title, "Model rubric benchmark");
     assert_eq!(persisted.lifecycle, MethodLifecycleState::Drafting);
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn attaching_file_resource_persists_project_relative_status_and_consumers() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-resource-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("prompts")).unwrap();
+    fs::write(temp.join("prompts/main.md"), "Answer carefully").unwrap();
+    create_draft_for_root(
+        &temp,
+        CreateMethodDraftInput {
+            title: Some("Resource draft".into()),
+            objective: Some("Attach prompt resources".into()),
+        },
+    )
+    .unwrap();
+    super::draft::replace_draft_graph_for_root(
+        &temp,
+        ReplaceMethodDraftGraphInput {
+            nodes: vec![MethodDraftNode {
+                id: "generate".into(),
+                label: "Generate".into(),
+                node_type: "inference".into(),
+                status: "draft".into(),
+                config: serde_json::json!({}),
+            }],
+            edges: vec![],
+            resources: Some(vec![]),
+        },
+    )
+    .unwrap();
+
+    let draft = attach_resource_for_root(
+        &temp,
+        AttachMethodResourceInput {
+            id: "main_prompt".into(),
+            kind: "prompt".into(),
+            label: Some("Main prompt".into()),
+            path: Some(temp.join("prompts/main.md").to_string_lossy().into_owned()),
+            reference: None,
+            consumed_by: vec!["generate".into()],
+        },
+    )
+    .unwrap();
+
+    assert_eq!(draft.resources[0].path.as_deref(), Some("prompts/main.md"));
+    assert_eq!(draft.resources[0].status, "attached");
+    assert_eq!(draft.resources[0].consumed_by, vec!["generate"]);
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn attaching_file_resource_rejects_dependency_folders_and_mismatched_nodes() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-bad-resource-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("node_modules/pkg")).unwrap();
+    fs::write(temp.join("node_modules/pkg/prompt.md"), "nope").unwrap();
+    create_draft_for_root(
+        &temp,
+        CreateMethodDraftInput {
+            title: Some("Bad resource draft".into()),
+            objective: Some("Reject bad attachments".into()),
+        },
+    )
+    .unwrap();
+
+    let err = attach_resource_for_root(
+        &temp,
+        AttachMethodResourceInput {
+            id: "bad_prompt".into(),
+            kind: "prompt".into(),
+            label: None,
+            path: Some("node_modules/pkg/prompt.md".into()),
+            reference: None,
+            consumed_by: vec![],
+        },
+    )
+    .unwrap_err();
+    assert!(err.contains("dependency"), "got: {err}");
+
+    let draft = attach_resource_for_root(
+        &temp,
+        AttachMethodResourceInput {
+            id: "schema".into(),
+            kind: "json_schema".into(),
+            label: Some("Schema".into()),
+            path: Some("schemas/out.json".into()),
+            reference: None,
+            consumed_by: vec![],
+        },
+    )
+    .unwrap();
+    assert_eq!(draft.resources[0].status, "missing");
+    assert!(draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_resource"));
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn named_file_resource_with_path_is_not_reported_missing() {
+    let draft = super::draft::refresh_readiness(MethodDraft {
+        schema_version: 1,
+        id: "draft-resource-status".into(),
+        title: "Resource status".into(),
+        objective: "Keep named resource bindings from duplicating missing blockers".into(),
+        lifecycle: MethodLifecycleState::Drafting,
+        resources: vec![MethodDraftResource {
+            id: "data".into(),
+            kind: "data".into(),
+            label: "Verb dataset".into(),
+            status: "named".into(),
+            path: Some("100_Verben.jsonl".into()),
+            reference: None,
+            consumed_by: vec!["generate".into()],
+        }],
+        nodes: vec![MethodDraftNode {
+            id: "generate".into(),
+            label: "Generate".into(),
+            node_type: "inference".into(),
+            status: "ready".into(),
+            config: serde_json::json!({}),
+        }],
+        edges: vec![],
+        parameters: serde_json::json!({}),
+        provider_config: serde_json::json!({}),
+        outputs: vec![],
+        metadata: serde_json::json!({}),
+        readiness: MethodDraftReadiness {
+            status: MethodLifecycleState::Drafting,
+            blockers: vec![],
+            warnings: vec![],
+        },
+    });
+
+    assert!(!draft
+        .readiness
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == "missing_resource"));
+}
+
+#[test]
+fn data_resource_cannot_feed_analysis_node_directly() {
+    let draft = super::draft::refresh_readiness(MethodDraft {
+        schema_version: 1,
+        id: "draft-data-analysis".into(),
+        title: "Bad data analysis".into(),
+        objective: "Prevent raw datasets from being modeled as analysis source nodes".into(),
+        lifecycle: MethodLifecycleState::Drafting,
+        resources: vec![MethodDraftResource {
+            id: "dataset".into(),
+            kind: "data".into(),
+            label: "Verb dataset".into(),
+            status: "attached".into(),
+            path: Some("100_Verben.jsonl".into()),
+            reference: None,
+            consumed_by: vec!["sample_records".into()],
+        }],
+        nodes: vec![
+            MethodDraftNode {
+                id: "sample_records".into(),
+                label: "Randomly sample records".into(),
+                node_type: "analysis".into(),
+                status: "ready".into(),
+                config: serde_json::json!({}),
+            },
+            MethodDraftNode {
+                id: "generate".into(),
+                label: "Generate flash cards".into(),
+                node_type: "inference".into(),
+                status: "ready".into(),
+                config: serde_json::json!({}),
+            },
+        ],
+        edges: vec![MethodDraftEdge {
+            from: "sample_records".into(),
+            to: "generate".into(),
+        }],
+        parameters: serde_json::json!({}),
+        provider_config: serde_json::json!({}),
+        outputs: vec![],
+        metadata: serde_json::json!({}),
+        readiness: MethodDraftReadiness {
+            status: MethodLifecycleState::Drafting,
+            blockers: vec![],
+            warnings: vec![],
+        },
+    });
+
+    assert!(draft.readiness.blockers.iter().any(|blocker| {
+        blocker.code == "resource_node_kind_mismatch"
+            && blocker.node_id.as_deref() == Some("sample_records")
+            && blocker.resource_id.as_deref() == Some("dataset")
+    }));
+}
+
+#[test]
+fn api_key_resource_uses_reference_without_persisting_value() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-api-key-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".nightshift")).unwrap();
+    fs::write(
+        temp.join(".nightshift/config.json"),
+        r#"{ "apiKeys": { "openai.primary": "sk-test" } }"#,
+    )
+    .unwrap();
+    create_draft_for_root(
+        &temp,
+        CreateMethodDraftInput {
+            title: Some("API key draft".into()),
+            objective: Some("Reference configured API keys".into()),
+        },
+    )
+    .unwrap();
+    super::draft::replace_draft_graph_for_root(
+        &temp,
+        ReplaceMethodDraftGraphInput {
+            nodes: vec![MethodDraftNode {
+                id: "generate".into(),
+                label: "Generate".into(),
+                node_type: "inference".into(),
+                status: "draft".into(),
+                config: serde_json::json!({}),
+            }],
+            edges: vec![],
+            resources: Some(vec![]),
+        },
+    )
+    .unwrap();
+
+    let draft = resolve_api_key_resource_for_root(
+        &temp,
+        ResolveApiKeyResourceInput {
+            id: "openai_key".into(),
+            api_key_id: "openai.primary".into(),
+            label: Some("OpenAI key".into()),
+            consumed_by: vec!["generate".into()],
+        },
+    )
+    .unwrap();
+
+    assert_eq!(draft.resources[0].kind, "api_key");
+    assert_eq!(draft.resources[0].reference.as_deref(), Some("openai.primary"));
+    assert_eq!(draft.resources[0].path, None);
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn nightshift_config_loads_provider_profiles_with_api_keys() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-config-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".nightshift")).unwrap();
+    fs::write(
+        temp.join(".nightshift/config.json"),
+        r#"{
+          "providerProfiles": {
+            "openai": {
+              "provider": "OpenAI",
+              "baseUrl": "https://api.openai.com/v1",
+              "model": "gpt-test",
+              "apiKey": "sk-test"
+            }
+          },
+          "apiKeys": { "openai.primary": "sk-test" },
+          "modelDefaults": { "providerProfile": "openai", "model": "gpt-test" }
+        }"#,
+    )
+    .unwrap();
+
+    let config = load_nightshift_config(&temp).unwrap();
+    let profile = resolve_provider_profile(&config, "openai").unwrap();
+    let default_profile = resolve_default_provider_profile(&config).unwrap().unwrap();
+
+    assert_eq!(config.model_defaults.provider_profile.as_deref(), Some("openai"));
+    assert_eq!(profile.api_key.as_deref(), Some("sk-test"));
+    assert!(resolve_api_key_id(&config, "openai.primary").is_ok());
+    assert_eq!(default_profile.model.as_deref(), Some("gpt-test"));
     fs::remove_dir_all(temp).unwrap();
 }
 

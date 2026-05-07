@@ -3,17 +3,25 @@ use std::path::Path;
 use serde_json::{json, Value};
 
 use super::draft::{
-    create_draft_for_root, explain_current_draft_for_root, get_current_draft_for_root,
-    replace_draft_graph_for_root, reset_draft_for_root, update_draft_metadata_for_root,
+    attach_resource_for_root, create_draft_for_root, detach_resource_for_root,
+    explain_current_draft_for_root, get_current_draft_for_root, replace_draft_graph_for_root,
+    reset_draft_for_root, resolve_api_key_resource_for_root, resolve_collection_resource_for_root,
+    update_draft_metadata_for_root,
 };
 use super::model::{
-    CreateMethodDraftInput, ReplaceMethodDraftGraphInput, UpdateMethodDraftMetadataInput,
+    AttachMethodResourceInput, CreateMethodDraftInput, DetachMethodResourceInput,
+    ReplaceMethodDraftGraphInput, ResolveApiKeyResourceInput, ResolveCollectionResourceInput,
+    UpdateMethodDraftMetadataInput,
 };
 
 const GET_CURRENT_DRAFT: &str = "get_current_method_draft";
 const CREATE_DRAFT: &str = "create_method_draft";
 const UPDATE_METADATA: &str = "update_method_draft_metadata";
 const REPLACE_GRAPH: &str = "replace_method_draft_graph";
+const ATTACH_RESOURCE: &str = "attach_method_resource";
+const DETACH_RESOURCE: &str = "detach_method_resource";
+const RESOLVE_COLLECTION: &str = "resolve_method_collection_resource";
+const RESOLVE_API_KEY: &str = "resolve_method_api_key_resource";
 const EXPLAIN_DRAFT: &str = "explain_current_method_draft";
 const RESET_DRAFT: &str = "reset_method_draft";
 
@@ -71,17 +79,65 @@ pub fn method_function_tools() -> Vec<Value> {
                     "type": "array",
                     "items": object_schema(json!({
                         "id": { "type": "string" },
-                        "kind": { "type": "string", "enum": ["prompt", "data", "json_schema", "eval_script", "collection", "secret_ref", "unknown"] },
+                        "kind": { "type": "string", "enum": ["prompt", "data", "json_schema", "eval_script", "collection", "api_key", "unknown"] },
                         "label": { "type": "string" },
                         "status": { "type": "string", "enum": ["missing", "named", "attached", "unknown"] },
                         "path": { "type": ["string", "null"] },
+                        "reference": { "type": ["string", "null"] },
                         "consumedBy": {
                             "type": "array",
                             "items": { "type": "string" }
                         }
-                    }), vec!["id", "kind", "label", "status", "path", "consumedBy"])
+                    }), vec!["id", "kind", "label", "status", "path", "reference", "consumedBy"])
                 }
             }), vec!["nodes", "edges", "resources"]),
+            "strict": true
+        }),
+        json!({
+            "type": "function",
+            "name": ATTACH_RESOURCE,
+            "description": "Attach or name a durable Method resource. Use App Server native file tools to discover candidate files first; Nightshift records the attachment decision.",
+            "parameters": object_schema(json!({
+                "id": { "type": "string", "description": "Stable resource id." },
+                "kind": { "type": "string", "enum": ["prompt", "data", "json_schema", "eval_script", "collection", "api_key"] },
+                "label": { "type": ["string", "null"], "description": "Human-readable resource label." },
+                "path": { "type": ["string", "null"], "description": "Project-relative or absolute path for file resources." },
+                "reference": { "type": ["string", "null"], "description": "Collection id or API key id for non-file resources." },
+                "consumedBy": { "type": "array", "items": { "type": "string" } }
+            }), vec!["id", "kind", "label", "path", "reference", "consumedBy"]),
+            "strict": true
+        }),
+        json!({
+            "type": "function",
+            "name": DETACH_RESOURCE,
+            "description": "Detach a durable Method resource from the current draft.",
+            "parameters": object_schema(json!({
+                "id": { "type": "string" }
+            }), vec!["id"]),
+            "strict": true
+        }),
+        json!({
+            "type": "function",
+            "name": RESOLVE_COLLECTION,
+            "description": "Resolve a named collection resource to a collection id for the current Method draft.",
+            "parameters": object_schema(json!({
+                "id": { "type": "string" },
+                "collectionId": { "type": "string" },
+                "label": { "type": ["string", "null"] },
+                "consumedBy": { "type": "array", "items": { "type": "string" } }
+            }), vec!["id", "collectionId", "label", "consumedBy"]),
+            "strict": true
+        }),
+        json!({
+            "type": "function",
+            "name": RESOLVE_API_KEY,
+            "description": "Resolve an API key resource to an API key id from .nightshift/config.json. Do not put API key values in Method files or bundles.",
+            "parameters": object_schema(json!({
+                "id": { "type": "string" },
+                "apiKeyId": { "type": "string" },
+                "label": { "type": ["string", "null"] },
+                "consumedBy": { "type": "array", "items": { "type": "string" } }
+            }), vec!["id", "apiKeyId", "label", "consumedBy"]),
             "strict": true
         }),
         json!({
@@ -127,6 +183,26 @@ pub fn dispatch_method_tool(root: &Path, name: &str, arguments: Value) -> Result
             let input: ReplaceMethodDraftGraphInput = serde_json::from_value(arguments)
                 .map_err(|e| format!("Invalid graph arguments: {}", e))?;
             Ok(json!({ "draft": replace_draft_graph_for_root(root, input)? }))
+        }
+        ATTACH_RESOURCE => {
+            let input: AttachMethodResourceInput = serde_json::from_value(arguments)
+                .map_err(|e| format!("Invalid resource arguments: {}", e))?;
+            Ok(json!({ "draft": attach_resource_for_root(root, input)? }))
+        }
+        DETACH_RESOURCE => {
+            let input: DetachMethodResourceInput = serde_json::from_value(arguments)
+                .map_err(|e| format!("Invalid detach resource arguments: {}", e))?;
+            Ok(json!({ "draft": detach_resource_for_root(root, input)? }))
+        }
+        RESOLVE_COLLECTION => {
+            let input: ResolveCollectionResourceInput = serde_json::from_value(arguments)
+                .map_err(|e| format!("Invalid collection resource arguments: {}", e))?;
+            Ok(json!({ "draft": resolve_collection_resource_for_root(root, input)? }))
+        }
+        RESOLVE_API_KEY => {
+            let input: ResolveApiKeyResourceInput = serde_json::from_value(arguments)
+                .map_err(|e| format!("Invalid API key resource arguments: {}", e))?;
+            Ok(json!({ "draft": resolve_api_key_resource_for_root(root, input)? }))
         }
         EXPLAIN_DRAFT => Ok(json!({ "explanation": explain_current_draft_for_root(root)? })),
         RESET_DRAFT => Ok(json!({ "draft": reset_draft_for_root(root)? })),

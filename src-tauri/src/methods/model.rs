@@ -123,6 +123,8 @@ pub struct MethodDraftResource {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
     #[serde(default)]
     pub consumed_by: Vec<String>,
 }
@@ -189,6 +191,79 @@ pub struct ReplaceMethodDraftGraphInput {
     pub edges: Vec<MethodDraftEdge>,
     #[serde(default)]
     pub resources: Option<Vec<MethodDraftResource>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AttachMethodResourceInput {
+    pub id: String,
+    pub kind: String,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub reference: Option<String>,
+    #[serde(default)]
+    pub consumed_by: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetachMethodResourceInput {
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveCollectionResourceInput {
+    pub id: String,
+    pub collection_id: String,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub consumed_by: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveApiKeyResourceInput {
+    pub id: String,
+    pub api_key_id: String,
+    pub label: Option<String>,
+    #[serde(default)]
+    pub consumed_by: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct NightshiftConfig {
+    #[serde(default)]
+    pub provider_profiles: std::collections::HashMap<String, ProviderProfile>,
+    #[serde(default)]
+    pub api_keys: std::collections::HashMap<String, String>,
+    #[serde(default)]
+    pub model_defaults: ModelDefaults,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderProfile {
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelDefaults {
+    #[serde(default)]
+    pub provider_profile: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

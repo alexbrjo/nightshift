@@ -2165,6 +2165,15 @@ legend {
   background: var(--bg-deepest);
 }
 
+.agent-chat-title {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 600;
+}
+
 .agent-chat-scroll {
   flex: 1;
   min-height: 0;
@@ -2271,6 +2280,44 @@ legend {
   padding: 20px;
 }
 
+.method-draft-panel {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  background: var(--bg-deepest);
+}
+
+.method-draft-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-surface);
+}
+
+.method-draft-header div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.method-draft-header strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.method-draft-header span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: capitalize;
+}
+
 .method-flow {
   width: 100%;
   height: 100%;
@@ -2298,6 +2345,18 @@ legend {
   stroke-width: 1.8;
 }
 
+.method-flow .method-flow-resource-edge .react-flow__edge-path {
+  stroke: var(--text-secondary);
+  stroke-dasharray: 4 4;
+  stroke-width: 1.5;
+}
+
+.method-flow-edge-label {
+  fill: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+}
+
 .method-flow .react-flow__handle {
   width: 8px;
   height: 8px;
@@ -2306,13 +2365,13 @@ legend {
 }
 
 .method-flow-node {
-  width: 230px;
-  min-height: 122px;
+  width: 300px;
+  min-height: 180px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 10px;
+  padding: 11px;
   display: grid;
-  gap: 8px;
+  gap: 9px;
   background: var(--bg-elevated);
   box-shadow: var(--shadow-sm);
 }
@@ -2354,7 +2413,8 @@ legend {
 
 .method-flow-node-header span,
 .method-flow-node-meta span,
-.method-flow-config span {
+.method-flow-config span,
+.method-flow-more {
   color: var(--text-secondary);
   font-size: 11px;
 }
@@ -2374,14 +2434,20 @@ legend {
 .method-flow-node-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
 }
 
 .method-flow-node-meta span {
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  padding: 3px 7px;
-  background: var(--bg-surface);
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.method-flow-node-meta span:not(:last-child)::after {
+  content: "/";
+  margin-left: 4px;
+  color: var(--text-muted);
 }
 
 .method-flow-config {
@@ -2395,6 +2461,79 @@ legend {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: var(--font-mono);
+}
+
+.method-flow-node-issues {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.method-flow-resource-node {
+  width: 260px;
+  min-height: 118px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 9px 10px;
+  display: grid;
+  gap: 7px;
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.method-flow-resource-node.status-missing {
+  border-color: var(--status-failed);
+}
+
+.method-flow-resource-node-title,
+.method-flow-resource-node-list div {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+}
+
+.method-flow-resource-node-list {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.method-flow-resource-node span,
+.method-flow-resource-node strong,
+.method-flow-resource-node code,
+.method-flow-node-issues span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+
+.method-flow-resource-node span {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.method-flow-resource-node strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.method-flow-resource-node code {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.method-flow-node-issues span {
+  border-left: 2px solid var(--status-failed);
+  padding-left: 7px;
+  color: var(--text-secondary);
+  line-height: 1.35;
+}
+
+.method-flow-more {
+  font-size: 11px;
 }
 
 .agent-empty-visual {

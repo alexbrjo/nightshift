@@ -7,12 +7,30 @@ use uuid::Uuid;
 
 use crate::database::DatabaseState;
 
+use super::config::{load_nightshift_config, resolve_api_key_id};
 use super::model::{
-    CreateMethodDraftInput, MethodDraft, MethodDraftEdge, MethodDraftIssue, MethodDraftNode,
-    MethodDraftReadiness, MethodLifecycleState, ReplaceMethodDraftGraphInput,
-    UpdateMethodDraftMetadataInput,
+    AttachMethodResourceInput, CreateMethodDraftInput, DetachMethodResourceInput, MethodDraft,
+    MethodDraftEdge, MethodDraftIssue, MethodDraftNode, MethodDraftReadiness, MethodDraftResource,
+    MethodLifecycleState, ReplaceMethodDraftGraphInput, ResolveApiKeyResourceInput,
+    ResolveCollectionResourceInput, UpdateMethodDraftMetadataInput,
 };
 use super::paths::{project_root, require_nonempty};
+
+const FILE_RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "eval_script"];
+const RESOURCE_KINDS: &[&str] =
+    &["prompt", "data", "json_schema", "eval_script", "collection", "api_key"];
+const GENERATED_OR_DEPENDENCY_DIRS: &[&str] = &[
+    ".git",
+    ".nightshift",
+    "methods",
+    "node_modules",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".turbo",
+    "coverage",
+];
 
 fn draft_path(root: &Path) -> PathBuf {
     root.join(".nightshift").join("current_method_draft.json")
@@ -90,6 +108,7 @@ pub(crate) fn refresh_readiness(mut draft: MethodDraft) -> MethodDraft {
             resource_id: None,
         });
     }
+    validate_resource_contracts(&draft, &mut blockers, &mut warnings);
 
     let next = if blockers.is_empty() {
         MethodLifecycleState::Ready
@@ -99,6 +118,114 @@ pub(crate) fn refresh_readiness(mut draft: MethodDraft) -> MethodDraft {
     draft.lifecycle = next;
     draft.readiness = MethodDraftReadiness { status: next, blockers, warnings };
     draft
+}
+
+fn validate_resource_contracts(
+    draft: &MethodDraft,
+    blockers: &mut Vec<MethodDraftIssue>,
+    warnings: &mut Vec<MethodDraftIssue>,
+) {
+    let node_ids: HashSet<&str> = draft.nodes.iter().map(|node| node.id.as_str()).collect();
+    let node_type_by_id: HashMap<&str, &str> =
+        draft.nodes.iter().map(|node| (node.id.as_str(), node.node_type.as_str())).collect();
+
+    for resource in &draft.resources {
+        if !RESOURCE_KINDS.contains(&resource.kind.as_str()) {
+            blockers.push(MethodDraftIssue {
+                code: "invalid_resource_kind".into(),
+                message: format!(
+                    "Resource '{}' has unsupported kind '{}'.",
+                    resource.label, resource.kind
+                ),
+                node_id: None,
+                resource_id: Some(resource.id.clone()),
+            });
+        }
+        if resource_is_missing(resource) {
+            blockers.push(MethodDraftIssue {
+                code: "missing_resource".into(),
+                message: format!(
+                    "Attach {} for '{}'.",
+                    resource_kind_label(&resource.kind),
+                    resource.label
+                ),
+                node_id: resource.consumed_by.first().cloned(),
+                resource_id: Some(resource.id.clone()),
+            });
+        }
+        if resource.consumed_by.is_empty() {
+            warnings.push(MethodDraftIssue {
+                code: "unused_resource".into(),
+                message: format!("Resource '{}' is not consumed by any node.", resource.label),
+                node_id: None,
+                resource_id: Some(resource.id.clone()),
+            });
+        }
+        for node_id in &resource.consumed_by {
+            if !node_ids.contains(node_id.as_str()) {
+                blockers.push(MethodDraftIssue {
+                    code: "resource_unknown_node".into(),
+                    message: format!(
+                        "Resource '{}' is assigned to unknown node '{}'.",
+                        resource.label, node_id
+                    ),
+                    node_id: Some(node_id.clone()),
+                    resource_id: Some(resource.id.clone()),
+                });
+                continue;
+            }
+            if let Some(node_type) = node_type_by_id.get(node_id.as_str()) {
+                if !resource_kind_matches_node(&resource.kind, node_type) {
+                    blockers.push(MethodDraftIssue {
+                        code: "resource_node_kind_mismatch".into(),
+                        message: format!(
+                            "{} cannot be consumed by a {} node.",
+                            resource_kind_label(&resource.kind),
+                            node_type
+                        ),
+                        node_id: Some(node_id.clone()),
+                        resource_id: Some(resource.id.clone()),
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn resource_is_missing(resource: &MethodDraftResource) -> bool {
+    if resource.status == "missing" {
+        return true;
+    }
+    if FILE_RESOURCE_KINDS.contains(&resource.kind.as_str()) {
+        return resource.path.as_deref().is_none_or(|path| path.trim().is_empty());
+    }
+    matches!(resource.kind.as_str(), "collection" | "api_key")
+        && resource
+            .reference
+            .as_deref()
+            .is_none_or(|reference| reference.trim().is_empty())
+}
+
+fn resource_kind_label(kind: &str) -> &'static str {
+    match kind {
+        "prompt" => "a prompt file",
+        "data" => "a data file",
+        "json_schema" => "a JSON schema file",
+        "eval_script" => "an eval script",
+        "collection" => "a collection",
+        "api_key" => "an API key",
+        _ => "a supported resource",
+    }
+}
+
+fn resource_kind_matches_node(kind: &str, node_type: &str) -> bool {
+    match kind {
+        "prompt" | "api_key" => node_type == "inference",
+        "json_schema" => matches!(node_type, "inference" | "eval"),
+        "eval_script" => node_type == "eval",
+        "data" | "collection" => matches!(node_type, "inference" | "eval"),
+        _ => false,
+    }
 }
 
 pub(crate) fn validate_graph(
@@ -185,6 +312,95 @@ fn write_draft_to_root(root: &Path, draft: &MethodDraft) -> Result<(), String> {
     fs::write(&path, text).map_err(|e| format!("Failed to write Method draft: {}", e))
 }
 
+fn read_or_default_draft(root: &Path) -> Result<MethodDraft, String> {
+    Ok(read_draft_from_root(root)?
+        .unwrap_or_else(|| default_draft(CreateMethodDraftInput { title: None, objective: None })))
+}
+
+fn normalize_resource_kind(kind: &str) -> Result<String, String> {
+    let normalized = match kind.trim() {
+        "prompt_file" => "prompt",
+        "data_file" => "data",
+        "json_schema_file" => "json_schema",
+        "secret_ref" => "api_key",
+        other => other,
+    };
+    if RESOURCE_KINDS.contains(&normalized) {
+        Ok(normalized.to_string())
+    } else {
+        Err(format!("Unsupported Method resource kind '{}'", kind))
+    }
+}
+
+fn validate_consumed_by(nodes: &[MethodDraftNode], consumed_by: &[String]) -> Result<(), String> {
+    let node_ids: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
+    for node_id in consumed_by {
+        if !node_ids.contains(node_id.as_str()) {
+            return Err(format!("resource is assigned to unknown node '{}'", node_id));
+        }
+    }
+    Ok(())
+}
+
+fn validate_generated_or_dependency_path(path: &Path) -> Result<(), String> {
+    for component in path.components() {
+        let name = component.as_os_str().to_string_lossy();
+        if GENERATED_OR_DEPENDENCY_DIRS.contains(&name.as_ref()) {
+            return Err(format!(
+                "Method resources cannot be attached from generated, dependency, or app-managed folder '{}'",
+                name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn project_relative_resource_path(root: &Path, raw_path: &str) -> Result<(String, bool), String> {
+    require_nonempty("resource.path", raw_path)?;
+    let raw = Path::new(raw_path);
+    let root_canonical =
+        root.canonicalize().map_err(|e| format!("Failed to resolve project root: {}", e))?;
+    let absolute = if raw.is_absolute() { raw.to_path_buf() } else { root.join(raw) };
+    let exists = absolute.is_file();
+    let relative = if exists {
+        let canonical = absolute
+            .canonicalize()
+            .map_err(|e| format!("Failed to resolve resource path '{}': {}", raw_path, e))?;
+        canonical
+            .strip_prefix(&root_canonical)
+            .map_err(|_| {
+                "Method file resources must be inside the opened project root".to_string()
+            })?
+            .to_path_buf()
+    } else if raw.is_absolute() {
+        absolute
+            .strip_prefix(&root_canonical)
+            .map_err(|_| {
+                "Method file resources must be inside the opened project root".to_string()
+            })?
+            .to_path_buf()
+    } else {
+        raw.to_path_buf()
+    };
+    validate_generated_or_dependency_path(&relative)?;
+    let text = relative
+        .to_str()
+        .ok_or_else(|| "Method resource paths must be valid UTF-8".to_string())?
+        .replace('\\', "/");
+    if text.contains("..") {
+        return Err(format!("Method resource path must stay inside the project: {}", raw_path));
+    }
+    Ok((text, exists))
+}
+
+fn upsert_resource(draft: &mut MethodDraft, resource: MethodDraftResource) {
+    if let Some(existing) = draft.resources.iter_mut().find(|current| current.id == resource.id) {
+        *existing = resource;
+    } else {
+        draft.resources.push(resource);
+    }
+}
+
 fn emit_draft(app: &AppHandle, draft: Option<MethodDraft>) -> Result<Option<MethodDraft>, String> {
     app.emit("method-draft-updated", draft.clone())
         .map_err(|e| format!("Failed to emit Method draft update: {}", e))?;
@@ -240,6 +456,101 @@ pub(crate) fn replace_draft_graph_for_root(
     let draft = refresh_readiness(draft);
     write_draft_to_root(root, &draft)?;
     Ok(draft)
+}
+
+pub(crate) fn attach_resource_for_root(
+    root: &Path,
+    input: AttachMethodResourceInput,
+) -> Result<MethodDraft, String> {
+    let mut draft = read_or_default_draft(root)?;
+    let kind = normalize_resource_kind(&input.kind)?;
+    validate_consumed_by(&draft.nodes, &input.consumed_by)?;
+
+    let (path, file_exists) = if FILE_RESOURCE_KINDS.contains(&kind.as_str()) {
+        let Some(raw_path) = input.path.as_deref() else {
+            return Err(format!("{} resources require a project file path", kind));
+        };
+        let (path, exists) = project_relative_resource_path(root, raw_path)?;
+        (Some(path), exists)
+    } else {
+        (None, false)
+    };
+    if !FILE_RESOURCE_KINDS.contains(&kind.as_str())
+        && input.reference.as_deref().unwrap_or("").trim().is_empty()
+    {
+        return Err(format!("{} resources require a reference id", kind));
+    }
+
+    let label =
+        input.label.filter(|label| !label.trim().is_empty()).unwrap_or_else(|| input.id.clone());
+    let resource = MethodDraftResource {
+        id: input.id,
+        kind,
+        label: label.trim().to_string(),
+        status: if path.is_some() {
+            if file_exists { "attached" } else { "missing" }.into()
+        } else {
+            "attached".into()
+        },
+        path,
+        reference: input.reference.map(|reference| reference.trim().to_string()),
+        consumed_by: input.consumed_by,
+    };
+    upsert_resource(&mut draft, resource);
+    let draft = refresh_readiness(draft);
+    write_draft_to_root(root, &draft)?;
+    Ok(draft)
+}
+
+pub(crate) fn detach_resource_for_root(
+    root: &Path,
+    input: DetachMethodResourceInput,
+) -> Result<MethodDraft, String> {
+    let mut draft = read_or_default_draft(root)?;
+    let before = draft.resources.len();
+    draft.resources.retain(|resource| resource.id != input.id);
+    if before == draft.resources.len() {
+        return Err(format!("Method resource '{}' is not attached", input.id));
+    }
+    let draft = refresh_readiness(draft);
+    write_draft_to_root(root, &draft)?;
+    Ok(draft)
+}
+
+pub(crate) fn resolve_collection_resource_for_root(
+    root: &Path,
+    input: ResolveCollectionResourceInput,
+) -> Result<MethodDraft, String> {
+    attach_resource_for_root(
+        root,
+        AttachMethodResourceInput {
+            id: input.id,
+            kind: "collection".into(),
+            label: input.label,
+            path: None,
+            reference: Some(input.collection_id),
+            consumed_by: input.consumed_by,
+        },
+    )
+}
+
+pub(crate) fn resolve_api_key_resource_for_root(
+    root: &Path,
+    input: ResolveApiKeyResourceInput,
+) -> Result<MethodDraft, String> {
+    let config = load_nightshift_config(root)?;
+    resolve_api_key_id(&config, &input.api_key_id)?;
+    attach_resource_for_root(
+        root,
+        AttachMethodResourceInput {
+            id: input.id,
+            kind: "api_key".into(),
+            label: input.label,
+            path: None,
+            reference: Some(input.api_key_id),
+            consumed_by: input.consumed_by,
+        },
+    )
 }
 
 pub(crate) fn explain_current_draft_for_root(root: &Path) -> Result<String, String> {
@@ -313,6 +624,54 @@ pub async fn replace_method_draft_graph(
 ) -> Result<MethodDraft, String> {
     let root = project_root(&db)?;
     let draft = replace_draft_graph_for_root(&root, input)?;
+    emit_draft(&app, Some(draft.clone()))?;
+    Ok(draft)
+}
+
+#[tauri::command]
+pub async fn attach_method_resource(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    input: AttachMethodResourceInput,
+) -> Result<MethodDraft, String> {
+    let root = project_root(&db)?;
+    let draft = attach_resource_for_root(&root, input)?;
+    emit_draft(&app, Some(draft.clone()))?;
+    Ok(draft)
+}
+
+#[tauri::command]
+pub async fn detach_method_resource(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    input: DetachMethodResourceInput,
+) -> Result<MethodDraft, String> {
+    let root = project_root(&db)?;
+    let draft = detach_resource_for_root(&root, input)?;
+    emit_draft(&app, Some(draft.clone()))?;
+    Ok(draft)
+}
+
+#[tauri::command]
+pub async fn resolve_method_collection_resource(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    input: ResolveCollectionResourceInput,
+) -> Result<MethodDraft, String> {
+    let root = project_root(&db)?;
+    let draft = resolve_collection_resource_for_root(&root, input)?;
+    emit_draft(&app, Some(draft.clone()))?;
+    Ok(draft)
+}
+
+#[tauri::command]
+pub async fn resolve_method_api_key_resource(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    input: ResolveApiKeyResourceInput,
+) -> Result<MethodDraft, String> {
+    let root = project_root(&db)?;
+    let draft = resolve_api_key_resource_for_root(&root, input)?;
     emit_draft(&app, Some(draft.clone()))?;
     Ok(draft)
 }

@@ -105,7 +105,16 @@ describe("AgentWorkspace", () => {
           title: "Rubric benchmark",
           objective: "Compare model answers against a rubric",
           lifecycle: "drafting",
-          resources: [],
+          resources: [
+            {
+              id: "prompt",
+              kind: "prompt",
+              label: "Main prompt",
+              status: "missing",
+              path: "prompts/main.md",
+              consumedBy: ["generate"],
+            },
+          ],
           nodes: [
             { id: "generate", label: "Generate answers", type: "inference", status: "draft", config: {} },
           ],
@@ -116,7 +125,13 @@ describe("AgentWorkspace", () => {
           metadata: {},
           readiness: {
             status: "drafting",
-            blockers: [{ code: "missing_resources", message: "Attach a prompt and data file." }],
+            blockers: [
+              {
+                code: "missing_prompt",
+                message: "Attach a prompt and data file.",
+                resourceId: "prompt",
+              },
+            ],
             warnings: [],
           },
         },
@@ -125,8 +140,9 @@ describe("AgentWorkspace", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Generate answers")).toBeInTheDocument();
-      expect(screen.queryByText("Rubric benchmark")).not.toBeInTheDocument();
-      expect(screen.queryByText("Attach a prompt and data file.")).not.toBeInTheDocument();
+      expect(screen.getByText("Rubric benchmark")).toBeInTheDocument();
+      expect(screen.getByText("Main prompt")).toBeInTheDocument();
+      expect(screen.getByText("Attach a prompt and data file.")).toBeInTheDocument();
     });
   });
 

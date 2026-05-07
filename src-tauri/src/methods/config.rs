@@ -1,4 +1,58 @@
-use super::model::{MethodFileRef, MethodManifest, MethodWorkflowNode};
+use std::fs;
+use std::path::Path;
+
+use super::model::{
+    MethodFileRef, MethodManifest, MethodWorkflowNode, NightshiftConfig, ProviderProfile,
+};
+
+pub(crate) fn config_path(project_root: &Path) -> std::path::PathBuf {
+    project_root.join(".nightshift").join("config.json")
+}
+
+pub(crate) fn load_nightshift_config(project_root: &Path) -> Result<NightshiftConfig, String> {
+    let path = config_path(project_root);
+    if !path.exists() {
+        return Ok(NightshiftConfig::default());
+    }
+    let text = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read .nightshift/config.json: {}", e))?;
+    serde_json::from_str(&text)
+        .map_err(|e| format!("Failed to parse .nightshift/config.json: {}", e))
+}
+
+pub(crate) fn resolve_provider_profile(
+    config: &NightshiftConfig,
+    id: &str,
+) -> Result<ProviderProfile, String> {
+    config
+        .provider_profiles
+        .get(id)
+        .cloned()
+        .ok_or_else(|| format!("Provider profile '{}' is not configured", id))
+}
+
+pub(crate) fn resolve_default_provider_profile(
+    config: &NightshiftConfig,
+) -> Result<Option<ProviderProfile>, String> {
+    let Some(id) = config.model_defaults.provider_profile.as_deref() else {
+        return Ok(None);
+    };
+    resolve_provider_profile(config, id).map(Some)
+}
+
+pub(crate) fn resolve_api_key_id(config: &NightshiftConfig, id: &str) -> Result<(), String> {
+    if config.api_keys.contains_key(id)
+        || config
+            .provider_profiles
+            .get(id)
+            .and_then(|profile| profile.api_key.as_deref())
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        Ok(())
+    } else {
+        Err(format!("API key '{}' is not configured in .nightshift/config.json", id))
+    }
+}
 
 pub(crate) fn yaml_lookup<'a>(
     value: &'a serde_yaml::Value,

@@ -11,8 +11,10 @@ mod validation;
 pub use agent_tools::{dispatch_method_tool, method_function_tools};
 pub(crate) use draft::get_current_draft_for_root;
 pub use draft::{
-    create_method_draft, explain_current_method_draft, get_current_method_draft,
-    replace_method_draft_graph, reset_method_draft, update_method_draft_metadata,
+    attach_method_resource, create_method_draft, detach_method_resource,
+    explain_current_method_draft, get_current_method_draft, replace_method_draft_graph,
+    reset_method_draft, resolve_method_api_key_resource, resolve_method_collection_resource,
+    update_method_draft_metadata,
 };
 pub use execution::{
     cancel_method_execution, execute_method, get_method_execution_artifacts,

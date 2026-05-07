@@ -9,11 +9,17 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { MethodDraft, MethodDraftNode } from "../database";
+import type { MethodDraft, MethodDraftIssue, MethodDraftNode, MethodDraftResource } from "../database";
 
-const NODE_HEIGHT = 122;
+const NODE_HEIGHT = 180;
 const ROW_GAP = NODE_HEIGHT + 64;
 const MAX_CONFIG_HINTS = 3;
+const MAX_NODE_ISSUES = 3;
+const METHOD_NODE_X = 0;
+const RESOURCE_NODE_X = -340;
+const RESOURCE_NODE_HEIGHT = 118;
+const RESOURCE_NODE_GAP = 14;
+const MAX_BUNDLE_RESOURCES = 4;
 
 type MethodGraphNodeData = {
   draftNode: MethodDraftNode;
@@ -21,13 +27,20 @@ type MethodGraphNodeData = {
   blockerCount: number;
   warningCount: number;
   resourceCount: number;
+  issues: MethodDraftIssue[];
   configHints: string[];
 };
 
+type MethodGraphResourceData = {
+  resources: MethodDraftResource[];
+};
+
 type MethodFlowNode = Node<MethodGraphNodeData, "method">;
+type MethodResourceNode = Node<MethodGraphResourceData, "resource">;
+type MethodAnyNode = MethodFlowNode | MethodResourceNode;
 
 export interface MethodGraphElements {
-  nodes: MethodFlowNode[];
+  nodes: MethodAnyNode[];
   edges: Edge[];
 }
 
@@ -48,6 +61,36 @@ function configHints(config: Record<string, unknown> | undefined) {
   return Object.entries(config)
     .slice(0, MAX_CONFIG_HINTS)
     .map(([key, value]) => `${key}: ${formatConfigValue(value)}`);
+}
+
+function resourceKindLabel(kind: string) {
+  switch (kind) {
+    case "prompt":
+    case "prompt_file":
+      return "Prompt";
+    case "data":
+    case "data_file":
+      return "Data";
+    case "json_schema":
+    case "json_schema_file":
+      return "Schema";
+    case "eval_script":
+      return "Eval script";
+    case "collection":
+      return "Collection";
+    case "api_key":
+      return "API key";
+    default:
+      return kind.replace(/_/g, " ");
+  }
+}
+
+function resourceLocation(resource: MethodDraftResource) {
+  return resource.path || resource.reference || resource.status;
+}
+
+function resourceBundleId(resources: MethodDraftResource[]) {
+  return `resource:${resources.map((resource) => resource.id).join("+")}`;
 }
 
 function buildNodeOrder(draft: MethodDraft) {
@@ -86,6 +129,25 @@ function buildNodeOrder(draft: MethodDraft) {
   return new Map(orderedIds.map((id, index) => [id, index]));
 }
 
+function issueAppliesToNode(
+  issue: MethodDraftIssue,
+  nodeId: string,
+  resources: MethodDraftResource[],
+) {
+  return (
+    issue.nodeId === nodeId ||
+    Boolean(issue.resourceId && resources.some((resource) => resource.id === issue.resourceId))
+  );
+}
+
+function issuesForNode(
+  issues: MethodDraftIssue[],
+  nodeId: string,
+  resources: MethodDraftResource[],
+) {
+  return issues.filter((issue) => issueAppliesToNode(issue, nodeId, resources));
+}
+
 export function buildMethodGraphElements(draft: MethodDraft): MethodGraphElements {
   const nodeById = new Map(draft.nodes.map((node) => [node.id, node]));
   const order = buildNodeOrder(draft);
@@ -95,43 +157,107 @@ export function buildMethodGraphElements(draft: MethodDraft): MethodGraphElement
     const incomingLabels = draft.edges
       .filter((edge) => edge.to === node.id)
       .map((edge) => nodeById.get(edge.from)?.label || edge.from);
+    const resources = draft.resources.filter((resource) => resource.consumedBy.includes(node.id));
+    const blockers = issuesForNode(draft.readiness.blockers, node.id, resources);
+    const warnings = issuesForNode(draft.readiness.warnings, node.id, resources);
 
     return {
       id: node.id,
       type: "method",
-      position: { x: 0, y: row * ROW_GAP },
+      position: { x: METHOD_NODE_X, y: row * ROW_GAP },
       data: {
         draftNode: node,
         incomingLabels,
-        blockerCount: draft.readiness.blockers.filter((issue) => issue.nodeId === node.id).length,
-        warningCount: draft.readiness.warnings.filter((issue) => issue.nodeId === node.id).length,
-        resourceCount: draft.resources.filter((resource) => resource.consumedBy.includes(node.id)).length,
+        blockerCount: blockers.length,
+        warningCount: warnings.length,
+        resourceCount: resources.length,
+        issues: [...blockers, ...warnings],
         configHints: configHints(node.config),
       },
     };
   });
 
-  const edges: Edge[] = draft.edges.map((edge) => ({
-    id: `${edge.from}-${edge.to}`,
-    source: edge.from,
-    target: edge.to,
-    type: "smoothstep",
-    sourceHandle: "bottom",
-    targetHandle: "top",
-    markerEnd: { type: MarkerType.ArrowClosed },
-    className: "method-flow-edge",
+  const nodeDataById = new Map(nodes.map((node) => [node.id, node.data]));
+  const resourceGroups = new Map<string, MethodDraftResource[]>();
+  draft.resources.forEach((resource) => {
+    const validConsumers = resource.consumedBy.filter((nodeId) => nodeById.has(nodeId)).sort();
+    const key = validConsumers.length ? validConsumers.join("|") : `unused:${resource.id}`;
+    resourceGroups.set(key, [...(resourceGroups.get(key) ?? []), resource]);
+  });
+  const groupedResources = [...resourceGroups.entries()].map(([key, resources]) => ({
+    key,
+    resources,
+    consumers: key.startsWith("unused:") ? [] : key.split("|"),
   }));
 
-  return { nodes, edges };
+  const resourceNodes: MethodResourceNode[] = groupedResources.map((group, index) => {
+    const consumerRows = group.consumers
+      .map((nodeId) => order.get(nodeId))
+      .filter((row): row is number => typeof row === "number");
+    const firstRow = consumerRows.length ? Math.min(...consumerRows) : index;
+    const siblingIndex = groupedResources
+      .slice(0, index)
+      .filter((other) => {
+        const otherRows = other.consumers
+          .map((nodeId) => order.get(nodeId))
+          .filter((row): row is number => typeof row === "number");
+        const otherFirstRow = otherRows.length ? Math.min(...otherRows) : 0;
+        return otherFirstRow === firstRow;
+      }).length;
+
+    const id = resourceBundleId(group.resources);
+    return {
+      id,
+      type: "resource",
+      position: {
+        x: RESOURCE_NODE_X,
+        y: firstRow * ROW_GAP + siblingIndex * (RESOURCE_NODE_HEIGHT + RESOURCE_NODE_GAP),
+      },
+      data: { resources: group.resources },
+    };
+  });
+  const edges: Edge[] = draft.edges.map((edge) => {
+    const targetData = nodeDataById.get(edge.to);
+    const issueCount = (targetData?.blockerCount ?? 0) + (targetData?.warningCount ?? 0);
+    return {
+      id: `${edge.from}-${edge.to}`,
+      source: edge.from,
+      target: edge.to,
+      type: "smoothstep",
+      sourceHandle: "bottom",
+      targetHandle: "top",
+      markerEnd: { type: MarkerType.ArrowClosed },
+      label: issueCount ? `${issueCount} issues` : undefined,
+      className: "method-flow-edge",
+      labelClassName: "method-flow-edge-label",
+    };
+  });
+  const resourceEdges: Edge[] = groupedResources.flatMap((group) =>
+    group.consumers
+      .map((nodeId) => ({
+        id: `${resourceBundleId(group.resources)}-${nodeId}`,
+        source: resourceBundleId(group.resources),
+        target: nodeId,
+        type: "smoothstep",
+        sourceHandle: "right",
+        targetHandle: "left",
+        markerEnd: { type: MarkerType.ArrowClosed },
+        className: "method-flow-edge method-flow-resource-edge",
+      })),
+  );
+
+  return { nodes: [...resourceNodes, ...nodes], edges: [...resourceEdges, ...edges] };
 }
 
 function MethodGraphNode({ data }: NodeProps<MethodFlowNode>) {
-  const { draftNode, incomingLabels, blockerCount, warningCount, resourceCount, configHints } = data;
+  const { draftNode, incomingLabels, blockerCount, warningCount, resourceCount, issues, configHints } = data;
   const issueCount = blockerCount + warningCount;
+  const shownIssues = issues.slice(0, MAX_NODE_ISSUES);
 
   return (
     <article className={`method-flow-node status-${classSafeStatus(draftNode.status)}`}>
       <Handle id="top" type="target" position={Position.Top} isConnectable={false} />
+      <Handle id="left" type="target" position={Position.Left} isConnectable={false} />
       <div className="method-flow-node-header">
         <div>
           <strong>{draftNode.label || draftNode.id}</strong>
@@ -151,13 +277,53 @@ function MethodGraphNode({ data }: NodeProps<MethodFlowNode>) {
           <span>Config not set</span>
         )}
       </div>
+      {shownIssues.length > 0 && (
+        <div className="method-flow-node-issues" aria-label={`Issues for ${draftNode.id}`}>
+          {shownIssues.map((issue) => (
+            <span key={`${issue.code}-${issue.resourceId ?? issue.nodeId ?? issue.message}`}>
+              {issue.message}
+            </span>
+          ))}
+          {issues.length > shownIssues.length && (
+            <span className="method-flow-more">+{issues.length - shownIssues.length} more issues</span>
+          )}
+        </div>
+      )}
       <Handle id="bottom" type="source" position={Position.Bottom} isConnectable={false} />
+    </article>
+  );
+}
+
+function MethodGraphResourceNode({ data }: NodeProps<MethodResourceNode>) {
+  const { resources } = data;
+  const shownResources = resources.slice(0, MAX_BUNDLE_RESOURCES);
+  const hasMissing = resources.some((resource) => resource.status === "missing");
+
+  return (
+    <article className={`method-flow-resource-node ${hasMissing ? "status-missing" : ""}`}>
+      <div className="method-flow-resource-node-title">
+        <span>{resources.length === 1 ? "Input" : "Inputs"}</span>
+        <strong>{resources.length === 1 ? resources[0].label : `${resources.length} shared inputs`}</strong>
+      </div>
+      <div className="method-flow-resource-node-list">
+        {shownResources.map((resource) => (
+          <div key={resource.id}>
+            <span>{resourceKindLabel(resource.kind)}</span>
+            <code>{resourceLocation(resource)}</code>
+          </div>
+        ))}
+        {resources.length > shownResources.length && (
+          <span className="method-flow-more">+{resources.length - shownResources.length} more inputs</span>
+        )}
+      </div>
+      <Handle id="right" type="source" position={Position.Right} isConnectable={false} />
     </article>
   );
 }
 
 const nodeTypes = {
   method: MethodGraphNode,
+  resource: MethodGraphResourceNode,
 };
 
 interface MethodGraphProps {
@@ -180,7 +346,7 @@ export default function MethodGraph({ draft }: MethodGraphProps) {
         nodesDraggable={false}
         nodesConnectable={false}
         edgesFocusable={false}
-        defaultViewport={{ x: 84, y: 58, zoom: 1.12 }}
+        defaultViewport={{ x: 390, y: 58, zoom: 1.08 }}
         minZoom={0.7}
         maxZoom={1.8}
         panOnScroll

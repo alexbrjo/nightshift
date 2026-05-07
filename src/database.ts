@@ -113,6 +113,7 @@ export interface MethodDraftResource {
   label: string;
   status: string;
   path?: string;
+  reference?: string;
   consumedBy: string[];
 }
 
