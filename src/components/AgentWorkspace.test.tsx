@@ -124,9 +124,9 @@ describe("AgentWorkspace", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Rubric benchmark")).toBeInTheDocument();
       expect(screen.getByText("Generate answers")).toBeInTheDocument();
-      expect(screen.getByText("Attach a prompt and data file.")).toBeInTheDocument();
+      expect(screen.queryByText("Rubric benchmark")).not.toBeInTheDocument();
+      expect(screen.queryByText("Attach a prompt and data file.")).not.toBeInTheDocument();
     });
   });
 

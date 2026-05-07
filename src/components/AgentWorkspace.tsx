@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { CodexAppServerEvent, CodexAppServerSession, CodexTurnSummary, MethodDraft } from "../database";
+import MethodGraph from "./MethodGraph";
 
 interface ChatMessage {
   id: string;
@@ -34,11 +35,6 @@ function upsertAssistantMessage(messages: ChatMessage[], itemId: string, text: s
 
 function userFacingError(err: unknown) {
   return `I could not reach the design agent: ${String(err)}`;
-}
-
-function draftStatusLabel(draft: MethodDraft) {
-  if (draft.readiness.status === "ready") return "Ready";
-  return "Drafting";
 }
 
 export default function AgentWorkspace() {
@@ -220,94 +216,8 @@ export default function AgentWorkspace() {
           </form>
         </section>
 
-        <aside className="agent-visual-panel">
-          <div className="agent-visual-header">
-            <div>
-              <h2>Methods</h2>
-              <p>{draft ? draft.id : "No draft"}</p>
-            </div>
-            {draft && <span>{draftStatusLabel(draft)}</span>}
-          </div>
-
-          {draft ? (
-            <div className="method-draft-view">
-              <section className="method-draft-hero">
-                <h3>{draft.title}</h3>
-                <p>{draft.objective || "Objective not set"}</p>
-              </section>
-
-              <div className="method-summary-strip">
-                <div>
-                  <strong>{draft.nodes.length}</strong>
-                  <span>Nodes</span>
-                </div>
-                <div>
-                  <strong>{draft.edges.length}</strong>
-                  <span>Edges</span>
-                </div>
-                <div>
-                  <strong>{draft.resources.length}</strong>
-                  <span>Resources</span>
-                </div>
-              </div>
-
-              <section className="agent-graph" aria-label="Draft Method graph">
-                {draft.nodes.length > 0 ? (
-                  draft.nodes.map((node) => {
-                    const incoming = draft.edges.filter((edge) => edge.to === node.id).map((edge) => edge.from);
-                    return (
-                      <article key={node.id} className="agent-graph-node status-drafting">
-                        <div>
-                          <strong>{node.label || node.id}</strong>
-                          <span>{node.type}</span>
-                          <em>{incoming.length ? `Depends on ${incoming.join(", ")}` : "No dependencies"}</em>
-                        </div>
-                        <span>{node.status || "draft"}</span>
-                      </article>
-                    );
-                  })
-                ) : (
-                  <div className="agent-empty-visual">No nodes yet.</div>
-                )}
-              </section>
-
-              <section className="method-resource-list">
-                <h3>Resources</h3>
-                {draft.resources.length > 0 ? (
-                  draft.resources.map((resource) => (
-                    <article key={resource.id}>
-                      <div>
-                        <strong>{resource.label}</strong>
-                        <span>{resource.kind}</span>
-                      </div>
-                      <span>{resource.status}</span>
-                    </article>
-                  ))
-                ) : (
-                  <p className="agent-muted">No resources attached.</p>
-                )}
-              </section>
-
-              <section className="agent-blockers">
-                <h3>Readiness</h3>
-                {draft.readiness.blockers.map((blocker) => (
-                  <p key={blocker.code} className="method-issue blocker">
-                    {blocker.message}
-                  </p>
-                ))}
-                {draft.readiness.warnings.map((warning) => (
-                  <p key={warning.code} className="method-issue warning">
-                    {warning.message}
-                  </p>
-                ))}
-                {draft.readiness.blockers.length === 0 && draft.readiness.warnings.length === 0 && (
-                  <p className="method-issue ready">Ready for validation.</p>
-                )}
-              </section>
-            </div>
-          ) : (
-            <div className="agent-empty-visual">No Method draft exists yet.</div>
-          )}
+        <aside className="agent-visual-panel agent-graph-sidebar">
+          {draft ? <MethodGraph draft={draft} /> : <div className="agent-empty-visual">No Method draft exists yet.</div>}
         </aside>
       </main>
     </div>

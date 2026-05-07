@@ -35,6 +35,14 @@ Object.defineProperty(window, "localStorage", {
 
 vi.stubGlobal("confirm", vi.fn(() => true));
 vi.stubGlobal("alert", vi.fn());
+vi.stubGlobal(
+  "ResizeObserver",
+  class ResizeObserver {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  },
+);
 
 if (!URL.createObjectURL) {
   URL.createObjectURL = vi.fn(() => "blob:test");

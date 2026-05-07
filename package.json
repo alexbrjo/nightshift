@@ -25,6 +25,7 @@
     "@lezer/highlight": "^1.2.0",
     "@tauri-apps/api": "^2.4.0",
     "@tauri-apps/plugin-dialog": "^2.2.0",
+    "@xyflow/react": "^12.10.2",
     "codemirror": "^6.0.1",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
