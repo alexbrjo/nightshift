@@ -4,19 +4,21 @@ import { mockInvoke } from "../setupTests";
 import AgentWorkspace from "./AgentWorkspace";
 
 const eventBus = vi.hoisted(() => ({
-  handlers: [] as Array<(event: { payload: Record<string, unknown> }) => void>,
+  handlers: new Map<string, Array<(event: { payload: Record<string, unknown> | null }) => void>>(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn((_eventName: string, handler: (event: { payload: Record<string, unknown> }) => void) => {
-    eventBus.handlers.push(handler);
+    const handlers = eventBus.handlers.get(_eventName) ?? [];
+    handlers.push(handler as (event: { payload: Record<string, unknown> | null }) => void);
+    eventBus.handlers.set(_eventName, handlers);
     return Promise.resolve(() => {});
   }),
 }));
 
 describe("AgentWorkspace", () => {
   beforeEach(() => {
-    eventBus.handlers = [];
+    eventBus.handlers = new Map();
     mockInvoke.mockReset();
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
@@ -24,6 +26,8 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ threadId: "thr_123" });
         case "send_design_chat_message":
           return Promise.resolve({ threadId: "thr_123", turnId: "turn_456" });
+        case "get_current_method_draft":
+          return Promise.resolve(null);
         default:
           return Promise.resolve(null);
       }
@@ -35,7 +39,7 @@ describe("AgentWorkspace", () => {
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("start_design_session");
-      expect(screen.getByText(/Drafting tools coming next/i)).toBeInTheDocument();
+      expect(screen.getByText(/No Method draft exists yet/i)).toBeInTheDocument();
       expect(screen.queryByText(/connected/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/Thread thr_123/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/Codex Stream/i)).not.toBeInTheDocument();
@@ -61,7 +65,7 @@ describe("AgentWorkspace", () => {
   it("renders streamed assistant deltas without event names", async () => {
     render(<AgentWorkspace />);
 
-    eventBus.handlers.forEach((handler) =>
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
       handler({
         payload: {
           eventType: "item/agentMessage/delta",
@@ -77,6 +81,52 @@ describe("AgentWorkspace", () => {
     await waitFor(() => {
       expect(screen.getByText("Draft the Method")).toBeInTheDocument();
       expect(screen.queryByText("item/agentMessage/delta")).not.toBeInTheDocument();
+    });
+  });
+
+  it("shows a draft panel after chat creates Method state", async () => {
+    render(<AgentWorkspace />);
+
+    const input = await screen.findByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(input, { target: { value: "Design a rubric benchmark" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("send_design_chat_message", {
+        input: { message: "Design a rubric benchmark" },
+      });
+    });
+
+    eventBus.handlers.get("method-draft-updated")?.forEach((handler) =>
+      handler({
+        payload: {
+          schemaVersion: 1,
+          id: "draft-1",
+          title: "Rubric benchmark",
+          objective: "Compare model answers against a rubric",
+          lifecycle: "drafting",
+          resources: [],
+          nodes: [
+            { id: "generate", label: "Generate answers", type: "inference", status: "draft", config: {} },
+          ],
+          edges: [],
+          parameters: {},
+          providerConfig: {},
+          outputs: [],
+          metadata: {},
+          readiness: {
+            status: "drafting",
+            blockers: [{ code: "missing_resources", message: "Attach a prompt and data file." }],
+            warnings: [],
+          },
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Rubric benchmark")).toBeInTheDocument();
+      expect(screen.getByText("Generate answers")).toBeInTheDocument();
+      expect(screen.getByText("Attach a prompt and data file.")).toBeInTheDocument();
     });
   });
 

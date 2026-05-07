@@ -7,6 +7,9 @@ use uuid::Uuid;
 use crate::database::DatabaseState;
 
 use super::config::model_values;
+use super::draft::{
+    create_draft_for_root, default_draft, get_current_draft_for_root, validate_graph,
+};
 use super::execution::{
     create_inference_job_for_node, create_transform_job_for_node, insert_artifact,
     insert_execution, read_method_artifact_from_db, run_aggregate_agent, topological_nodes,
@@ -46,6 +49,95 @@ fn sample_method() -> MethodManifest {
         parameters: serde_yaml::Value::Null,
         provider: serde_yaml::Value::Null,
     }
+}
+
+#[test]
+fn method_lifecycle_allows_expected_state_transitions() {
+    assert!(MethodLifecycleState::Drafting.can_transition_to(MethodLifecycleState::Ready));
+    assert!(MethodLifecycleState::Ready.can_transition_to(MethodLifecycleState::Executing));
+    assert!(MethodLifecycleState::Executing.can_transition_to(MethodLifecycleState::Completed));
+    assert!(MethodLifecycleState::Executing.can_transition_to(MethodLifecycleState::Failed));
+    assert!(!MethodLifecycleState::Completed.can_transition_to(MethodLifecycleState::Executing));
+    assert!(!MethodLifecycleState::Failed.can_transition_to(MethodLifecycleState::Completed));
+}
+
+#[test]
+fn draft_creation_defaults_and_required_fields_are_reported() {
+    let draft = default_draft(CreateMethodDraftInput { title: None, objective: None });
+
+    assert_eq!(draft.schema_version, 1);
+    assert!(draft.id.starts_with("draft-"));
+    assert_eq!(draft.title, "Untitled Method");
+    assert_eq!(draft.lifecycle, MethodLifecycleState::Drafting);
+    assert!(draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_title"));
+    assert!(draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_objective"));
+    assert!(draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_nodes"));
+}
+
+#[test]
+fn draft_graph_validation_rejects_unknown_edge_endpoints() {
+    let nodes = vec![MethodDraftNode {
+        id: "generate".into(),
+        label: "Generate".into(),
+        node_type: "inference".into(),
+        status: "draft".into(),
+        config: serde_json::json!({}),
+    }];
+    let edges = vec![MethodDraftEdge { from: "generate".into(), to: "score".into() }];
+
+    let err = validate_graph(&nodes, &edges).unwrap_err();
+
+    assert!(err.contains("unknown node 'score'"), "got: {err}");
+}
+
+#[test]
+fn draft_graph_validation_rejects_cycles() {
+    let nodes = vec![
+        MethodDraftNode {
+            id: "a".into(),
+            label: "A".into(),
+            node_type: "inference".into(),
+            status: "draft".into(),
+            config: serde_json::json!({}),
+        },
+        MethodDraftNode {
+            id: "b".into(),
+            label: "B".into(),
+            node_type: "eval".into(),
+            status: "draft".into(),
+            config: serde_json::json!({}),
+        },
+    ];
+    let edges = vec![
+        MethodDraftEdge { from: "a".into(), to: "b".into() },
+        MethodDraftEdge { from: "b".into(), to: "a".into() },
+    ];
+
+    let err = validate_graph(&nodes, &edges).unwrap_err();
+
+    assert!(err.contains("cycle"), "got: {err}");
+}
+
+#[test]
+fn agent_tool_style_draft_creation_persists_current_draft() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-draft-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".nightshift")).unwrap();
+
+    let draft = create_draft_for_root(
+        &temp,
+        CreateMethodDraftInput {
+            title: Some("Model rubric benchmark".into()),
+            objective: Some("Compare generated answers against a rubric".into()),
+        },
+    )
+    .unwrap();
+    let persisted = get_current_draft_for_root(&temp).unwrap().unwrap();
+
+    assert_eq!(persisted.id, draft.id);
+    assert_eq!(persisted.title, "Model rubric benchmark");
+    assert_eq!(persisted.lifecycle, MethodLifecycleState::Drafting);
+    fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]

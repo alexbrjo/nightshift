@@ -92,6 +92,59 @@ export interface MethodPreflightResult {
   blockers: MethodPreflightBlocker[];
 }
 
+export type MethodLifecycleState = "drafting" | "ready" | "executing" | "completed" | "failed";
+
+export interface MethodDraftIssue {
+  code: string;
+  message: string;
+  nodeId?: string;
+  resourceId?: string;
+}
+
+export interface MethodDraftReadiness {
+  status: MethodLifecycleState;
+  blockers: MethodDraftIssue[];
+  warnings: MethodDraftIssue[];
+}
+
+export interface MethodDraftResource {
+  id: string;
+  kind: string;
+  label: string;
+  status: string;
+  path?: string;
+  consumedBy: string[];
+}
+
+export interface MethodDraftNode {
+  id: string;
+  label: string;
+  type: string;
+  status: string;
+  config?: Record<string, unknown>;
+}
+
+export interface MethodDraftEdge {
+  from: string;
+  to: string;
+}
+
+export interface MethodDraft {
+  schemaVersion: number;
+  id: string;
+  title: string;
+  objective: string;
+  lifecycle: MethodLifecycleState;
+  resources: MethodDraftResource[];
+  nodes: MethodDraftNode[];
+  edges: MethodDraftEdge[];
+  parameters: Record<string, unknown>;
+  providerConfig: Record<string, unknown>;
+  outputs: string[];
+  metadata: Record<string, unknown>;
+  readiness: MethodDraftReadiness;
+}
+
 export interface CodexAppServerSession {
   threadId: string;
 }
