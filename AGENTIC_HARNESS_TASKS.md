@@ -15,7 +15,11 @@ The product has two distinct modes:
 - **Design mode:** a Codex App Server agent collaborates with the user to design a Method.
 - **Execution mode:** a deterministic Rust runtime executes a frozen Method DAG.
 
-The agent may inspect files, ask questions, propose Method changes, validate drafts, and explain results. The agent must not be the source of truth for execution. Once a Method is executed, the frozen definition, input file hashes, execution events, collections, and artifacts must be reproducible and auditable.
+Codex App Server owns generic agent behavior in design mode: chat, native project exploration, file reading/searching, reasoning, tool-call narration, and conversation flow.
+
+Nightshift owns product state and product semantics: Method drafts, resource references, domain inspection, validation, preflight, frozen manifests, execution, collections, artifacts, auditability, and UI state.
+
+The agent may inspect files with App Server native capabilities, ask questions, propose Method changes, validate drafts through Nightshift domain tools, and explain results. The agent must not be the source of truth for Method state or execution. Once a Method is executed, the frozen definition, input file hashes, execution events, collections, and artifacts must be reproducible and auditable.
 
 For inference and model-based evaluation, reproducible means the exact frozen inputs, configuration, provider profile, content hash, and generated artifacts are preserved. It does not imply identical future model output.
 
@@ -24,9 +28,10 @@ For inference and model-based evaluation, reproducible means the exact frozen in
 ```text
 Chat UI
   -> Tauri command bridge
-  -> Codex App Server agent harness
-  -> Method draft tools
-  -> preflight tools
+  -> Codex App Server native agent/session/tools
+  -> Nightshift Method domain tools
+  -> draft Method state
+  -> preflight/freeze tools
   -> frozen Method bundle
   -> deterministic Rust DAG executor
   -> execution events, collections, artifacts
@@ -39,7 +44,9 @@ React is a function of Tauri state. React may own ephemeral UI state such as act
 
 - Keep the frontend chat-first.
 - Keep Method visualization visible beside chat.
-- Use Codex App Server for the design harness.
+- Use Codex App Server for design chat and generic project exploration.
+- Do not duplicate Codex App Server native file listing, file reading, search, or agent reasoning unless App Server cannot enforce the required boundary.
+- Use Nightshift domain tools only where product semantics matter: drafts, resources, validation, freezing, execution, artifacts, and audit trail.
 - Cut the existing direct chat-completions design agent in favor of Codex App Server.
 - Use a deterministic Rust executor for frozen Methods.
 - Treat the Method definition as the durable product boundary.
@@ -49,7 +56,7 @@ React is a function of Tauri state. React may own ephemeral UI state such as act
 - Make every execution auditable by Method hash, execution id, node id, job id, collection id, and artifact id.
 - Keep local inference jobs pointed at local OpenAI-compatible servers.
 - Use Codex App Server for design chat; do not use inference job providers for chat.
-- Keep project inspection scoped to the opened project root and exclude `.nightshift`, `.git`, `node_modules`, `target`, `dist`, and other generated/dependency folders.
+- Keep product-owned resource inspection scoped to the opened project root and exclude `.nightshift`, `.git`, `node_modules`, `target`, `dist`, and other generated/dependency folders.
 
 ## Chunked Task List
 
@@ -72,7 +79,7 @@ Backend components:
 - Use a long-lived bidirectional JSON-RPC JSONL/stdio channel.
 - Define one App Server thread per design session.
 - Persist enough thread metadata to reconnect to a draft.
-- Stream App Server thread, turn, item, message, and error events into React through Tauri events.
+- Stream App Server thread, turn, item, message, native tool, and error events into React through Tauri events.
 - Remove or retire the current direct OpenAI-compatible chat-completions design agent path.
 
 Tests:
@@ -86,31 +93,33 @@ Tests:
 UX outcome:
 
 - The user can ask the agent what files are available.
-- The agent can inspect allowed project files through tools.
-- Missing, ignored, oversized, or blocked files produce concrete chat-visible tool errors.
-- Tool calls and tool results appear in the chat/event stream.
+- The agent can inspect project files with Codex App Server native project exploration.
+- Native tool calls and tool results appear in the chat/event stream with friendly labels.
+- Missing, ignored, oversized, or blocked files produce concrete chat-visible errors when they are used as Method resources or domain-inspected files.
 
 Backend components:
 
-- Implement project inspection tools:
-  - list project files
-  - read project file
+- Configure App Server with the opened project root, workspace sandbox, and no network.
+- Add design-harness instructions that native project exploration should stay inside the opened root and avoid `.nightshift`, `.git`, `node_modules`, `target`, `dist`, and generated/dependency folders.
+- Normalize App Server native tool started, completed, and failed events into UI-friendly timeline events.
+- Do not implement custom generic `list_project_files`, `read_project_file`, or search tools unless App Server lacks the required capability.
+- Add Nightshift domain inspectors for product semantics:
   - inspect data shape
   - inspect prompt variables
   - inspect JSON schema
   - inspect eval script
-- Scope all file tools to the opened project root.
-- Exclude `.nightshift`, `.git`, `node_modules`, `target`, `dist`, and generated/dependency folders.
-- Never invent missing files silently.
-- Add structured tool started, completed, and failed events.
-- Add size limits and parse-error payloads for inspected files.
+- Scope Nightshift domain inspectors to the opened project root.
+- Exclude ignored/generated/dependency folders in Nightshift domain inspectors.
+- Add size limits and parse-error payloads for domain-inspected files.
+- Treat App Server native exploration as conversational context, not as authoritative Method resource attachment.
 
 Tests:
 
-- Unit-test project-root sandbox checks and ignored directory behavior.
-- Unit-test prompt variable, data shape, and JSON schema inspection.
-- Integration-test App Server tool calls reaching Tauri inspection tools.
-- UI-test visible tool progress and blocked-file errors.
+- Unit-test project-root sandbox checks and ignored directory behavior for Nightshift domain inspectors.
+- Unit-test prompt variable, data shape, JSON schema, and eval script inspection.
+- Unit-test App Server native tool event normalization.
+- Integration-test fake App Server native tool events reaching React.
+- UI-test visible tool progress and blocked-file/domain-inspection errors.
 
 ### 3. Draft Method Creation
 
@@ -139,18 +148,20 @@ Backend components:
   - artifact state
 - Define draft Method, saved Method, frozen Method, and execution as distinct concepts.
 - Create canonical JSON structs for the Method IR.
-- Add draft Method tools:
+- Add Nightshift draft Method tools callable by App Server:
   - get current draft
   - create draft
+  - update draft metadata
   - explain draft
   - reset draft
 - Keep draft state behind Tauri commands/events.
+- Let App Server propose draft content, but let Nightshift create, store, and validate draft state.
 
 Tests:
 
 - Unit-test Method lifecycle/state transitions.
 - Unit-test draft creation defaults and required field handling.
-- Integration-test agent creates a draft through tools.
+- Integration-test agent creates a draft through Nightshift domain tools.
 - UI-test draft panel appears after a chat request.
 
 ### 4. Method Resource Creation And Attachment
@@ -163,6 +174,13 @@ UX outcome:
 
 Backend components:
 
+- Let App Server discover candidate files through native project exploration.
+- Require attachment and resource validation to go through Nightshift domain tools:
+  - inspect method resource
+  - attach method resource
+  - detach method resource
+  - resolve collection resource
+  - resolve secret reference
 - Add Method resource reference types:
   - prompt file
   - data file
@@ -170,19 +188,20 @@ Backend components:
   - eval script
   - collection
   - secret reference
+- Validate file resources are inside the opened project root and outside ignored/generated/dependency folders.
+- Validate resource kind matches intended node use.
 - Add local inference server profiles and model defaults to `.nightshift/config.json`.
 - Let Methods reference provider profiles and secret ids.
 - Local server URLs and model names may live in config.
 - Secret values must not be stored in Method files.
 - Store secrets securely, not in Method files.
-- Add resource inspection and attachment tools.
 - Add resource-to-node input contract validation.
 
 Tests:
 
 - Unit-test resource reference parsing and validation.
 - Unit-test `.nightshift/config.json` loading and provider profile resolution.
-- Integration-test attaching files and collections to a draft Method.
+- Integration-test attaching files and collections to a draft Method through App Server domain tool calls.
 - UI-test missing-resource prompts and resource status display.
 
 ### 5. Graph Patch Loop
@@ -217,9 +236,12 @@ Backend components:
 - Keep `transform` out of P0 Method execution. Existing transform job functionality may remain as legacy standalone functionality outside the Method harness.
 - Add typed config for each node type.
 - Add typed input/output contracts for each node.
-- Implement draft patch tools:
-  - propose patch
-  - apply patch
+- Add Nightshift graph tools callable by App Server:
+  - get draft graph
+  - propose Method patch
+  - apply Method patch
+  - validate Method graph
+- App Server may reason about and propose patches, but Nightshift must validate and apply them.
 - Normalize graph data before validation and hashing:
   - sorted node ids
   - sorted edge list
@@ -230,7 +252,7 @@ Tests:
 - Unit-test patch application and rejection.
 - Unit-test DAG acyclicity and node reference validation.
 - Unit-test node config parsing.
-- Integration-test graph changes from App Server tool calls.
+- Integration-test graph changes from App Server domain tool calls.
 - UI-test graph updates after draft patches.
 
 ### 6. Method Preflight View
@@ -245,7 +267,7 @@ UX outcome:
 Backend components:
 
 - Add JSON Schema for the Method IR.
-- Implement validation tools:
+- Implement Nightshift validation/preflight tools callable by App Server:
   - validate schema
   - run preflight
   - list blockers
@@ -253,23 +275,25 @@ Backend components:
 - Validate Method JSON Schema.
 - Validate DAG acyclicity.
 - Validate node references.
-- Validate required files exist.
+- Validate required resources exist.
+- Validate file resources are inside root and outside ignored/generated/dependency folders.
 - Validate file types.
 - Validate JSON schemas parse.
 - Validate data files parse.
-- Validate prompt variables can be satisfied by data.
+- Validate prompt variables can be satisfied by data or upstream node outputs.
 - Validate eval scripts exist when an eval node references one.
 - Validate eval outputs can feed aggregate nodes.
 - Validate provider/model config exists.
 - Validate secret references exist.
 - Return structured blockers and warnings.
 - Make blockers actionable by the agent and UI.
+- Run preflight from Nightshift state only, not from App Server memory.
 
 Tests:
 
 - Unit-test Method schema validation.
 - Unit-test all preflight blocker classes.
-- Integration-test preflight blocks missing files.
+- Integration-test preflight blocks missing resources.
 - Integration-test preflight passes a ready Method.
 - UI-test ready state, blockers, warnings, and disabled controls.
 
@@ -284,7 +308,8 @@ UX outcome:
 
 Backend components:
 
-- Store frozen Method bundles under `.nightshift/methods`.
+- Freeze only Nightshift draft state that has passed preflight.
+- Store frozen Method bundles under `.nightshift/methods` or the evolved saved Method location chosen for compatibility.
 - Preserve compatibility with existing saved Method records/folders where practical.
 - Store canonical `method.json`.
 - Store content-addressed copies of referenced files.
@@ -297,12 +322,13 @@ Backend components:
 - Define export/import format.
 - Create/update SQLite records for frozen Methods.
 - Add indexes for Method id and Method content hash.
+- Let App Server initiate freeze through a Nightshift domain tool, but Nightshift performs hashing, persistence, and immutability checks.
 
 Tests:
 
 - Unit-test canonical JSON serialization.
 - Unit-test file hashing and bundle hashing.
-- Integration-test freeze creates an immutable bundle under `.nightshift/methods`.
+- Integration-test freeze creates an immutable bundle.
 - Integration-test existing Method records remain readable where practical.
 - UI-test saved/frozen Method appears with hash.
 
@@ -331,6 +357,7 @@ Backend components:
 - Add explicit retry policy per node.
 - Design for future parallel execution without implementing it in P0.
 - Create/update tables and indexes for executions, execution nodes, execution events, jobs, collections, collection items, and artifacts.
+- Let App Server narrate or explain execution events, but never execute the Method DAG.
 
 Tests:
 
@@ -368,6 +395,7 @@ Backend components:
 - Store per-sample failures.
 - Link job outputs to Method node outputs.
 - Keep inference jobs separate from design chat; design chat uses Codex App Server.
+- Do not call inference providers from the renderer or through App Server chat tools.
 
 Tests:
 
@@ -387,7 +415,7 @@ UX outcome:
 Backend components:
 
 - Support deterministic script-based eval.
-- Support model-based judging eval in the IR if needed, backed by Codex/App Server chat only when implemented.
+- Support model-based judging eval in the IR if needed, executed through the execution runtime and provider profiles, not App Server design chat.
 - Support eval over upstream inference collections.
 - Store eval outputs in collections.
 - Store eval failures per item.
@@ -424,6 +452,7 @@ UX outcome:
 - An analysis node creates a Markdown artifact.
 - The artifact includes aggregate metrics, failure summaries, and references to collections/artifacts.
 - The user can preview and export the analysis.
+- The agent can explain the analysis from recorded Nightshift artifacts.
 
 Backend components:
 
@@ -432,6 +461,11 @@ Backend components:
 - Include failure summaries.
 - Include links/references to collections and artifacts.
 - Store analysis as Markdown artifact.
+- Add Nightshift result/artifact tools callable by App Server:
+  - list execution events
+  - list execution artifacts
+  - read execution artifact
+  - summarize collection shape
 - Allow export.
 - Add export for:
   - JSONL collections
@@ -439,21 +473,25 @@ Backend components:
   - aggregate JSON
   - analysis Markdown
   - frozen Method bundle
+- Treat App Server result explanations as narration over recorded artifacts, not as artifact storage.
 
 Tests:
 
 - Unit-test analysis artifact generation from execution artifacts.
+- Unit-test artifact/result query tools.
 - Integration-test analysis creates Markdown.
 - Integration-test artifact export commands.
+- Integration-test agent reads execution artifacts through Nightshift tools.
 - UI-test analysis preview and export.
 
-### 12. Saved Method Recovery
+### 12. Saved Method Recovery And Revision
 
 UX outcome:
 
 - Reopening the app/project shows previous Methods, executions, artifacts, and collections.
 - A saved draft can reconnect to enough App Server thread metadata to continue the design session where possible.
 - Old Method data remains visible where practical.
+- The user can revise a prior saved/frozen Method or execution without mutating the original frozen bundle.
 
 Backend components:
 
@@ -463,23 +501,31 @@ Backend components:
 - Reconnect App Server thread metadata to drafts.
 - Preserve existing `methods`, `method_executions`, `method_execution_nodes`, `method_execution_events`, and `method_artifacts` data where practical.
 - Add versioning and migration hooks for Method IR changes.
+- Add revise-from-saved/frozen/execution flow:
+  - create a new draft from prior Method state
+  - preserve provenance
+  - never mutate executed frozen bundles
+- Let App Server propose revisions through the same draft/resource/graph tools used for initial creation.
 
 Tests:
 
 - Integration-test Method, execution, and artifact recovery after restart.
 - Integration-test config loading after restart.
-- UI-test saved Methods and previous artifacts are visible.
+- Integration-test revise-from-execution preserves original frozen bundle.
+- Unit-test version/provenance rules.
+- UI-test saved Methods, previous artifacts, and revision entry points are visible.
 
 ## P0 Milestone
 
 P0 is complete when these UX slices work end-to-end:
 
 - Chat works through Codex App Server.
-- The agent can inspect project files through scoped tools.
-- The agent can draft and patch Method IR.
+- The agent can inspect project files through Codex App Server native project exploration.
+- Nightshift domain inspectors can inspect Method resources with scoped validation.
+- The agent can draft and patch Method IR through Nightshift domain tools.
 - The user can attach Method resources and see their status.
 - Preflight gates save and execute.
-- A frozen Method bundle can be saved under `.nightshift/methods`.
+- A frozen Method bundle can be saved.
 - A frozen Method can execute through the Rust DAG executor.
 - Inference creates concrete local OpenAI-compatible jobs.
 - Eval consumes inference outputs.
@@ -487,9 +533,11 @@ P0 is complete when these UX slices work end-to-end:
 - Analysis creates a Markdown artifact.
 - Chat and graph show execution progress.
 - Saved Methods and prior executions can be recovered after reopening the project.
+- Prior saved/frozen Methods can be revised into new drafts without mutating executed bundles.
 
 ## Non-Goals For P0
 
+- Reimplementing generic App Server file listing, file reading, search, shell, or agent reasoning.
 - Parallel DAG execution.
 - Cloud execution.
 - Multi-user collaboration.
