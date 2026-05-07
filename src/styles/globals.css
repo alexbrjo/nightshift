@@ -481,8 +481,8 @@ body {
 }
 
 .cm-editor-wrapper .cm-gutters {
-  background: transparent !important;
-  border-right: 1px solid var(--border-color) !important;
+  background: transparent;
+  border-right: 1px solid var(--border-color);
   color: var(--text-muted) !important;
   font-family: var(--font-mono) !important;
 }

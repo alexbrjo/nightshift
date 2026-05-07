@@ -12,9 +12,8 @@
   - Virtually all changes should have unit tests
   - Very often changes should include integration tests
   - For changes that affect the UX, include E2E/UI tests
-- You MUST document UX and functionality changes
-  - For changes that affect UX, update the USER_GUIDE.md
-  - For changes that affect the architecture or data models update the DEVELOPER_GUIDE.md
+- Code must be self-documenting. DO NOT leave code commments that restate what the code does.
+- DO NOT write comments explaining the background from the conversation.
 
 ## Anti-Patterns (MUST NOT)
 

@@ -1,0 +1,26 @@
+- P0: agentic planner
+- P1: delete button for collections (with are you sure? dialog)
+- P1: delete button for jobs (with are you sure? dialog)
+- P1: use transactions for multi-step DB operations
+- P1: Add "load more" to `JobListSidebar`. There is a current limit of `pageSize: 50`
+- P1: No project-root validation before job creation in `main.rs` falls back to `current_dir()`; require `AppState.root_path`
+- P2: export inference job config to yaml
+- P2: export transform job config to yaml
+- P2: button to go to the source job of a collection
+- P2: audit logging for all actions
+- P2: "Trust this workspace?" for new projects (cite the fact that .js can be executed)
+- P2: linking between items in collections (origin collection -> transformed collection -> collection of evals)
+- P2: auto-save for editor
+- P2: No SQLite WAL/`busy_timeout`. We should add pragmas after connect in `database.rs`
+- P2: `subscribe_to_job_status` is an alias for `start_inference_job` — `commands/inference.rs`; pick one
+- P2: `alert()`/`confirm()` block the webview in `CollectionViewer.tsx`; use Dialog/Toast
+- P2: SQLite conn-string only escapes ` ` and `#`. This breaks on `?`/`%`/non-ASCII; use `Url::from_file_path`
+- P2:`std::sync::Mutex` for `DatabaseState.project_root`. switch to `tokio::sync::RwLock`/`parking_lot`/`ArcSwap`
+- P1: Errors swallowed, execution continues. We should emit terminal events for unrecoverable cases
+  - `job_executor.rs` `save_to_collection` failure (sample reported done but never persisted)
+  - `job_executor.rs` bad JSONL line (sample silently missing)
+  - `commands/inference.rs` emit failures invisible to frontend wrong-arity
+- P2: 10 vitest tests failing. test-code drift only: `JobListSidebar` (5), `CollectionViewer` (3), `App` (2)
+- P2:`outputMode === "JSON Schema"` is an exact-string match. We should extract a constant in `InferenceJobForm.tsx`
+- P2:`InferenceJobForm.test.tsx` entire describe is skipped. Either fix mocking or delete
+- P2:`fileContentsRef` Map grows unbounded in `App.tsx`; add eviction

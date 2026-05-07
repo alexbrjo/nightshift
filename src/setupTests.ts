@@ -14,5 +14,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   save: (...args: unknown[]) => mockSave(...args),
 }));
 
+vi.mock("@tauri-apps/api/event", () => ({
+  listen: vi.fn(async () => () => {}),
+  emit: vi.fn(),
+}));
+
 Object.defineProperty(window, "innerWidth", { value: 1920, writable: true });
 Object.defineProperty(window, "innerHeight", { value: 1080, writable: true });

@@ -3,6 +3,7 @@
 mod commands;
 mod database;
 mod job_executor;
+mod openai_compat;
 mod state;
 mod transform_runner;
 mod utils;
@@ -96,6 +97,13 @@ fn main() {
             list_schema_files,
             list_transform_scripts,
             check_transform_runtime,
+            // Experiments
+            save_experiment,
+            list_experiments,
+            get_experiment,
+            read_bundle_file,
+            chat_complete,
+            generate_experiment_draft,
         ])
         .run(tauri::generate_context!())
         .expect("error while running nightshift");
