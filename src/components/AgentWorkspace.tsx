@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
@@ -53,6 +53,12 @@ function userFacingError(err: unknown) {
   return `I could not reach the design agent: ${String(err)}`;
 }
 
+function isMissingProjectError(err: unknown) {
+  const message = String(err);
+  return message.includes("No project folder is open")
+    || message.includes("Open a project folder before starting");
+}
+
 function isMethodDraft(value: unknown): value is MethodDraft {
   return Boolean(
     value
@@ -87,6 +93,7 @@ function slugForMethodId(value: string) {
 }
 
 export default function AgentWorkspace() {
+  const hasProjectRootRef = useRef(false);
   const [session, setSession] = useState<CodexAppServerSession | null>(null);
   const [activeTurn, setActiveTurn] = useState<CodexTurnSummary | null>(null);
   const [draft, setDraft] = useState<MethodDraft | null>(null);
@@ -121,30 +128,30 @@ export default function AgentWorkspace() {
     ]);
   }, []);
 
-  const startSession = useCallback(async () => {
+  const startSession = useCallback(async (options?: { silentMissingProject?: boolean }) => {
     setIsConnecting(true);
     try {
       const nextSession = await invoke<CodexAppServerSession>("start_design_session");
       setSession(nextSession);
       return nextSession;
     } catch (err) {
-      addSystemMessage(userFacingError(err), "failed");
+      if (!options?.silentMissingProject || !isMissingProjectError(err)) {
+        addSystemMessage(userFacingError(err), "failed");
+      }
       return null;
     } finally {
       setIsConnecting(false);
     }
   }, [addSystemMessage]);
 
-  useEffect(() => {
-    void startSession();
-  }, [startSession]);
-
-  const loadCurrentDraft = useCallback(async () => {
+  const loadCurrentDraft = useCallback(async (options?: { silentMissingProject?: boolean }) => {
     try {
       const currentDraft = await invoke<MethodDraft | null>("get_current_method_draft");
       setDraft(isMethodDraft(currentDraft) ? currentDraft : null);
     } catch (err) {
-      addSystemMessage(`I could not load the current Method draft: ${String(err)}`, "failed");
+      if (!options?.silentMissingProject || !isMissingProjectError(err)) {
+        addSystemMessage(`I could not load the current Method draft: ${String(err)}`, "failed");
+      }
     }
   }, [addSystemMessage]);
 
@@ -158,6 +165,28 @@ export default function AgentWorkspace() {
       addSystemMessage(`I could not load saved Methods: ${String(err)}`, "failed");
     }
   }, [addSystemMessage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const connectIfProjectOpen = async () => {
+      try {
+        const root = await invoke<string | null>("get_root_path");
+        if (cancelled || !root) return;
+        hasProjectRootRef.current = true;
+        void startSession({ silentMissingProject: true });
+        void loadCurrentDraft({ silentMissingProject: true });
+        void loadMethods();
+      } catch (err) {
+        if (!cancelled && !isMissingProjectError(err)) {
+          addSystemMessage(`I could not check the current project folder: ${String(err)}`, "failed");
+        }
+      }
+    };
+    void connectIfProjectOpen();
+    return () => {
+      cancelled = true;
+    };
+  }, [addSystemMessage, loadCurrentDraft, loadMethods, startSession]);
 
   const refreshExecution = useCallback(
     async (executionId: number) => {
@@ -183,7 +212,7 @@ export default function AgentWorkspace() {
   }, [loadMethods]);
 
   useEffect(() => {
-    void loadCurrentDraft();
+    void loadCurrentDraft({ silentMissingProject: true });
   }, [loadCurrentDraft]);
 
   useEffect(() => {
@@ -191,8 +220,9 @@ export default function AgentWorkspace() {
     let unlisten: (() => void) | null = null;
     listen<string>("project-opened", () => {
       if (cancelled) return;
-      void startSession();
-      void loadCurrentDraft();
+      hasProjectRootRef.current = true;
+      void startSession({ silentMissingProject: true });
+      void loadCurrentDraft({ silentMissingProject: true });
       void loadMethods();
     })
       .then((fn) => {

@@ -2468,6 +2468,8 @@ legend {
 }
 
 .method-flow .react-flow__controls {
+  left: auto;
+  right: 16px;
   box-shadow: var(--shadow-sm);
 }
 

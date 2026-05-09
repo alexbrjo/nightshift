@@ -22,6 +22,8 @@ describe("AgentWorkspace", () => {
     mockInvoke.mockReset();
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
         case "start_design_session":
           return Promise.resolve({ threadId: "thr_123" });
         case "send_design_chat_message":
@@ -536,9 +538,7 @@ describe("AgentWorkspace", () => {
       switch (command) {
         case "start_design_session":
           startAttempts += 1;
-          return startAttempts === 1
-            ? Promise.reject("Open a project folder before starting the Method design agent")
-            : Promise.resolve({ threadId: "thr_123" });
+          return Promise.resolve({ threadId: "thr_123" });
         case "send_design_chat_message":
           return Promise.resolve({ threadId: "thr_123", turnId: "turn_456" });
         case "get_current_method_draft":
@@ -555,14 +555,16 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findByText(/Open a project folder before starting/i);
+    await waitFor(() => {
+      expect(screen.queryByText(/Open a project folder before starting/i)).not.toBeInTheDocument();
+    });
     eventBus.handlers.get("project-opened")?.forEach((handler) =>
       handler({ payload: {} }),
     );
 
     const input = await screen.findByPlaceholderText(/Describe or refine/i);
     await waitFor(() => {
-      expect(startAttempts).toBe(2);
+      expect(startAttempts).toBe(1);
       expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
     });
     fireEvent.change(input, { target: { value: "create a Method" } });

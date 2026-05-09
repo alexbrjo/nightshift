@@ -135,8 +135,8 @@ export default function App() {
   return (
     <ToastProvider>
       <div className="app">
-        <div className="topbar">
-          <span className="topbar-title">Nightshift</span>
+        <div className="topbar" data-tauri-drag-region>
+          <span className="topbar-title" data-tauri-drag-region>Nightshift</span>
         </div>
         <div className="app-body">
         <aside className="sidebar">
