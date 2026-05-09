@@ -195,4 +195,32 @@ describe("buildMethodGraphElements", () => {
     expect(graph.nodes[1].position.y).toBeGreaterThan(graph.nodes[0].position.y);
     expect(graph.edges.map((edge) => edge.id)).toEqual(["a-b", "b-a", "missing-a"]);
   });
+
+  it("shows inherited execution config on inference nodes without node-level config", () => {
+    const draft = methodDraft({
+      nodes: [
+        { id: "generate", label: "Generate", type: "inference", status: "ready", config: undefined },
+        { id: "score", label: "Score", type: "eval", status: "ready", config: undefined },
+      ],
+      parameters: {
+        model_values: ["bonsai-8b", "qwen3.5-4b"],
+        samples: 5,
+        max_tokens: 2000,
+      },
+      providerConfig: {
+        provider: "Local",
+        server_url: "http://localhost:1234/v1",
+      },
+    });
+
+    const graph = buildMethodGraphElements(draft);
+    const methodNodes = graph.nodes.filter((node) => node.type === "method");
+
+    expect(methodNodes[0].data.configHints).toEqual([
+      "provider: Local",
+      "server_url: http://localhost:1234/v1",
+      "model_values: 2 items",
+    ]);
+    expect(methodNodes[1].data.configHints).toEqual([]);
+  });
 });

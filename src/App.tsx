@@ -233,11 +233,9 @@ export default function App() {
           )}
         </main>
 
-        {activeSection === "experiment-designer" && (
-          <main className="workspace full-width">
-            <AgentWorkspace />
-          </main>
-        )}
+        <main className={`workspace full-width${activeSection === "experiment-designer" ? "" : " hidden"}`}>
+          <AgentWorkspace />
+        </main>
         </div>
       </div>
     </ToastProvider>

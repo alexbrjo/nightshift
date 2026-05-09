@@ -43,7 +43,7 @@ Chat UI
   -> draft Method state
   -> validation/preflight/freeze
   -> frozen Method bundle
-  -> deterministic Rust DAG executor
+  -> Rust Method workflow executor
   -> execution events, collections, artifacts
   -> chat narration + graph visualization
 ```
@@ -62,6 +62,39 @@ Add a custom Nightshift tool only when at least one is true:
 - The UI needs a structured state update that cannot be reliably derived from chat text.
 
 Prefer fewer, more meaningful product tools. Do not add a custom tool merely because the agent could call it.
+
+## Executor Runtime Direction
+
+Before writing a bespoke Method executor, evaluate whether `rs-graph-llm` / `graph-flow` can provide the Rust workflow runtime underneath Nightshift's Method execution layer.
+
+`graph-flow` is conceptually close to LangGraph:
+
+- graph builder with tasks, edges, conditional edges, and a start task
+- stateful execution context
+- session storage abstraction
+- wait-for-input / human-in-the-loop actions
+- task-directed next actions such as continue, go to another task, go back, end, or wait for input
+- fan-out support for parallel child tasks
+- optional LLM integration through Rig
+
+Potential simplification:
+
+- Use `graph-flow` for workflow stepping, task dispatch, pause/resume/wait semantics, and possibly session checkpointing.
+- Keep Nightshift responsible for Method IR, frozen bundles, validation, resource resolution, Tauri events, collections, artifacts, and SQLite execution records.
+- Build a thin adapter from frozen Method nodes to Rust task implementations:
+  - `InferenceTask`
+  - `EvalTask`
+  - `AggregateTask`
+  - `AnalysisTask`
+- Implement or adapt `graph-flow` session storage over Nightshift SQLite if the crate is adopted.
+- Do not enable Rig/provider calls initially; keep inference calls in the main/Rust side through Nightshift's existing inference infrastructure.
+
+Open design decision:
+
+- If Methods remain strict DAGs, `graph-flow` should be used only if the adapter is thinner than a small in-house DAG executor.
+- If Methods evolve into interactive workflows with waits, branches, retries, and human input, `graph-flow` becomes a stronger fit and the Method IR should be renamed from a pure DAG model to a workflow graph model.
+- Conditional edges and task next actions must be represented in a serializable Method IR before they are exposed as product features. Do not hide non-serializable Rust closures inside saved Methods.
+- The dependency is young. Land a small spike before committing it to the main execution path.
 
 ## Remaining Task List
 
@@ -184,7 +217,7 @@ Backend components:
   - `eval`
   - `aggregate`
   - `analysis`
-- Keep `transform` out of P0 Method execution. Existing transform job functionality may remain as legacy standalone functionality outside the Method harness.
+- Keep `transform` out of the canonical P0 Method IR, but preserve existing script-backed `transform` / `eval` execution behavior until the legacy path is intentionally migrated or removed.
 - Add typed config for each node type.
 - Add typed input/output contracts for each node.
 - Do not add custom graph patch tools unless direct file editing proves insufficient in product testing.
@@ -275,7 +308,7 @@ Tests:
 - Integration-test freeze through App Server-triggered Nightshift Method tool.
 - UI-test frozen state display.
 
-### 6. Deterministic Rust DAG Executor
+### 6. Rust Method Workflow Executor
 
 UX outcome:
 
@@ -285,25 +318,40 @@ UX outcome:
 
 Backend components:
 
-- Implement Rust DAG execution over the frozen manifest.
+- Spike `rs-graph-llm` / `graph-flow` against a frozen P0 Method before building more bespoke executor code.
+- The spike must prove:
+  - frozen Method nodes can be adapted into Rust task implementations
+  - execution state can be mirrored into Nightshift SQLite rows
+  - node events can be emitted through Tauri
+  - pause, resume, cancel, and wait-for-input semantics can be represented cleanly
+  - artifacts and output collections remain queryable through Nightshift APIs
+  - packaged local app constraints remain acceptable
+- If the spike succeeds, implement Method execution as a Nightshift adapter over `graph-flow`.
+- If the spike fails, implement a small in-house Rust DAG executor and document the rejected `graph-flow` constraints.
+- Execute workflow nodes over the frozen manifest.
 - Execute nodes only from frozen inputs and config.
 - Support P0 node execution:
   - inference
   - eval
   - aggregate
   - analysis
+- Preserve existing script-backed `transform` / `eval` execution behavior during the graph-flow adapter integration because the executor already partially supports it.
 - Use existing local inference job infrastructure where appropriate.
 - Keep inference calls in the main/Rust side, never in the renderer.
 - Record execution rows and node rows.
 - Emit execution events.
 - Support pause, resume, and cancel.
+- Support wait-for-input as a product-visible blocked/paused execution state if `graph-flow` is adopted.
 - Persist output collections and artifacts.
+- Keep `transform` out of the canonical P0 Method IR, but preserve existing script-backed `transform` / `eval` execution behavior until the legacy path is intentionally migrated or removed.
 
 Tests:
 
-- Unit-test topological execution.
+- Unit-test graph/workflow ordering or `graph-flow` adapter task sequencing.
 - Unit-test node failure propagation.
 - Unit-test pause/resume/cancel state.
+- Unit-test wait-for-input behavior if adopted.
+- Unit-test SQLite session/execution-state persistence if `graph-flow` is adopted.
 - Integration-test a small frozen Method execution.
 - UI-test execution progress and failure display.
 

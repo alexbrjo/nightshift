@@ -1,7 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { CodexAppServerEvent, CodexAppServerSession, CodexTurnSummary, MethodDraft } from "../database";
+import type {
+  CodexAppServerEvent,
+  CodexAppServerSession,
+  CodexTurnSummary,
+  MethodDraft,
+  MethodExecutionEventSummary,
+  MethodExecutionNodeSummary,
+  MethodExecutionSummary,
+  MethodSummary,
+} from "../database";
 import MethodGraph from "./MethodGraph";
 
 interface ChatMessage {
@@ -9,6 +18,13 @@ interface ChatMessage {
   role: "assistant" | "user" | "system";
   text: string;
   status?: "pending" | "streaming" | "completed" | "failed";
+}
+
+interface MethodExecutionEventPayload {
+  executionId: number;
+  nodeId?: string;
+  eventType: string;
+  payload: Record<string, unknown>;
 }
 
 function appendDelta(messages: ChatMessage[], itemId: string, delta: string): ChatMessage[] {
@@ -37,10 +53,55 @@ function userFacingError(err: unknown) {
   return `I could not reach the design agent: ${String(err)}`;
 }
 
+function isMethodDraft(value: unknown): value is MethodDraft {
+  return Boolean(
+    value
+      && typeof value === "object"
+      && !Array.isArray(value)
+      && "id" in value
+      && "readiness" in value,
+  );
+}
+
+function eventDetail(event: MethodExecutionEventSummary): string | null {
+  const payload = event.payloadJson;
+  const error = typeof payload?.error === "string" ? payload.error : null;
+  if (error) return error;
+  const status = typeof payload?.status === "string" ? payload.status : null;
+  const message = typeof payload?.message === "string" ? payload.message : null;
+  if (status && message) return `${status}: ${message}`;
+  if (message) return message;
+  if (status) return status;
+  return null;
+}
+
+function slugForMethodId(value: string) {
+  const slug = value
+    .split("")
+    .map((char) => (/[a-z0-9]/i.test(char) ? char.toLowerCase() : "-"))
+    .join("")
+    .split("-")
+    .filter(Boolean)
+    .join("-");
+  return slug || "method";
+}
+
 export default function AgentWorkspace() {
   const [session, setSession] = useState<CodexAppServerSession | null>(null);
   const [activeTurn, setActiveTurn] = useState<CodexTurnSummary | null>(null);
   const [draft, setDraft] = useState<MethodDraft | null>(null);
+  const [methods, setMethods] = useState<MethodSummary[]>([]);
+  const [selectedMethodId, setSelectedMethodId] = useState("");
+  const [activeExecutionId, setActiveExecutionId] = useState<number | null>(null);
+  const [executionNodes, setExecutionNodes] = useState<MethodExecutionNodeSummary[]>([]);
+  const [executionEvents, setExecutionEvents] = useState<MethodExecutionEventSummary[]>([]);
+  const [executionStatus, setExecutionStatus] = useState<string>("idle");
+  const [isSavingMethod, setIsSavingMethod] = useState(false);
+  const [isExecutingMethod, setIsExecutingMethod] = useState(false);
+  const [methodActionFeedback, setMethodActionFeedback] = useState<{
+    tone: "info" | "success" | "error";
+    text: string;
+  } | null>(null);
   const [input, setInput] = useState("");
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -78,25 +139,80 @@ export default function AgentWorkspace() {
     void startSession();
   }, [startSession]);
 
+  const loadCurrentDraft = useCallback(async () => {
+    try {
+      const currentDraft = await invoke<MethodDraft | null>("get_current_method_draft");
+      setDraft(isMethodDraft(currentDraft) ? currentDraft : null);
+    } catch (err) {
+      addSystemMessage(`I could not load the current Method draft: ${String(err)}`, "failed");
+    }
+  }, [addSystemMessage]);
+
+  const loadMethods = useCallback(async () => {
+    try {
+      const result = await invoke<MethodSummary[] | null>("list_methods");
+      const savedMethods = Array.isArray(result) ? result : [];
+      setMethods(savedMethods);
+      setSelectedMethodId((current) => current || savedMethods[0]?.id || "");
+    } catch (err) {
+      addSystemMessage(`I could not load saved Methods: ${String(err)}`, "failed");
+    }
+  }, [addSystemMessage]);
+
+  const refreshExecution = useCallback(
+    async (executionId: number) => {
+      try {
+        const [executions, nodes, events] = await Promise.all([
+          invoke<MethodExecutionSummary[]>("list_method_executions", { methodId: selectedMethodId || null }),
+          invoke<MethodExecutionNodeSummary[]>("get_method_execution_nodes", { executionId }),
+          invoke<MethodExecutionEventSummary[]>("get_method_execution_events", { executionId }),
+        ]);
+        const currentExecution = executions.find((execution) => execution.id === executionId);
+        setExecutionStatus(currentExecution?.status ?? "running");
+        setExecutionNodes(nodes);
+        setExecutionEvents(events);
+      } catch (err) {
+        addSystemMessage(`I could not refresh Method execution ${executionId}: ${String(err)}`, "failed");
+      }
+    },
+    [addSystemMessage, selectedMethodId],
+  );
+
+  useEffect(() => {
+    void loadMethods();
+  }, [loadMethods]);
+
+  useEffect(() => {
+    void loadCurrentDraft();
+  }, [loadCurrentDraft]);
+
   useEffect(() => {
     let cancelled = false;
-    invoke<MethodDraft | null>("get_current_method_draft")
-      .then((currentDraft) => {
-        if (!cancelled) setDraft(currentDraft);
+    let unlisten: (() => void) | null = null;
+    listen<string>("project-opened", () => {
+      if (cancelled) return;
+      void startSession();
+      void loadCurrentDraft();
+      void loadMethods();
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
       })
       .catch((err) => {
-        if (!cancelled) addSystemMessage(`I could not load the current Method draft: ${String(err)}`, "failed");
+        addSystemMessage(`I could not subscribe to project changes: ${String(err)}`, "failed");
       });
     return () => {
       cancelled = true;
+      unlisten?.();
     };
-  }, [addSystemMessage]);
+  }, [addSystemMessage, loadCurrentDraft, loadMethods, startSession]);
 
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
     listen<MethodDraft | null>("method-draft-updated", (event) => {
-      if (!cancelled) setDraft(event.payload);
+      if (!cancelled) setDraft(isMethodDraft(event.payload) ? event.payload : null);
     })
       .then((fn) => {
         if (cancelled) fn();
@@ -110,6 +226,36 @@ export default function AgentWorkspace() {
       unlisten?.();
     };
   }, [addSystemMessage]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let unlisten: (() => void) | null = null;
+    listen<MethodExecutionEventPayload>("method-execution-event", (event) => {
+      if (cancelled || event.payload.executionId !== activeExecutionId) return;
+      void refreshExecution(event.payload.executionId);
+    })
+      .then((fn) => {
+        if (cancelled) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => {
+        addSystemMessage(`I could not subscribe to Method execution updates: ${String(err)}`, "failed");
+      });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [activeExecutionId, addSystemMessage, refreshExecution]);
+
+  useEffect(() => {
+    if (!activeExecutionId || ["completed", "completed_with_errors", "failed", "cancelled"].includes(executionStatus)) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      void refreshExecution(activeExecutionId);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [activeExecutionId, executionStatus, refreshExecution]);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,6 +310,10 @@ export default function AgentWorkspace() {
   const handleSubmit = async () => {
     const text = input.trim();
     if (!text || isSending) return;
+    if (!session) {
+      const nextSession = await startSession();
+      if (!nextSession) return;
+    }
     setInput("");
     setIsSending(true);
     setMessages((current) => [
@@ -182,6 +332,60 @@ export default function AgentWorkspace() {
         ...current.filter((message) => message.status !== "pending"),
         { id: `send-error-${Date.now()}`, role: "system", text: userFacingError(err), status: "failed" },
       ]);
+    }
+  };
+
+  const executeSelectedMethod = async () => {
+    if (!selectedMethodId || isExecutingMethod) return;
+    if (draft && slugForMethodId(draft.title) !== selectedMethodId) {
+      setMethodActionFeedback({
+        tone: "error",
+        text: `The visible draft is '${draft.title}', but Execute is pointed at saved Method '${selectedMethodId}'. Save the draft first or choose the matching saved Method.`,
+      });
+      return;
+    }
+    setIsExecutingMethod(true);
+    setMethodActionFeedback({ tone: "info", text: "Starting Method execution..." });
+    setExecutionStatus("starting");
+    setExecutionNodes([]);
+    setExecutionEvents([]);
+    try {
+      const executionId = await invoke<number>("execute_method", { id: selectedMethodId });
+      setActiveExecutionId(executionId);
+      setExecutionStatus("queued");
+      await refreshExecution(executionId);
+      setMethodActionFeedback({ tone: "success", text: `Started Method execution ${executionId}.` });
+      addSystemMessage(`Started Method execution ${executionId}.`);
+    } catch (err) {
+      setExecutionStatus("failed");
+      const message = `I could not execute Method '${selectedMethodId}': ${String(err)}`;
+      setMethodActionFeedback({ tone: "error", text: message });
+      addSystemMessage(message, "failed");
+    } finally {
+      setIsExecutingMethod(false);
+    }
+  };
+
+  const saveCurrentDraftAsMethod = async () => {
+    if (!draft || draft.readiness.blockers.length > 0 || isSavingMethod) return;
+    setIsSavingMethod(true);
+    setMethodActionFeedback({ tone: "info", text: "Saving Method..." });
+    try {
+      const summary = await invoke<MethodSummary>("save_current_method_draft");
+      const savedMethods = await invoke<MethodSummary[]>("list_methods");
+      const nextMethods = savedMethods.some((method) => method.id === summary.id)
+        ? savedMethods
+        : [summary, ...savedMethods];
+      setMethods(nextMethods);
+      setSelectedMethodId(summary.id);
+      setMethodActionFeedback({ tone: "success", text: `Saved Method '${summary.title}'.` });
+      addSystemMessage(`Saved Method '${summary.title}'.`);
+    } catch (err) {
+      const message = `I could not save the current Method draft: ${String(err)}`;
+      setMethodActionFeedback({ tone: "error", text: message });
+      addSystemMessage(message, "failed");
+    } finally {
+      setIsSavingMethod(false);
     }
   };
 
@@ -211,27 +415,112 @@ export default function AgentWorkspace() {
               placeholder="Describe or refine a Method"
               disabled={isSending && Boolean(activeTurn)}
             />
-            <button type="submit" disabled={isSending || isConnecting || !session}>
+            <button type="submit" disabled={isSending || isConnecting}>
               {isSending ? "Sending" : "Send"}
             </button>
           </form>
         </section>
 
         <aside className="agent-visual-panel agent-graph-sidebar">
-          {draft ? (
-            <div className="method-draft-panel">
-              <div className="method-draft-header">
+          <div className="method-draft-panel">
+            <div className="method-draft-header">
+              {draft ? (
                 <div>
                   <span>{draft.lifecycle}</span>
                   <strong>{draft.title}</strong>
                 </div>
-                <span>{draft.readiness.blockers.length} blockers</span>
-              </div>
-              <MethodGraph draft={draft} />
+              ) : (
+                <div>
+                  <span>Execution</span>
+                  <strong>No Method draft exists yet.</strong>
+                </div>
+              )}
+              <span>{draft ? `${draft.readiness.blockers.length} blockers` : `${methods.length} saved`}</span>
             </div>
-          ) : (
-            <div className="agent-empty-visual">No Method draft exists yet.</div>
-          )}
+
+            <section className="method-execution-panel" aria-label="Method execution">
+              <div className="method-execution-controls">
+                <select
+                  value={selectedMethodId}
+                  onChange={(event) => setSelectedMethodId(event.target.value)}
+                  disabled={methods.length === 0 || isExecutingMethod}
+                  aria-label="Saved Method"
+                >
+                  {methods.length === 0 ? (
+                    <option value="">No saved Methods</option>
+                  ) : (
+                    methods.map((method) => (
+                      <option key={method.id} value={method.id}>
+                        {method.title}
+                      </option>
+                    ))
+                  )}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void loadMethods()}
+                  disabled={isExecutingMethod || isSavingMethod}
+                >
+                  Refresh
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveCurrentDraftAsMethod()}
+                  disabled={!draft || draft.readiness.blockers.length > 0 || isSavingMethod || isExecutingMethod}
+                >
+                  {isSavingMethod ? "Saving" : "Save Method"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void executeSelectedMethod()}
+                  disabled={!selectedMethodId || isExecutingMethod || isSavingMethod}
+                >
+                  {isExecutingMethod ? "Starting" : "Execute"}
+                </button>
+              </div>
+              {methodActionFeedback && (
+                <div className={`method-action-feedback ${methodActionFeedback.tone}`} role="status">
+                  {methodActionFeedback.text}
+                </div>
+              )}
+              <div className="method-execution-summary">
+                <span>{activeExecutionId ? `Execution ${activeExecutionId}` : "No execution yet"}</span>
+                <strong>{executionStatus}</strong>
+              </div>
+              {executionNodes.length > 0 && (
+                <div className="method-execution-node-list" aria-label="Execution node status">
+                  {executionNodes.map((node) => (
+                    <div key={node.id}>
+                      <span>
+                        {node.nodeId}
+                        {node.errorMessage && <em>{node.errorMessage}</em>}
+                      </span>
+                      <strong className={`status-${node.status}`}>{node.status}</strong>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {executionEvents.length > 0 && (
+                <div className="method-execution-events" aria-label="Execution events">
+                  {executionEvents.slice(-4).map((event) => (
+                    <div key={event.id}>
+                      <span>
+                        {event.nodeId ?? "execution"}
+                        {eventDetail(event) && <em>{eventDetail(event)}</em>}
+                      </span>
+                      <code>{event.eventType}</code>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+
+            {draft ? (
+              <MethodGraph draft={draft} executionNodes={executionNodes} />
+            ) : (
+              <div className="agent-empty-visual">Saved Methods can be executed from the controls above.</div>
+            )}
+          </div>
         </aside>
       </main>
     </div>

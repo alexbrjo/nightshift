@@ -1,9 +1,12 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use graph_flow::{Context, GraphBuilder, GraphError, NextAction, Session, Task, TaskResult};
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, State};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex as TokioMutex};
 use tokio::time::{sleep, Duration};
 
 use crate::database::DatabaseState;
@@ -21,6 +24,16 @@ use super::model::{
 use super::paths::{method_dir, project_root, validate_method_id};
 use super::storage::{hash_directory, hex, read_manifest};
 use super::validation::validate_method;
+
+fn method_level_config_string(method: &MethodManifest, key: &str) -> Option<String> {
+    let node = MethodWorkflowNode {
+        id: "__method_log__".into(),
+        node_type: "inference".into(),
+        depends_on: vec![],
+        config: serde_yaml::Value::Null,
+    };
+    config_string(&node, method, key, None)
+}
 
 pub(crate) async fn insert_execution(
     db: &DatabaseState,
@@ -40,6 +53,16 @@ pub(crate) async fn insert_execution(
     .map_err(|e| format!("Failed to create method execution: {}", e))?;
 
     let execution_id = result.last_insert_rowid();
+    tracing::info!(
+        execution_id,
+        method_id = %method.id,
+        content_hash,
+        nodes = method.workflow.nodes.len(),
+        provider = ?method_level_config_string(method, "provider"),
+        server_url = ?method_level_config_string(method, "server_url"),
+        model_values = ?model_values(method),
+        "Created Method execution"
+    );
     for node in &method.workflow.nodes {
         sqlx::query(
             r#"
@@ -274,6 +297,46 @@ pub(crate) async fn create_inference_job_for_node(
         node.id,
         name_suffix.map(|suffix| format!("-{}", suffix)).unwrap_or_default()
     );
+    let provider =
+        config_string(node, method, "provider", Some("Local")).unwrap_or_else(|| "Local".into());
+    let model = model_override
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| config_string(node, method, "model", Some("")).unwrap_or_default());
+    let server_url = config_string(node, method, "server_url", Some("")).unwrap_or_default();
+    let output_mode = config_string(node, method, "output_mode", Some("Unstructured")).unwrap();
+    let temperature = config_f64(node, method, "temperature");
+    let max_tokens = config_i32(node, method, "max_tokens", None);
+    let samples = config_i32(node, method, "samples", Some(1)).unwrap_or(1);
+    let strategy = config_string(node, method, "strategy", Some("single")).unwrap();
+    if server_url.trim().is_empty() {
+        tracing::warn!(
+            execution_id,
+            method_id = %method.id,
+            node_id = %node.id,
+            provider = %provider,
+            model = %model,
+            model_override = ?model_override,
+            "Creating Method inference job with an empty server_url"
+        );
+    }
+    tracing::info!(
+        execution_id,
+        method_id = %method.id,
+        node_id = %node.id,
+        job_name = %name,
+        provider = %provider,
+        model = %model,
+        server_url = %server_url,
+        output_mode = %output_mode,
+        temperature = ?temperature,
+        max_tokens = ?max_tokens,
+        samples,
+        strategy = %strategy,
+        prompt_file = %prompt_file,
+        data_source = %data_source,
+        json_schema_file = ?json_schema_file,
+        "Creating Method inference job"
+    );
     let result = sqlx::query(
         r#"
         INSERT INTO inference_jobs (
@@ -289,19 +352,15 @@ pub(crate) async fn create_inference_job_for_node(
     .bind(name)
     .bind(prompt_file)
     .bind(data_source)
-    .bind(config_string(node, method, "provider", Some("Local")).unwrap_or_else(|| "Local".into()))
-    .bind(
-        model_override
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| config_string(node, method, "model", Some("")).unwrap_or_default()),
-    )
-    .bind(config_string(node, method, "server_url", Some("")).unwrap_or_default())
-    .bind(config_string(node, method, "output_mode", Some("Unstructured")).unwrap())
-    .bind(config_f64(node, method, "temperature"))
-    .bind(config_i32(node, method, "max_tokens", None))
+    .bind(provider)
+    .bind(model)
+    .bind(server_url)
+    .bind(output_mode)
+    .bind(temperature)
+    .bind(max_tokens)
     .bind(config_i32(node, method, "thinking_budget", None))
-    .bind(config_i32(node, method, "samples", Some(1)).unwrap_or(1))
-    .bind(config_string(node, method, "strategy", Some("single")).unwrap())
+    .bind(samples)
+    .bind(strategy)
     .bind(json_schema_file)
     .execute(&db.pool())
     .await
@@ -508,6 +567,16 @@ pub(crate) async fn run_inference_agent(
     execution_id: i64,
 ) -> Result<String, String> {
     let models = model_values(method);
+    tracing::info!(
+        execution_id,
+        method_id = %method.id,
+        node_id = %node.id,
+        models = ?models,
+        provider = ?config_string(node, method, "provider", None),
+        server_url = ?config_string(node, method, "server_url", None),
+        model = ?config_string(node, method, "model", None),
+        "Running Method inference node"
+    );
     if models.len() <= 1 {
         let model_name = models
             .first()
@@ -776,6 +845,268 @@ pub(crate) async fn wait_if_paused(
     Ok(())
 }
 
+#[derive(Clone)]
+struct MethodGraphExecutionState {
+    app: AppHandle,
+    db: DatabaseState,
+    method: MethodManifest,
+    execution_id: i64,
+    control: MethodExecutionControl,
+    node_outputs: Arc<TokioMutex<HashMap<String, String>>>,
+    had_not_implemented: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+}
+
+struct MethodGraphTask {
+    id: String,
+    node: MethodWorkflowNode,
+    state: MethodGraphExecutionState,
+    next_action: NextAction,
+}
+
+impl MethodGraphTask {
+    fn new(
+        node: MethodWorkflowNode,
+        state: MethodGraphExecutionState,
+        next_action: NextAction,
+    ) -> Self {
+        Self { id: node.id.clone(), node, state, next_action }
+    }
+
+    async fn cancel_before_start(&self) -> Result<TaskResult, GraphError> {
+        update_node_status(
+            &self.state.db,
+            self.state.execution_id,
+            &self.node.id,
+            "cancelled",
+            None,
+            None,
+        )
+        .await
+        .map_err(GraphError::TaskExecutionFailed)?;
+        update_execution_status(&self.state.db, self.state.execution_id, "cancelled", None)
+            .await
+            .map_err(GraphError::TaskExecutionFailed)?;
+        insert_event(
+            &self.state.app,
+            &self.state.db,
+            self.state.execution_id,
+            Some(&self.node.id),
+            "execution_cancelled",
+            serde_json::json!({}),
+        )
+        .await
+        .map_err(GraphError::TaskExecutionFailed)?;
+        self.state.cancelled.store(true, Ordering::SeqCst);
+        Ok(TaskResult::new(Some("Execution cancelled".into()), NextAction::End))
+    }
+}
+
+#[async_trait]
+impl Task for MethodGraphTask {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    async fn run(&self, _context: Context) -> graph_flow::Result<TaskResult> {
+        wait_if_paused(
+            &self.state.app,
+            &self.state.db,
+            self.state.execution_id,
+            &self.state.control,
+        )
+        .await
+        .map_err(GraphError::TaskExecutionFailed)?;
+        if self.state.control.cancel_requested.load(Ordering::SeqCst) {
+            return self.cancel_before_start().await;
+        }
+
+        update_node_status(
+            &self.state.db,
+            self.state.execution_id,
+            &self.node.id,
+            "running",
+            None,
+            None,
+        )
+        .await
+        .map_err(GraphError::TaskExecutionFailed)?;
+        insert_event(
+            &self.state.app,
+            &self.state.db,
+            self.state.execution_id,
+            Some(&self.node.id),
+            "node_started",
+            serde_json::json!({ "nodeType": self.node.node_type }),
+        )
+        .await
+        .map_err(GraphError::TaskExecutionFailed)?;
+
+        let node_outputs = self.state.node_outputs.lock().await.clone();
+        let result = match self.node.node_type.as_str() {
+            "inference" => {
+                run_inference_agent(
+                    &self.state.app,
+                    &self.state.db,
+                    &self.state.method,
+                    &self.node,
+                    self.state.execution_id,
+                )
+                .await
+            }
+            "transform" => {
+                run_transform_agent(
+                    &self.state.app,
+                    &self.state.db,
+                    &self.state.method,
+                    &self.node,
+                    self.state.execution_id,
+                    &node_outputs,
+                )
+                .await
+            }
+            "eval"
+                if method_file_by_kind(&self.state.method, "script").is_some()
+                    || config_string(&self.node, &self.state.method, "script_file", None)
+                        .is_some() =>
+            {
+                run_transform_agent(
+                    &self.state.app,
+                    &self.state.db,
+                    &self.state.method,
+                    &self.node,
+                    self.state.execution_id,
+                    &node_outputs,
+                )
+                .await
+            }
+            "aggregate" => {
+                run_aggregate_agent(
+                    &self.state.db,
+                    self.state.execution_id,
+                    &self.node,
+                    &node_outputs,
+                )
+                .await
+            }
+            "analysis" => {
+                run_analysis_agent(
+                    &self.state.db,
+                    self.state.execution_id,
+                    &self.node,
+                    &node_outputs,
+                )
+                .await
+            }
+            "eval" => {
+                self.state.had_not_implemented.store(true, Ordering::SeqCst);
+                let artifact =
+                    run_not_implemented_agent(&self.state.db, self.state.execution_id, &self.node)
+                        .await
+                        .map_err(GraphError::TaskExecutionFailed)?;
+                update_node_status(
+                    &self.state.db,
+                    self.state.execution_id,
+                    &self.node.id,
+                    "not_implemented",
+                    Some(&artifact),
+                    Some("Agent implementation is not available yet"),
+                )
+                .await
+                .map_err(GraphError::TaskExecutionFailed)?;
+                insert_event(
+                    &self.state.app,
+                    &self.state.db,
+                    self.state.execution_id,
+                    Some(&self.node.id),
+                    "node_not_implemented",
+                    serde_json::json!({ "nodeType": self.node.node_type, "artifact": artifact }),
+                )
+                .await
+                .map_err(GraphError::TaskExecutionFailed)?;
+                return Ok(TaskResult::new(Some(artifact), self.next_action.clone()));
+            }
+            other => Err(format!("Unknown method node type '{}'", other)),
+        };
+
+        match result {
+            Ok(output_ref) => {
+                self.state
+                    .node_outputs
+                    .lock()
+                    .await
+                    .insert(self.node.id.clone(), output_ref.clone());
+                update_node_status(
+                    &self.state.db,
+                    self.state.execution_id,
+                    &self.node.id,
+                    "completed",
+                    Some(&output_ref),
+                    None,
+                )
+                .await
+                .map_err(GraphError::TaskExecutionFailed)?;
+                insert_event(
+                    &self.state.app,
+                    &self.state.db,
+                    self.state.execution_id,
+                    Some(&self.node.id),
+                    "node_completed",
+                    serde_json::json!({ "outputRef": output_ref }),
+                )
+                .await
+                .map_err(GraphError::TaskExecutionFailed)?;
+                Ok(TaskResult::new(Some(output_ref), self.next_action.clone()))
+            }
+            Err(e) => {
+                update_node_status(
+                    &self.state.db,
+                    self.state.execution_id,
+                    &self.node.id,
+                    "failed",
+                    None,
+                    Some(&e),
+                )
+                .await
+                .map_err(GraphError::TaskExecutionFailed)?;
+                update_execution_status(
+                    &self.state.db,
+                    self.state.execution_id,
+                    "failed",
+                    Some(&e),
+                )
+                .await
+                .map_err(GraphError::TaskExecutionFailed)?;
+                insert_event(
+                    &self.state.app,
+                    &self.state.db,
+                    self.state.execution_id,
+                    Some(&self.node.id),
+                    "node_failed",
+                    serde_json::json!({ "error": e }),
+                )
+                .await
+                .map_err(GraphError::TaskExecutionFailed)?;
+                self.state.failed.store(true, Ordering::SeqCst);
+                Err(GraphError::TaskExecutionFailed(e))
+            }
+        }
+    }
+}
+
+pub(crate) fn method_graph_execution_plan(
+    nodes: &[MethodWorkflowNode],
+) -> Result<(Vec<String>, Vec<(String, String)>), String> {
+    let ordered_nodes = topological_nodes(nodes)?;
+    let task_ids = ordered_nodes.iter().map(|node| node.id.clone()).collect::<Vec<_>>();
+    let edges = ordered_nodes
+        .windows(2)
+        .map(|pair| (pair[0].id.clone(), pair[1].id.clone()))
+        .collect::<Vec<_>>();
+    Ok((task_ids, edges))
+}
+
 pub(crate) async fn orchestrate_method_execution(
     app: AppHandle,
     db: DatabaseState,
@@ -794,114 +1125,69 @@ pub(crate) async fn orchestrate_method_execution(
     )
     .await?;
 
-    let mut had_not_implemented = false;
-    let mut node_outputs: HashMap<String, String> = HashMap::new();
-    for node in topological_nodes(&method.workflow.nodes)? {
-        wait_if_paused(&app, &db, execution_id, &control).await?;
-        if control.cancel_requested.load(Ordering::SeqCst) {
-            update_node_status(&db, execution_id, &node.id, "cancelled", None, None).await?;
-            update_execution_status(&db, execution_id, "cancelled", None).await?;
-            insert_event(
-                &app,
-                &db,
-                execution_id,
-                Some(&node.id),
-                "execution_cancelled",
-                serde_json::json!({}),
-            )
-            .await?;
-            return Ok(());
-        }
-        update_node_status(&db, execution_id, &node.id, "running", None, None).await?;
-        insert_event(
-            &app,
-            &db,
-            execution_id,
-            Some(&node.id),
-            "node_started",
-            serde_json::json!({ "nodeType": node.node_type }),
-        )
-        .await?;
+    let (task_ids, graph_edges) = method_graph_execution_plan(&method.workflow.nodes)?;
+    let ordered_by_id = topological_nodes(&method.workflow.nodes)?
+        .into_iter()
+        .map(|node| (node.id.clone(), node))
+        .collect::<HashMap<_, _>>();
+    let ordered_nodes = task_ids
+        .iter()
+        .map(|id| {
+            ordered_by_id
+                .get(id)
+                .cloned()
+                .ok_or_else(|| format!("method.workflow node '{}' disappeared", id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(start_node) = ordered_nodes.first() else {
+        return Err("method.workflow.nodes must contain at least one node".into());
+    };
+    let graph_id = format!("method-execution-{}", execution_id);
+    let state = MethodGraphExecutionState {
+        app: app.clone(),
+        db: db.clone(),
+        method: method.clone(),
+        execution_id,
+        control,
+        node_outputs: Arc::new(TokioMutex::new(HashMap::new())),
+        had_not_implemented: Arc::new(AtomicBool::new(false)),
+        cancelled: Arc::new(AtomicBool::new(false)),
+        failed: Arc::new(AtomicBool::new(false)),
+    };
 
-        let result = match node.node_type.as_str() {
-            "inference" => run_inference_agent(&app, &db, &method, &node, execution_id).await,
-            "transform" => {
-                run_transform_agent(&app, &db, &method, &node, execution_id, &node_outputs).await
-            }
-            "eval"
-                if method_file_by_kind(&method, "script").is_some()
-                    || config_string(&node, &method, "script_file", None).is_some() =>
-            {
-                run_transform_agent(&app, &db, &method, &node, execution_id, &node_outputs).await
-            }
-            "aggregate" => run_aggregate_agent(&db, execution_id, &node, &node_outputs).await,
-            "analysis" => run_analysis_agent(&db, execution_id, &node, &node_outputs).await,
-            "eval" => {
-                had_not_implemented = true;
-                let artifact = run_not_implemented_agent(&db, execution_id, &node).await?;
-                update_node_status(
-                    &db,
-                    execution_id,
-                    &node.id,
-                    "not_implemented",
-                    Some(&artifact),
-                    Some("Agent implementation is not available yet"),
-                )
-                .await?;
-                insert_event(
-                    &app,
-                    &db,
-                    execution_id,
-                    Some(&node.id),
-                    "node_not_implemented",
-                    serde_json::json!({ "nodeType": node.node_type, "artifact": artifact }),
-                )
-                .await?;
-                continue;
-            }
-            other => Err(format!("Unknown method node type '{}'", other)),
+    let mut builder = GraphBuilder::new(graph_id).set_start_task(start_node.id.clone());
+    for (index, node) in ordered_nodes.iter().cloned().enumerate() {
+        let next_action = if index + 1 == ordered_nodes.len() {
+            NextAction::End
+        } else {
+            NextAction::ContinueAndExecute
         };
-
-        match result {
-            Ok(output_ref) => {
-                node_outputs.insert(node.id.clone(), output_ref.clone());
-                update_node_status(
-                    &db,
-                    execution_id,
-                    &node.id,
-                    "completed",
-                    Some(&output_ref),
-                    None,
-                )
-                .await?;
-                insert_event(
-                    &app,
-                    &db,
-                    execution_id,
-                    Some(&node.id),
-                    "node_completed",
-                    serde_json::json!({ "outputRef": output_ref }),
-                )
-                .await?;
-            }
-            Err(e) => {
-                update_node_status(&db, execution_id, &node.id, "failed", None, Some(&e)).await?;
-                update_execution_status(&db, execution_id, "failed", Some(&e)).await?;
-                insert_event(
-                    &app,
-                    &db,
-                    execution_id,
-                    Some(&node.id),
-                    "node_failed",
-                    serde_json::json!({ "error": e }),
-                )
-                .await?;
-                return Ok(());
-            }
-        }
+        builder =
+            builder.add_task(Arc::new(MethodGraphTask::new(node, state.clone(), next_action)));
+    }
+    for (from, to) in graph_edges {
+        builder = builder.add_edge(from, to);
     }
 
-    let status = if had_not_implemented { "completed_with_errors" } else { "completed" };
+    let graph = builder.build();
+    let mut session =
+        Session::new_from_task(format!("method-execution-{}", execution_id), &start_node.id);
+    if let Err(e) = graph.execute_session(&mut session).await {
+        if state.cancelled.load(Ordering::SeqCst) || state.failed.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+        return Err(e.to_string());
+    }
+
+    if state.cancelled.load(Ordering::SeqCst) || state.failed.load(Ordering::SeqCst) {
+        return Ok(());
+    }
+
+    let status = if state.had_not_implemented.load(Ordering::SeqCst) {
+        "completed_with_errors"
+    } else {
+        "completed"
+    };
     update_execution_status(&db, execution_id, status, None).await?;
     insert_event(
         &app,
@@ -928,6 +1214,17 @@ pub async fn execute_method(
     let method = read_manifest(&folder)?;
     validate_method(&method)?;
     let content_hash = hash_directory(&folder)?;
+    tracing::info!(
+        project_root = %root.display(),
+        method_id = %method.id,
+        title = %method.title,
+        folder = %folder.display(),
+        content_hash = %content_hash,
+        provider = ?method_level_config_string(&method, "provider"),
+        server_url = ?method_level_config_string(&method, "server_url"),
+        model_values = ?model_values(&method),
+        "Starting Method execution command"
+    );
     let execution_id = insert_execution(&db, &method, &content_hash).await?;
     let control = MethodExecutionControl::new();
     manager.controls.lock().await.insert(execution_id, control.clone());

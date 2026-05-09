@@ -11,10 +11,13 @@ use super::config::{load_nightshift_config, resolve_api_key_id};
 use super::model::{
     AttachMethodResourceInput, CreateMethodDraftInput, DetachMethodResourceInput, MethodDraft,
     MethodDraftEdge, MethodDraftIssue, MethodDraftNode, MethodDraftReadiness, MethodDraftResource,
-    MethodLifecycleState, ReplaceMethodDraftGraphInput, ResolveApiKeyResourceInput,
-    ResolveCollectionResourceInput, UpdateMethodDraftMetadataInput,
+    MethodFileRef, MethodLifecycleState, MethodManifest, MethodSummary, MethodWorkflow,
+    MethodWorkflowNode, ReplaceMethodDraftGraphInput, ResolveApiKeyResourceInput,
+    ResolveCollectionResourceInput, UpdateMethodDraftExecutionConfigInput,
+    UpdateMethodDraftMetadataInput,
 };
 use super::paths::{project_root, require_nonempty};
+use super::storage::save_method_to_project;
 
 const FILE_RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "eval_script"];
 const RESOURCE_KINDS: &[&str] =
@@ -200,10 +203,7 @@ fn resource_is_missing(resource: &MethodDraftResource) -> bool {
         return resource.path.as_deref().is_none_or(|path| path.trim().is_empty());
     }
     matches!(resource.kind.as_str(), "collection" | "api_key")
-        && resource
-            .reference
-            .as_deref()
-            .is_none_or(|reference| reference.trim().is_empty())
+        && resource.reference.as_deref().is_none_or(|reference| reference.trim().is_empty())
 }
 
 fn resource_kind_label(kind: &str) -> &'static str {
@@ -310,6 +310,126 @@ fn write_draft_to_root(root: &Path, draft: &MethodDraft) -> Result<(), String> {
     let text = serde_json::to_string_pretty(draft)
         .map_err(|e| format!("Failed to serialize Method draft: {}", e))?;
     fs::write(&path, text).map_err(|e| format!("Failed to write Method draft: {}", e))
+}
+
+fn slug_for_method_id(value: &str) -> String {
+    let slug = value
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        format!("method-{}", Uuid::new_v4())
+    } else {
+        slug
+    }
+}
+
+fn draft_resource_file_kind(kind: &str) -> Option<&'static str> {
+    match kind {
+        "prompt" => Some("prompt"),
+        "data" => Some("data"),
+        "json_schema" => Some("schema"),
+        "eval_script" => Some("script"),
+        _ => None,
+    }
+}
+
+fn json_to_yaml(value: serde_json::Value) -> Result<serde_yaml::Value, String> {
+    serde_yaml::to_value(value).map_err(|e| format!("Failed to convert draft JSON to YAML: {}", e))
+}
+
+fn copy_json_alias(object: &mut serde_json::Map<String, serde_json::Value>, from: &str, to: &str) {
+    if !object.contains_key(to) {
+        if let Some(value) = object.get(from).cloned() {
+            object.insert(to.into(), value);
+        }
+    }
+}
+
+fn normalize_provider_config(mut value: serde_json::Value) -> serde_json::Value {
+    if let serde_json::Value::Object(ref mut object) = value {
+        copy_json_alias(object, "serverUrl", "server_url");
+    }
+    value
+}
+
+fn normalize_parameters(mut value: serde_json::Value) -> serde_json::Value {
+    if let serde_json::Value::Object(ref mut object) = value {
+        copy_json_alias(object, "modelValues", "model_values");
+        copy_json_alias(object, "maxTokens", "max_tokens");
+    }
+    value
+}
+
+pub(crate) fn draft_to_method_manifest(draft: &MethodDraft) -> Result<MethodManifest, String> {
+    let refreshed = refresh_readiness(draft.clone());
+    if !refreshed.readiness.blockers.is_empty() {
+        let messages = refreshed
+            .readiness
+            .blockers
+            .iter()
+            .map(|blocker| blocker.message.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(format!("Current Method draft is not ready to save: {}", messages));
+    }
+    let normalized_parameters = normalize_parameters(refreshed.parameters.clone());
+    let normalized_provider = normalize_provider_config(refreshed.provider_config.clone());
+    tracing::info!(
+        draft_id = %refreshed.id,
+        title = %refreshed.title,
+        nodes = refreshed.nodes.len(),
+        resources = refreshed.resources.len(),
+        provider = ?normalized_provider.get("provider"),
+        server_url = ?normalized_provider.get("server_url"),
+        model = ?normalized_provider.get("model"),
+        model_values = ?normalized_parameters.get("model_values"),
+        "Converting Method draft to executable manifest"
+    );
+
+    let files = refreshed
+        .resources
+        .iter()
+        .filter_map(|resource| {
+            draft_resource_file_kind(&resource.kind).map(|kind| {
+                let path = resource.path.clone().unwrap_or_default();
+                MethodFileRef { id: resource.id.clone(), kind: kind.into(), path }
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let depends_by_node =
+        refreshed.edges.iter().fold(HashMap::<String, Vec<String>>::new(), |mut acc, edge| {
+            acc.entry(edge.to.clone()).or_default().push(edge.from.clone());
+            acc
+        });
+    let nodes = refreshed
+        .nodes
+        .iter()
+        .map(|node| {
+            Ok(MethodWorkflowNode {
+                id: node.id.clone(),
+                node_type: node.node_type.clone(),
+                depends_on: depends_by_node.get(&node.id).cloned().unwrap_or_default(),
+                config: json_to_yaml(node.config.clone())?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    Ok(MethodManifest {
+        schema_version: refreshed.schema_version,
+        id: slug_for_method_id(&refreshed.title),
+        title: refreshed.title.clone(),
+        objective: Some(refreshed.objective.clone()),
+        files,
+        workflow: MethodWorkflow { nodes },
+        parameters: json_to_yaml(normalized_parameters)?,
+        provider: json_to_yaml(normalized_provider)?,
+    })
 }
 
 fn read_or_default_draft(root: &Path) -> Result<MethodDraft, String> {
@@ -437,6 +557,31 @@ pub(crate) fn update_draft_metadata_for_root(
         draft.objective = objective.trim().to_string();
     }
     let draft = refresh_readiness(draft);
+    write_draft_to_root(root, &draft)?;
+    Ok(draft)
+}
+
+pub(crate) fn update_draft_execution_config_for_root(
+    root: &Path,
+    input: UpdateMethodDraftExecutionConfigInput,
+) -> Result<MethodDraft, String> {
+    let mut draft = read_or_default_draft(root)?;
+    if let Some(provider_config) = input.provider_config {
+        draft.provider_config = normalize_provider_config(provider_config);
+    }
+    if let Some(parameters) = input.parameters {
+        draft.parameters = normalize_parameters(parameters);
+    }
+    let draft = refresh_readiness(draft);
+    tracing::info!(
+        project_root = %root.display(),
+        draft_id = %draft.id,
+        provider = ?draft.provider_config.get("provider"),
+        server_url = ?draft.provider_config.get("server_url"),
+        model = ?draft.provider_config.get("model"),
+        model_values = ?draft.parameters.get("model_values"),
+        "Updated Method draft execution config"
+    );
     write_draft_to_root(root, &draft)?;
     Ok(draft)
 }
@@ -584,6 +729,33 @@ pub(crate) fn reset_draft_for_root(root: &Path) -> Result<Option<MethodDraft>, S
     Ok(None)
 }
 
+pub(crate) async fn save_current_draft_for_root(
+    db: &DatabaseState,
+    root: &Path,
+) -> Result<MethodSummary, String> {
+    let draft =
+        read_draft_from_root(root)?.ok_or_else(|| "No Method draft exists yet.".to_string())?;
+    tracing::info!(
+        project_root = %root.display(),
+        draft_id = %draft.id,
+        title = %draft.title,
+        provider = ?draft.provider_config.get("provider"),
+        server_url = ?draft.provider_config.get("server_url"),
+        model = ?draft.provider_config.get("model"),
+        model_values = ?draft.parameters.get("model_values"),
+        "Saving current Method draft"
+    );
+    let method = draft_to_method_manifest(&draft)?;
+    let summary = save_method_to_project(db, root, method).await?;
+    tracing::info!(
+        method_id = %summary.id,
+        folder_path = %summary.folder_path,
+        content_hash = %summary.content_hash,
+        "Saved current Method draft"
+    );
+    Ok(summary)
+}
+
 #[tauri::command]
 pub async fn get_current_method_draft(
     db: State<'_, DatabaseState>,
@@ -612,6 +784,18 @@ pub async fn update_method_draft_metadata(
 ) -> Result<MethodDraft, String> {
     let root = project_root(&db)?;
     let draft = update_draft_metadata_for_root(&root, input)?;
+    emit_draft(&app, Some(draft.clone()))?;
+    Ok(draft)
+}
+
+#[tauri::command]
+pub async fn update_method_draft_execution_config(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    input: UpdateMethodDraftExecutionConfigInput,
+) -> Result<MethodDraft, String> {
+    let root = project_root(&db)?;
+    let draft = update_draft_execution_config_for_root(&root, input)?;
     emit_draft(&app, Some(draft.clone()))?;
     Ok(draft)
 }
@@ -690,4 +874,12 @@ pub async fn reset_method_draft(
     let root = project_root(&db)?;
     let draft = reset_draft_for_root(&root)?;
     emit_draft(&app, draft)
+}
+
+#[tauri::command]
+pub async fn save_current_method_draft(
+    db: State<'_, DatabaseState>,
+) -> Result<MethodSummary, String> {
+    let root = project_root(&db)?;
+    save_current_draft_for_root(&db, &root).await
 }

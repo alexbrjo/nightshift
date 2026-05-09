@@ -186,6 +186,15 @@ pub struct UpdateMethodDraftMetadataInput {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct UpdateMethodDraftExecutionConfigInput {
+    #[serde(default)]
+    pub provider_config: Option<serde_json::Value>,
+    #[serde(default)]
+    pub parameters: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReplaceMethodDraftGraphInput {
     pub nodes: Vec<MethodDraftNode>,
     pub edges: Vec<MethodDraftEdge>,

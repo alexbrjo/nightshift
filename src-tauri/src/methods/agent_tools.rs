@@ -6,17 +6,18 @@ use super::draft::{
     attach_resource_for_root, create_draft_for_root, detach_resource_for_root,
     explain_current_draft_for_root, get_current_draft_for_root, replace_draft_graph_for_root,
     reset_draft_for_root, resolve_api_key_resource_for_root, resolve_collection_resource_for_root,
-    update_draft_metadata_for_root,
+    update_draft_execution_config_for_root, update_draft_metadata_for_root,
 };
 use super::model::{
     AttachMethodResourceInput, CreateMethodDraftInput, DetachMethodResourceInput,
     ReplaceMethodDraftGraphInput, ResolveApiKeyResourceInput, ResolveCollectionResourceInput,
-    UpdateMethodDraftMetadataInput,
+    UpdateMethodDraftExecutionConfigInput, UpdateMethodDraftMetadataInput,
 };
 
 const GET_CURRENT_DRAFT: &str = "get_current_method_draft";
 const CREATE_DRAFT: &str = "create_method_draft";
 const UPDATE_METADATA: &str = "update_method_draft_metadata";
+const UPDATE_EXECUTION_CONFIG: &str = "update_method_draft_execution_config";
 const REPLACE_GRAPH: &str = "replace_method_draft_graph";
 const ATTACH_RESOURCE: &str = "attach_method_resource";
 const DETACH_RESOURCE: &str = "detach_method_resource";
@@ -52,6 +53,30 @@ pub fn method_function_tools() -> Vec<Value> {
                 "title": { "type": "string", "description": "Concise Method title." },
                 "objective": { "type": "string", "description": "The benchmark or experiment objective." }
             }), vec!["title", "objective"]),
+            "strict": true
+        }),
+        json!({
+            "type": "function",
+            "name": UPDATE_EXECUTION_CONFIG,
+            "description": "Update durable execution configuration for the current draft Method, such as provider config and parameters. Use this before save/freeze when execution requires a model name.",
+            "parameters": object_schema(json!({
+                "providerConfig": object_schema(json!({
+                    "provider": { "type": ["string", "null"], "description": "Provider label, for example Local." },
+                    "model": { "type": ["string", "null"], "description": "Default model name used by inference nodes." },
+                    "server_url": { "type": ["string", "null"], "description": "Local inference server URL." },
+                    "serverUrl": { "type": ["string", "null"], "description": "Local inference server URL." }
+                }), vec!["provider", "model", "server_url", "serverUrl"]),
+                "parameters": object_schema(json!({
+                    "model": { "type": ["string", "null"], "description": "Single model name." },
+                    "model_values": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Model sweep values." },
+                    "modelValues": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Model sweep values." },
+                    "temperature": { "type": ["number", "null"] },
+                    "max_tokens": { "type": ["integer", "null"] },
+                    "maxTokens": { "type": ["integer", "null"] },
+                    "samples": { "type": ["integer", "null"] },
+                    "strategy": { "type": ["string", "null"] }
+                }), vec!["model", "model_values", "modelValues", "temperature", "max_tokens", "maxTokens", "samples", "strategy"])
+            }), vec!["providerConfig", "parameters"]),
             "strict": true
         }),
         json!({
@@ -179,6 +204,11 @@ pub fn dispatch_method_tool(root: &Path, name: &str, arguments: Value) -> Result
                 .map_err(|e| format!("Invalid metadata arguments: {}", e))?;
             Ok(json!({ "draft": update_draft_metadata_for_root(root, input)? }))
         }
+        UPDATE_EXECUTION_CONFIG => {
+            let input: UpdateMethodDraftExecutionConfigInput = serde_json::from_value(arguments)
+                .map_err(|e| format!("Invalid execution config arguments: {}", e))?;
+            Ok(json!({ "draft": update_draft_execution_config_for_root(root, input)? }))
+        }
         REPLACE_GRAPH => {
             let input: ReplaceMethodDraftGraphInput = serde_json::from_value(arguments)
                 .map_err(|e| format!("Invalid graph arguments: {}", e))?;
@@ -230,6 +260,27 @@ mod tests {
         assert!(tools.iter().any(|tool| {
             tool.get("name").and_then(Value::as_str) == Some("replace_method_draft_graph")
         }));
+    }
+
+    #[test]
+    fn execution_config_tool_schema_is_strict_for_nested_objects() {
+        let tools = method_function_tools();
+        let tool = tools
+            .iter()
+            .find(|tool| {
+                tool.get("name").and_then(Value::as_str)
+                    == Some("update_method_draft_execution_config")
+            })
+            .unwrap();
+
+        let parameters = tool.get("parameters").unwrap();
+        assert_eq!(parameters.get("additionalProperties").and_then(Value::as_bool), Some(false));
+        let properties = parameters.get("properties").and_then(Value::as_object).unwrap();
+        for key in ["providerConfig", "parameters"] {
+            let nested = properties.get(key).unwrap();
+            assert_eq!(nested.get("type").and_then(Value::as_str), Some("object"));
+            assert_eq!(nested.get("additionalProperties").and_then(Value::as_bool), Some(false));
+        }
     }
 
     #[test]
