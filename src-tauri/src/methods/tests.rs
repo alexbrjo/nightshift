@@ -17,8 +17,7 @@ use super::draft::{
 };
 use super::execution::{
     create_inference_job_for_node, create_transform_job_for_node, insert_artifact,
-    insert_execution, method_graph_execution_plan, read_method_artifact_from_db,
-    run_aggregate_agent, topological_nodes,
+    insert_execution, read_method_artifact_from_db, run_aggregate_agent, topological_nodes,
 };
 use super::model::*;
 use super::preflight::preflight_method_for_root;
@@ -657,60 +656,6 @@ fn topological_nodes_orders_dependencies_first() {
         ordered.iter().map(|node| node.id.as_str()).collect::<Vec<_>>(),
         vec!["generate", "aggregate",]
     );
-}
-
-#[test]
-fn method_graph_execution_plan_preserves_workflow_dependencies() {
-    let mut method = sample_method();
-    method.workflow.nodes = vec![
-        MethodWorkflowNode {
-            id: "aggregate".into(),
-            node_type: "aggregate".into(),
-            depends_on: vec!["eval".into()],
-            config: serde_yaml::Value::Null,
-        },
-        MethodWorkflowNode {
-            id: "generate".into(),
-            node_type: "inference".into(),
-            depends_on: vec![],
-            config: serde_yaml::Value::Null,
-        },
-        MethodWorkflowNode {
-            id: "eval".into(),
-            node_type: "eval".into(),
-            depends_on: vec!["generate".into()],
-            config: serde_yaml::Value::Null,
-        },
-        MethodWorkflowNode {
-            id: "summary".into(),
-            node_type: "analysis".into(),
-            depends_on: vec!["eval".into(), "aggregate".into()],
-            config: serde_yaml::Value::Null,
-        },
-    ];
-
-    let (task_ids, edges) = method_graph_execution_plan(&method.workflow.nodes).unwrap();
-
-    assert_eq!(task_ids, vec!["generate", "eval", "aggregate", "summary"]);
-    assert_eq!(
-        edges,
-        vec![
-            ("generate".to_string(), "eval".to_string()),
-            ("eval".to_string(), "aggregate".to_string()),
-            ("eval".to_string(), "summary".to_string()),
-            ("aggregate".to_string(), "summary".to_string())
-        ]
-    );
-}
-
-#[test]
-fn method_graph_execution_plan_rejects_cycles() {
-    let mut method = sample_method();
-    method.workflow.nodes[0].depends_on = vec!["aggregate".into()];
-
-    let err = method_graph_execution_plan(&method.workflow.nodes).unwrap_err();
-
-    assert_eq!(err, "method.workflow could not be ordered");
 }
 
 #[test]

@@ -842,25 +842,6 @@ pub(crate) async fn wait_if_paused(
     Ok(())
 }
 
-pub(crate) fn method_graph_execution_plan(
-    nodes: &[MethodWorkflowNode],
-) -> Result<(Vec<String>, Vec<(String, String)>), String> {
-    let ordered_nodes = topological_nodes(nodes)?;
-    let task_ids = ordered_nodes.iter().map(|node| node.id.clone()).collect::<Vec<_>>();
-    let node_ids = task_ids.iter().cloned().collect::<HashSet<_>>();
-    let edges = ordered_nodes
-        .iter()
-        .flat_map(|node| {
-            let node_id = node.id.clone();
-            node.depends_on
-                .iter()
-                .filter(|dep| node_ids.contains(*dep))
-                .map(move |dep| (dep.clone(), node_id.clone()))
-        })
-        .collect::<Vec<_>>();
-    Ok((task_ids, edges))
-}
-
 async fn mark_execution_cancelled(
     app: &AppHandle,
     db: &DatabaseState,
