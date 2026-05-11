@@ -10,10 +10,11 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type {
-  MethodDraft,
+  MethodDocument,
   MethodDraftIssue,
-  MethodDraftNode,
-  MethodDraftResource,
+  MethodWorkflowNode,
+  MethodDraftReadiness,
+  MethodResource,
   MethodExecutionNodeSummary,
 } from "../database";
 
@@ -28,7 +29,7 @@ const RESOURCE_NODE_GAP = 14;
 const MAX_BUNDLE_RESOURCES = 4;
 
 type MethodGraphNodeData = {
-  draftNode: MethodDraftNode;
+  draftNode: MethodWorkflowNode & { status: string; label: string };
   incomingLabels: string[];
   blockerCount: number;
   warningCount: number;
@@ -38,7 +39,7 @@ type MethodGraphNodeData = {
 };
 
 type MethodGraphResourceData = {
-  resources: MethodDraftResource[];
+  resources: MethodResource[];
 };
 
 type MethodFlowNode = Node<MethodGraphNodeData, "method">;
@@ -69,16 +70,16 @@ function configHints(config: Record<string, unknown> | undefined) {
     .map(([key, value]) => `${key}: ${formatConfigValue(value)}`);
 }
 
-function effectiveConfigHints(draft: MethodDraft, node: MethodDraftNode) {
+function effectiveConfigHints(draft: MethodDocument, node: MethodWorkflowNode) {
   const ownHints = configHints(node.config);
   if (ownHints.length > 0 || node.type !== "inference") return ownHints;
 
   const hints = [
-    ["provider", draft.providerConfig?.provider],
-    ["server_url", draft.providerConfig?.server_url ?? draft.providerConfig?.serverUrl],
-    ["model_values", draft.parameters?.model_values ?? draft.parameters?.modelValues],
+    ["provider", draft.provider?.provider],
+    ["server_url", draft.provider?.server_url],
+    ["model_values", draft.parameters?.model_values],
     ["samples", draft.parameters?.samples],
-    ["max_tokens", draft.parameters?.max_tokens ?? draft.parameters?.maxTokens],
+    ["max_tokens", draft.parameters?.max_tokens],
     ["temperature", draft.parameters?.temperature],
   ]
     .filter(([, value]) => value !== undefined && value !== null && value !== "")
@@ -110,27 +111,29 @@ function resourceKindLabel(kind: string) {
   }
 }
 
-function resourceLocation(resource: MethodDraftResource) {
-  return resource.path || resource.reference || resource.status;
+function resourceLocation(resource: MethodResource) {
+  return resource.path || resource.reference || resourceStatus(resource);
 }
 
-function resourceBundleId(resources: MethodDraftResource[]) {
+function resourceBundleId(resources: MethodResource[]) {
   return `resource:${resources.map((resource) => resource.id).join("+")}`;
 }
 
-function buildNodeOrder(draft: MethodDraft) {
-  const nodeIds = new Set(draft.nodes.map((node) => node.id));
-  const originalIndex = new Map(draft.nodes.map((node, index) => [node.id, index]));
-  const incomingCount = new Map(draft.nodes.map((node) => [node.id, 0]));
+function buildNodeOrder(draft: MethodDocument) {
+  const methodNodes = draft.workflow.nodes;
+  const graphEdges = methodEdges(draft);
+  const nodeIds = new Set(methodNodes.map((node) => node.id));
+  const originalIndex = new Map(methodNodes.map((node, index) => [node.id, index]));
+  const incomingCount = new Map(methodNodes.map((node) => [node.id, 0]));
   const outgoing = new Map<string, string[]>();
 
-  draft.edges.forEach((edge) => {
+  graphEdges.forEach((edge) => {
     if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) return;
     incomingCount.set(edge.to, (incomingCount.get(edge.to) ?? 0) + 1);
     outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to]);
   });
 
-  const queue = draft.nodes
+  const queue = methodNodes
     .filter((node) => incomingCount.get(node.id) === 0)
     .map((node) => node.id);
   const orderedIds: string[] = [];
@@ -146,7 +149,7 @@ function buildNodeOrder(draft: MethodDraft) {
     });
   }
 
-  draft.nodes
+  methodNodes
     .filter((node) => !orderedIds.includes(node.id))
     .sort((left, right) => (originalIndex.get(left.id) ?? 0) - (originalIndex.get(right.id) ?? 0))
     .forEach((node) => orderedIds.push(node.id));
@@ -157,7 +160,7 @@ function buildNodeOrder(draft: MethodDraft) {
 function issueAppliesToNode(
   issue: MethodDraftIssue,
   nodeId: string,
-  resources: MethodDraftResource[],
+  resources: MethodResource[],
 ) {
   return (
     issue.nodeId === nodeId ||
@@ -168,43 +171,97 @@ function issueAppliesToNode(
 function issuesForNode(
   issues: MethodDraftIssue[],
   nodeId: string,
-  resources: MethodDraftResource[],
+  resources: MethodResource[],
 ) {
   return issues.filter((issue) => issueAppliesToNode(issue, nodeId, resources));
 }
 
 function nodeWithExecutionStatus(
-  node: MethodDraftNode,
+  node: MethodWorkflowNode,
   executionNodes: MethodExecutionNodeSummary[],
-): MethodDraftNode {
+): MethodWorkflowNode & { status?: string } {
   const executionNode = executionNodes.find((candidate) => candidate.nodeId === node.id);
   if (!executionNode) return node;
   return { ...node, status: executionNode.status };
 }
 
+function methodEdges(draft: MethodDocument) {
+  return draft.workflow.nodes.flatMap((node) =>
+    (node.depends_on ?? []).map((dep) => ({ from: dep, to: node.id })),
+  );
+}
+
+function resourceConsumers(resource: MethodResource) {
+  return resource.consumed_by ?? [];
+}
+
+function resourceStatus(resource: MethodResource) {
+  return resource.path || resource.reference ? "attached" : "missing";
+}
+
+function deriveMethodReadiness(draft: MethodDocument): MethodDraftReadiness {
+  const blockers: MethodDraftIssue[] = [];
+  const warnings: MethodDraftIssue[] = [];
+  if (!draft.title.trim() || draft.title === "Untitled Method") {
+    blockers.push({ code: "missing_title", message: "Add a specific Method title." });
+  }
+  if (!draft.objective.trim()) {
+    blockers.push({ code: "missing_objective", message: "Describe the benchmark or experiment objective." });
+  }
+  if (draft.workflow.nodes.length === 0) {
+    blockers.push({ code: "missing_nodes", message: "Add at least one Method node before validation or execution." });
+  }
+  if (draft.resources.length === 0) {
+    warnings.push({ code: "missing_resources", message: "No resources are attached yet." });
+  }
+  for (const resource of draft.resources) {
+    if (resourceStatus(resource) === "missing") {
+      blockers.push({
+        code: "missing_resource",
+        message: `Attach ${resourceKindLabel(resource.kind).toLowerCase()} for '${resource.label || resource.id}'.`,
+        resourceId: resource.id,
+        nodeId: resourceConsumers(resource)[0],
+      });
+    }
+  }
+  return { status: blockers.length ? "drafting" : "ready", blockers, warnings };
+}
+
+function derivedNodeStatus(node: MethodWorkflowNode & { status?: string }, blockers: MethodDraftIssue[]) {
+  if (node.status) return node.status;
+  return blockers.length > 0 ? "blocked" : "ready";
+}
+
 export function buildMethodGraphElements(
-  draft: MethodDraft,
+  draft: MethodDocument,
   executionNodes: MethodExecutionNodeSummary[] = [],
 ): MethodGraphElements {
-  const nodeById = new Map(draft.nodes.map((node) => [node.id, node]));
+  const methodNodes = draft.workflow.nodes;
+  const graphEdges = methodEdges(draft);
+  const readiness = deriveMethodReadiness(draft);
+  const nodeById = new Map(methodNodes.map((node) => [node.id, node]));
   const order = buildNodeOrder(draft);
 
-  const nodes: MethodFlowNode[] = draft.nodes.map((node) => {
+  const nodes: MethodFlowNode[] = methodNodes.map((node) => {
     const displayNode = nodeWithExecutionStatus(node, executionNodes);
     const row = order.get(node.id) ?? 0;
-    const incomingLabels = draft.edges
+    const incomingLabels = graphEdges
       .filter((edge) => edge.to === node.id)
       .map((edge) => nodeById.get(edge.from)?.label || edge.from);
-    const resources = draft.resources.filter((resource) => resource.consumedBy.includes(node.id));
-    const blockers = issuesForNode(draft.readiness.blockers, node.id, resources);
-    const warnings = issuesForNode(draft.readiness.warnings, node.id, resources);
+    const resources = draft.resources.filter((resource) => resourceConsumers(resource).includes(node.id));
+    const blockers = issuesForNode(readiness.blockers, node.id, resources);
+    const warnings = issuesForNode(readiness.warnings, node.id, resources);
 
     return {
       id: node.id,
       type: "method",
       position: { x: METHOD_NODE_X, y: row * ROW_GAP },
       data: {
-        draftNode: displayNode,
+        draftNode: {
+          ...displayNode,
+          label: displayNode.label || displayNode.id,
+          status: derivedNodeStatus(displayNode, blockers),
+        } as MethodWorkflowNode & { status: string; label: string },
         incomingLabels,
         blockerCount: blockers.length,
         warningCount: warnings.length,
@@ -216,9 +273,9 @@ export function buildMethodGraphElements(
   });
 
   const nodeDataById = new Map(nodes.map((node) => [node.id, node.data]));
-  const resourceGroups = new Map<string, MethodDraftResource[]>();
+  const resourceGroups = new Map<string, MethodResource[]>();
   draft.resources.forEach((resource) => {
-    const validConsumers = resource.consumedBy.filter((nodeId) => nodeById.has(nodeId)).sort();
+    const validConsumers = resourceConsumers(resource).filter((nodeId) => nodeById.has(nodeId)).sort();
     const key = validConsumers.length ? validConsumers.join("|") : `unused:${resource.id}`;
     resourceGroups.set(key, [...(resourceGroups.get(key) ?? []), resource]);
   });
@@ -254,7 +311,7 @@ export function buildMethodGraphElements(
       data: { resources: group.resources },
     };
   });
-  const edges: Edge[] = draft.edges.map((edge) => {
+  const edges: Edge[] = graphEdges.map((edge) => {
     const targetData = nodeDataById.get(edge.to);
     const issueCount = (targetData?.blockerCount ?? 0) + (targetData?.warningCount ?? 0);
     return {
@@ -335,13 +392,13 @@ function MethodGraphNode({ data }: NodeProps<MethodFlowNode>) {
 function MethodGraphResourceNode({ data }: NodeProps<MethodResourceNode>) {
   const { resources } = data;
   const shownResources = resources.slice(0, MAX_BUNDLE_RESOURCES);
-  const hasMissing = resources.some((resource) => resource.status === "missing");
+  const hasMissing = resources.some((resource) => resourceStatus(resource) === "missing");
 
   return (
     <article className={`method-flow-resource-node ${hasMissing ? "status-missing" : ""}`}>
       <div className="method-flow-resource-node-title">
         <span>{resources.length === 1 ? "Input" : "Inputs"}</span>
-        <strong>{resources.length === 1 ? resources[0].label : `${resources.length} shared inputs`}</strong>
+        <strong>{resources.length === 1 ? resources[0].label || resources[0].id : `${resources.length} shared inputs`}</strong>
       </div>
       <div className="method-flow-resource-node-list">
         {shownResources.map((resource) => (
@@ -365,7 +422,7 @@ const nodeTypes = {
 };
 
 interface MethodGraphProps {
-  draft: MethodDraft;
+  draft: MethodDocument;
   executionNodes?: MethodExecutionNodeSummary[];
 }
 

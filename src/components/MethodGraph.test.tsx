@@ -1,22 +1,19 @@
 import { describe, expect, it } from "vitest";
-import type { MethodDraft } from "../database";
+import type { MethodDocument } from "../database";
 import { buildMethodGraphElements } from "./MethodGraph";
 
-function methodDraft(overrides: Partial<MethodDraft> = {}): MethodDraft {
+function methodDraft(overrides: Partial<MethodDocument> = {}): MethodDocument {
   return {
-    schemaVersion: 1,
+    schema_version: 1,
     id: "draft-graph",
     title: "Graph draft",
     objective: "Render a Method graph",
-    lifecycle: "drafting",
     resources: [],
-    nodes: [],
-    edges: [],
+    workflow: { nodes: [] },
     parameters: {},
-    providerConfig: {},
+    provider: {},
     outputs: [],
     metadata: {},
-    readiness: { status: "drafting", blockers: [], warnings: [] },
     ...overrides,
   };
 }
@@ -27,44 +24,33 @@ describe("buildMethodGraphElements", () => {
       resources: [
         {
           id: "prompt",
-          kind: "prompt_file",
+          kind: "prompt",
           label: "Prompt",
-          status: "missing",
-          path: "prompts/main.md",
-          consumedBy: ["generate"],
+          consumed_by: ["generate"],
         },
         {
           id: "schema",
           kind: "json_schema",
           label: "Output schema",
-          status: "attached",
           path: "schemas/out.json",
-          consumedBy: ["score"],
+          consumed_by: ["score"],
         },
       ],
-      nodes: [
-        {
-          id: "generate",
-          label: "Generate answers",
-          type: "inference",
-          status: "draft",
-          config: { model: "gpt-test", samples: 4 },
-        },
-        {
-          id: "score",
-          label: "Score answers",
-          type: "eval",
-          status: "draft",
-          config: {},
-        },
-      ],
-      edges: [{ from: "generate", to: "score" }],
-      readiness: {
-        status: "drafting",
-        blockers: [{ code: "missing_prompt", message: "Attach a prompt.", nodeId: "generate" }],
-        warnings: [
-          { code: "weak_eval", message: "Eval needs detail.", nodeId: "score" },
-          { code: "schema_note", message: "Schema is still loose.", resourceId: "schema" },
+      workflow: {
+        nodes: [
+          {
+            id: "generate",
+            label: "Generate answers",
+            type: "inference",
+            config: { model: "gpt-test", samples: 4 },
+          },
+          {
+            id: "score",
+            label: "Score answers",
+            type: "eval",
+            depends_on: ["generate"],
+            config: {},
+          },
         ],
       },
     });
@@ -79,7 +65,7 @@ describe("buildMethodGraphElements", () => {
         id: "resource:prompt",
         type: "resource",
         position: { x: -340, y: 0 },
-        data: { resources: [expect.objectContaining({ id: "prompt", path: "prompts/main.md" })] },
+        data: { resources: [expect.objectContaining({ id: "prompt" })] },
       }),
       expect.objectContaining({
         id: "resource:schema",
@@ -107,7 +93,7 @@ describe("buildMethodGraphElements", () => {
         source: "generate",
         target: "score",
         type: "smoothstep",
-        label: "2 issues",
+        label: undefined,
       }),
     ]));
     expect(methodNodes[0]).toEqual(
@@ -119,7 +105,7 @@ describe("buildMethodGraphElements", () => {
           blockerCount: 1,
           warningCount: 0,
           resourceCount: 1,
-          issues: [expect.objectContaining({ message: "Attach a prompt." })],
+          issues: [expect.objectContaining({ message: "Attach prompt for 'Prompt'." })],
           configHints: ["model: gpt-test", "samples: 4"],
         }),
       }),
@@ -127,29 +113,24 @@ describe("buildMethodGraphElements", () => {
     expect(methodNodes[1].position.x).toBe(methodNodes[0].position.x);
     expect(methodNodes[1].position.y).toBeGreaterThan(methodNodes[0].position.y);
     expect(methodNodes[1].data.incomingLabels).toEqual(["Generate answers"]);
-    expect(methodNodes[1].data.warningCount).toBe(2);
-    expect(methodNodes[1].data.issues.map((issue) => issue.message)).toEqual([
-      "Eval needs detail.",
-      "Schema is still loose.",
-    ]);
+    expect(methodNodes[1].data.warningCount).toBe(0);
+    expect(methodNodes[1].data.issues).toEqual([]);
   });
 
   it("groups resources with identical consumers into one input bundle", () => {
     const draft = methodDraft({
       resources: [
-        { id: "data", kind: "data", label: "Dataset", status: "attached", path: "data.jsonl", consumedBy: ["a", "b"] },
-        { id: "prompt", kind: "prompt", label: "Prompt", status: "attached", path: "prompt.md", consumedBy: ["b", "a"] },
-        { id: "script", kind: "eval_script", label: "Script", status: "attached", path: "eval.js", consumedBy: ["eval"] },
+        { id: "data", kind: "data", label: "Dataset", path: "data.jsonl", consumed_by: ["a", "b"] },
+        { id: "prompt", kind: "prompt", label: "Prompt", path: "prompt.md", consumed_by: ["b", "a"] },
+        { id: "script", kind: "eval_script", label: "Script", path: "eval.js", consumed_by: ["eval"] },
       ],
-      nodes: [
-        { id: "a", label: "Model A", type: "inference", status: "draft", config: {} },
-        { id: "b", label: "Model B", type: "inference", status: "draft", config: {} },
-        { id: "eval", label: "Evaluate", type: "eval", status: "draft", config: {} },
-      ],
-      edges: [
-        { from: "a", to: "eval" },
-        { from: "b", to: "eval" },
-      ],
+      workflow: {
+        nodes: [
+          { id: "a", label: "Model A", type: "inference", config: {} },
+          { id: "b", label: "Model B", type: "inference", config: {} },
+          { id: "eval", label: "Evaluate", type: "eval", depends_on: ["a", "b"], config: {} },
+        ],
+      },
     });
 
     const graph = buildMethodGraphElements(draft);
@@ -177,15 +158,12 @@ describe("buildMethodGraphElements", () => {
 
   it("keeps cyclic or incomplete drafts renderable", () => {
     const draft = methodDraft({
-      nodes: [
-        { id: "a", label: "A", type: "analysis", status: "draft", config: {} },
-        { id: "b", label: "B", type: "aggregate", status: "draft", config: {} },
-      ],
-      edges: [
-        { from: "a", to: "b" },
-        { from: "b", to: "a" },
-        { from: "missing", to: "a" },
-      ],
+      workflow: {
+        nodes: [
+          { id: "a", label: "A", type: "analysis", depends_on: ["b", "missing"], config: {} },
+          { id: "b", label: "B", type: "aggregate", depends_on: ["a"], config: {} },
+        ],
+      },
     });
 
     const graph = buildMethodGraphElements(draft);
@@ -193,21 +171,23 @@ describe("buildMethodGraphElements", () => {
     expect(graph.nodes).toHaveLength(2);
     expect(graph.nodes.map((node) => node.position.x)).toEqual([0, 0]);
     expect(graph.nodes[1].position.y).toBeGreaterThan(graph.nodes[0].position.y);
-    expect(graph.edges.map((edge) => edge.id)).toEqual(["a-b", "b-a", "missing-a"]);
+    expect(graph.edges.map((edge) => edge.id)).toEqual(["b-a", "missing-a", "a-b"]);
   });
 
   it("shows inherited execution config on inference nodes without node-level config", () => {
     const draft = methodDraft({
-      nodes: [
-        { id: "generate", label: "Generate", type: "inference", status: "ready", config: undefined },
-        { id: "score", label: "Score", type: "eval", status: "ready", config: undefined },
-      ],
+      workflow: {
+        nodes: [
+          { id: "generate", label: "Generate", type: "inference", config: undefined },
+          { id: "score", label: "Score", type: "eval", config: undefined },
+        ],
+      },
       parameters: {
         model_values: ["bonsai-8b", "qwen3.5-4b"],
         samples: 5,
         max_tokens: 2000,
       },
-      providerConfig: {
+      provider: {
         provider: "Local",
         server_url: "http://localhost:1234/v1",
       },

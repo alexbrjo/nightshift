@@ -45,30 +45,36 @@ export interface JobFailure {
   created_at: string;
 }
 
-export interface MethodFileRef {
-  id: string;
-  kind: string;
-  path: string;
-}
-
 export interface MethodWorkflowNode {
   id: string;
+  label?: string;
   type: string;
   depends_on?: string[];
   config?: Record<string, unknown>;
 }
 
-export interface MethodManifest {
+export interface MethodResource {
+  id: string;
+  kind: string;
+  label?: string;
+  path?: string;
+  reference?: string;
+  consumed_by?: string[];
+}
+
+export interface MethodDocument {
   schema_version: number;
   id: string;
   title: string;
-  objective?: string;
-  files?: MethodFileRef[];
+  objective: string;
+  resources: MethodResource[];
   workflow: {
     nodes: MethodWorkflowNode[];
   };
-  parameters?: Record<string, unknown>;
-  provider?: Record<string, unknown>;
+  parameters: Record<string, unknown>;
+  provider: Record<string, unknown>;
+  outputs?: string[];
+  metadata?: Record<string, unknown>;
 }
 
 export interface MethodSummary {
@@ -105,45 +111,6 @@ export interface MethodDraftReadiness {
   status: MethodLifecycleState;
   blockers: MethodDraftIssue[];
   warnings: MethodDraftIssue[];
-}
-
-export interface MethodDraftResource {
-  id: string;
-  kind: string;
-  label: string;
-  status: string;
-  path?: string;
-  reference?: string;
-  consumedBy: string[];
-}
-
-export interface MethodDraftNode {
-  id: string;
-  label: string;
-  type: string;
-  status: string;
-  config?: Record<string, unknown>;
-}
-
-export interface MethodDraftEdge {
-  from: string;
-  to: string;
-}
-
-export interface MethodDraft {
-  schemaVersion: number;
-  id: string;
-  title: string;
-  objective: string;
-  lifecycle: MethodLifecycleState;
-  resources: MethodDraftResource[];
-  nodes: MethodDraftNode[];
-  edges: MethodDraftEdge[];
-  parameters: Record<string, unknown>;
-  providerConfig: Record<string, unknown>;
-  outputs: string[];
-  metadata: Record<string, unknown>;
-  readiness: MethodDraftReadiness;
 }
 
 export interface CodexAppServerSession {

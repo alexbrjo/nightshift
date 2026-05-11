@@ -3,13 +3,13 @@ use std::path::Path;
 
 use super::config::{config_string, method_file_by_kind, model_values, yaml_lookup, yaml_string};
 use super::model::{
-    MethodManifest, MethodPreflightBlocker, MethodPreflightResult, MethodWorkflowNode,
+    MethodDocument, MethodPreflightBlocker, MethodPreflightResult, MethodWorkflowNode,
 };
 use super::paths::validate_relative_path;
 use super::validation::validate_method;
 
 pub(crate) fn required_file_kind_for_node(
-    method: &MethodManifest,
+    method: &MethodDocument,
     node: &MethodWorkflowNode,
 ) -> Vec<(&'static str, String)> {
     match node.node_type.as_str() {
@@ -37,7 +37,7 @@ pub(crate) fn required_file_kind_for_node(
 }
 
 pub(crate) fn preflight_method_for_root(
-    method: &MethodManifest,
+    method: &MethodDocument,
     project_root: &Path,
 ) -> MethodPreflightResult {
     let mut blockers = Vec::new();
@@ -69,27 +69,28 @@ pub(crate) fn preflight_method_for_root(
         }
     }
 
-    for file in &method.files {
-        if file.path.starts_with("files/") {
+    for file in method.resources.iter().filter(|resource| resource.path.is_some()) {
+        let path = file.path.as_deref().unwrap_or_default();
+        if path.starts_with("files/") {
             continue;
         }
-        if let Err(error) = validate_relative_path(&file.path) {
+        if let Err(error) = validate_relative_path(path) {
             blockers.push(MethodPreflightBlocker {
                 code: "invalid_file_path".into(),
                 message: error,
                 file_id: Some(file.id.clone()),
                 file_kind: Some(file.kind.clone()),
-                path: Some(file.path.clone()),
+                path: Some(path.to_string()),
             });
             continue;
         }
-        if !project_root.join(&file.path).is_file() {
+        if !project_root.join(path).is_file() {
             blockers.push(MethodPreflightBlocker {
                 code: "missing_file".into(),
-                message: format!("I couldn't find {} file '{}'.", file.kind, file.path),
+                message: format!("I couldn't find {} file '{}'.", file.kind, path),
                 file_id: Some(file.id.clone()),
                 file_kind: Some(file.kind.clone()),
-                path: Some(file.path.clone()),
+                path: Some(path.to_string()),
             });
         }
     }

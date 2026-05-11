@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use super::model::{
-    MethodFileRef, MethodManifest, MethodWorkflowNode, NightshiftConfig, ProviderProfile,
+    MethodDocument, MethodResource, MethodWorkflowNode, NightshiftConfig, ProviderProfile,
 };
 
 pub(crate) fn config_path(project_root: &Path) -> std::path::PathBuf {
@@ -55,40 +55,40 @@ pub(crate) fn resolve_api_key_id(config: &NightshiftConfig, id: &str) -> Result<
 }
 
 pub(crate) fn yaml_lookup<'a>(
-    value: &'a serde_yaml::Value,
+    value: &'a serde_json::Value,
     key: &str,
-) -> Option<&'a serde_yaml::Value> {
-    value.as_mapping()?.get(serde_yaml::Value::String(key.to_string()))
+) -> Option<&'a serde_json::Value> {
+    value.as_object()?.get(key)
 }
 
-pub(crate) fn yaml_string(value: Option<&serde_yaml::Value>) -> Option<String> {
+pub(crate) fn yaml_string(value: Option<&serde_json::Value>) -> Option<String> {
     match value? {
-        serde_yaml::Value::String(s) => Some(s.clone()),
-        serde_yaml::Value::Number(n) => Some(n.to_string()),
-        serde_yaml::Value::Bool(b) => Some(b.to_string()),
+        serde_json::Value::String(s) => Some(s.clone()),
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        serde_json::Value::Bool(b) => Some(b.to_string()),
         _ => None,
     }
 }
 
-pub(crate) fn yaml_i32(value: Option<&serde_yaml::Value>) -> Option<i32> {
+pub(crate) fn yaml_i32(value: Option<&serde_json::Value>) -> Option<i32> {
     match value? {
-        serde_yaml::Value::Number(n) => n.as_i64().and_then(|v| i32::try_from(v).ok()),
-        serde_yaml::Value::String(s) => s.parse().ok(),
+        serde_json::Value::Number(n) => n.as_i64().and_then(|v| i32::try_from(v).ok()),
+        serde_json::Value::String(s) => s.parse().ok(),
         _ => None,
     }
 }
 
-pub(crate) fn yaml_f64(value: Option<&serde_yaml::Value>) -> Option<f64> {
+pub(crate) fn yaml_f64(value: Option<&serde_json::Value>) -> Option<f64> {
     match value? {
-        serde_yaml::Value::Number(n) => n.as_f64(),
-        serde_yaml::Value::String(s) => s.parse().ok(),
+        serde_json::Value::Number(n) => n.as_f64(),
+        serde_json::Value::String(s) => s.parse().ok(),
         _ => None,
     }
 }
 
 pub(crate) fn config_string(
     node: &MethodWorkflowNode,
-    method: &MethodManifest,
+    method: &MethodDocument,
     key: &str,
     default: Option<&str>,
 ) -> Option<String> {
@@ -100,7 +100,7 @@ pub(crate) fn config_string(
 
 pub(crate) fn config_i32(
     node: &MethodWorkflowNode,
-    method: &MethodManifest,
+    method: &MethodDocument,
     key: &str,
     default: Option<i32>,
 ) -> Option<i32> {
@@ -111,7 +111,7 @@ pub(crate) fn config_i32(
 
 pub(crate) fn config_f64(
     node: &MethodWorkflowNode,
-    method: &MethodManifest,
+    method: &MethodDocument,
     key: &str,
 ) -> Option<f64> {
     yaml_f64(yaml_lookup(&node.config, key))
@@ -119,39 +119,53 @@ pub(crate) fn config_f64(
 }
 
 pub(crate) fn method_file_by_kind<'a>(
-    method: &'a MethodManifest,
+    method: &'a MethodDocument,
     kind: &str,
-) -> Option<&'a MethodFileRef> {
-    method.files.iter().find(|file| file.kind == kind)
+) -> Option<&'a MethodResource> {
+    let normalized = match kind {
+        "schema" => "json_schema",
+        "script" => "eval_script",
+        other => other,
+    };
+    method.resources.iter().find(|resource| resource.kind == normalized)
 }
 
 pub(crate) fn resolve_configured_file(
-    method: &MethodManifest,
+    method: &MethodDocument,
     method_id: &str,
     configured: Option<String>,
     fallback_kind: &str,
 ) -> Result<String, String> {
     let file = configured
         .as_deref()
-        .and_then(|id| method.files.iter().find(|file| file.id == id || file.path == id))
+        .and_then(|id| {
+            method
+                .resources
+                .iter()
+                .find(|resource| resource.id == id || resource.path.as_deref() == Some(id))
+        })
         .or_else(|| method_file_by_kind(method, fallback_kind))
         .ok_or_else(|| format!("No method file with kind '{}' is available", fallback_kind))?;
-    if !file.path.starts_with("files/") {
+    let path = file
+        .path
+        .as_deref()
+        .ok_or_else(|| format!("Method resource '{}' does not have a file path", file.id))?;
+    if !path.starts_with("files/") {
         return Err(format!("Method file '{}' was not frozen", file.id));
     }
-    Ok(format!("methods/{}/{}", method_id, file.path))
+    Ok(format!("methods/{}/{}", method_id, path))
 }
 
-pub(crate) fn yaml_string_list(value: Option<&serde_yaml::Value>) -> Vec<String> {
+pub(crate) fn yaml_string_list(value: Option<&serde_json::Value>) -> Vec<String> {
     match value {
-        Some(serde_yaml::Value::Sequence(items)) => {
+        Some(serde_json::Value::Array(items)) => {
             items.iter().filter_map(|item| yaml_string(Some(item))).collect()
         }
-        Some(serde_yaml::Value::String(s)) => vec![s.clone()],
+        Some(serde_json::Value::String(s)) => vec![s.clone()],
         _ => vec![],
     }
 }
 
-pub(crate) fn model_values(method: &MethodManifest) -> Vec<String> {
+pub(crate) fn model_values(method: &MethodDocument) -> Vec<String> {
     yaml_string_list(yaml_lookup(&method.parameters, "model_values"))
 }

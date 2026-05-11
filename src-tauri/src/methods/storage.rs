@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::database::DatabaseState;
 
-use super::model::{MethodManifest, MethodPreflightResult, MethodSummary, SaveMethodInput};
+use super::model::{MethodDocument, MethodPreflightResult, MethodSummary, SaveMethodInput};
 use super::paths::{
     method_dir, methods_dir, project_root, validate_method_id, validate_relative_path,
 };
@@ -26,27 +26,33 @@ pub(crate) fn frozen_file_path(source_path: &str, bytes: &[u8]) -> String {
 }
 
 pub(crate) fn freeze_files(
-    method: &mut MethodManifest,
+    method: &mut MethodDocument,
     project_root: &Path,
     dest: &Path,
 ) -> Result<(), String> {
     fs::create_dir_all(dest.join("files"))
         .map_err(|e| format!("Failed to create method files directory: {}", e))?;
-    for file in &mut method.files {
-        if file.path.starts_with("files/") {
+    for resource in &mut method.resources {
+        if !matches!(resource.kind.as_str(), "prompt" | "data" | "json_schema" | "eval_script") {
             continue;
         }
-        validate_relative_path(&file.path)?;
-        let source = project_root.join(&file.path);
+        let Some(path) = resource.path.as_mut() else {
+            continue;
+        };
+        if path.starts_with("files/") {
+            continue;
+        }
+        validate_relative_path(path)?;
+        let source = project_root.join(&path);
         let bytes = fs::read(&source)
-            .map_err(|e| format!("Failed to read method file '{}': {}", file.path, e))?;
-        let frozen_path = frozen_file_path(&file.path, &bytes);
+            .map_err(|e| format!("Failed to read method file '{}': {}", path, e))?;
+        let frozen_path = frozen_file_path(path, &bytes);
         let target = dest.join(&frozen_path);
         if !target.exists() {
             fs::write(&target, bytes)
-                .map_err(|e| format!("Failed to freeze method file '{}': {}", file.path, e))?;
+                .map_err(|e| format!("Failed to freeze method file '{}': {}", path, e))?;
         }
-        file.path = frozen_path;
+        *path = frozen_path;
     }
     Ok(())
 }
@@ -87,15 +93,27 @@ pub(crate) fn hash_directory(folder: &Path) -> Result<String, String> {
     Ok(hex(&hasher.finalize()))
 }
 
-pub(crate) fn read_manifest(folder: &Path) -> Result<MethodManifest, String> {
-    let text = fs::read_to_string(folder.join("method.yaml"))
-        .map_err(|e| format!("Failed to read method.yaml: {}", e))?;
-    serde_yaml::from_str(&text).map_err(|e| format!("Failed to parse method.yaml: {}", e))
+pub(crate) fn read_method_document(path: &Path) -> Result<MethodDocument, String> {
+    let text = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read Method document {}: {}", path.display(), e))?;
+    serde_yaml::from_str(&text)
+        .map_err(|e| format!("Failed to parse Method document {}: {}", path.display(), e))
+}
+
+pub(crate) fn write_method_document(path: &Path, method: &MethodDocument) -> Result<(), String> {
+    let yaml = serde_yaml::to_string(method)
+        .map_err(|e| format!("Failed to serialize Method document: {}", e))?;
+    fs::write(path, yaml)
+        .map_err(|e| format!("Failed to write Method document {}: {}", path.display(), e))
+}
+
+pub(crate) fn read_manifest(folder: &Path) -> Result<MethodDocument, String> {
+    read_method_document(&folder.join("method.yaml"))
 }
 
 pub(crate) async fn upsert_method_metadata(
     db: &DatabaseState,
-    method: &MethodManifest,
+    method: &MethodDocument,
     content_hash: &str,
     folder_path: &Path,
 ) -> Result<(), String> {
@@ -122,14 +140,14 @@ pub(crate) async fn upsert_method_metadata(
 pub(crate) async fn save_method_to_project(
     db: &DatabaseState,
     root: &Path,
-    method_input: MethodManifest,
+    method_input: MethodDocument,
 ) -> Result<MethodSummary, String> {
     validate_method(&method_input)?;
-    for file in &method_input.files {
-        if file.path.starts_with("files/") {
+    for resource in &method_input.resources {
+        if resource.path.as_deref().is_some_and(|path| path.starts_with("files/")) {
             return Err(format!(
-                "Method file '{}' must reference a project file before save",
-                file.id
+                "Method resource '{}' must reference a project file before save",
+                resource.id
             ));
         }
     }
@@ -148,12 +166,9 @@ pub(crate) async fn save_method_to_project(
     fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp method: {}", e))?;
 
     let mut method = method_input;
-    if let Err(e) = freeze_files(&mut method, &root, &temp_dir).and_then(|_| {
-        let yaml = serde_yaml::to_string(&method)
-            .map_err(|e| format!("Failed to serialize method: {}", e))?;
-        fs::write(temp_dir.join("method.yaml"), yaml)
-            .map_err(|e| format!("Failed to write method.yaml: {}", e))
-    }) {
+    if let Err(e) = freeze_files(&mut method, &root, &temp_dir)
+        .and_then(|_| write_method_document(&temp_dir.join("method.yaml"), &method))
+    {
         let _ = fs::remove_dir_all(&temp_dir);
         return Err(e);
     }
@@ -246,7 +261,7 @@ pub async fn list_methods(db: State<'_, DatabaseState>) -> Result<Vec<MethodSumm
 pub async fn get_method(
     db: State<'_, DatabaseState>,
     id: String,
-) -> Result<MethodManifest, String> {
+) -> Result<MethodDocument, String> {
     validate_method_id(&id)?;
     let root = project_root(&db)?;
     let manifest = read_manifest(&method_dir(&root, &id))?;

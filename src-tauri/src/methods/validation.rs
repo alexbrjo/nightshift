@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use super::model::{MethodManifest, MethodWorkflowNode};
+use super::model::{MethodDocument, MethodWorkflowNode};
 use super::paths::{require_nonempty, validate_method_id, validate_relative_path};
 
 const SECRET_KEYS: &[&str] =
@@ -41,7 +41,7 @@ pub(crate) fn reject_secret_values(value: &serde_yaml::Value, path: &str) -> Res
     Ok(())
 }
 
-pub fn validate_method(method: &MethodManifest) -> Result<(), String> {
+pub fn validate_method(method: &MethodDocument) -> Result<(), String> {
     if method.schema_version != 1 {
         return Err("method.schema_version must be 1".into());
     }
@@ -52,16 +52,17 @@ pub fn validate_method(method: &MethodManifest) -> Result<(), String> {
         serde_yaml::to_value(method).map_err(|e| format!("Failed to inspect method: {}", e))?;
     reject_secret_values(&manifest_value, "")?;
 
-    let mut file_ids = HashSet::new();
-    for file in &method.files {
-        require_nonempty("method.files[].id", &file.id)?;
-        require_nonempty("method.files[].kind", &file.kind)?;
-        require_nonempty("method.files[].path", &file.path)?;
-        if !file_ids.insert(file.id.as_str()) {
-            return Err(format!("method.files id '{}' is duplicated", file.id));
+    let mut resource_ids = HashSet::new();
+    for resource in &method.resources {
+        require_nonempty("method.resources[].id", &resource.id)?;
+        require_nonempty("method.resources[].kind", &resource.kind)?;
+        if !resource_ids.insert(resource.id.as_str()) {
+            return Err(format!("method.resources id '{}' is duplicated", resource.id));
         }
-        if !file.path.starts_with("files/") {
-            validate_relative_path(&file.path)?;
+        if let Some(path) = resource.path.as_deref() {
+            if !path.starts_with("files/") {
+                validate_relative_path(path)?;
+            }
         }
     }
 

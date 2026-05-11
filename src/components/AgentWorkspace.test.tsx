@@ -108,40 +108,27 @@ describe("AgentWorkspace", () => {
     eventBus.handlers.get("method-draft-updated")?.forEach((handler) =>
       handler({
         payload: {
-          schemaVersion: 1,
+          schema_version: 1,
           id: "draft-1",
           title: "Rubric benchmark",
           objective: "Compare model answers against a rubric",
-          lifecycle: "drafting",
           resources: [
             {
               id: "prompt",
               kind: "prompt",
               label: "Main prompt",
-              status: "missing",
-              path: "prompts/main.md",
-              consumedBy: ["generate"],
+              consumed_by: ["generate"],
             },
           ],
-          nodes: [
-            { id: "generate", label: "Generate answers", type: "inference", status: "draft", config: {} },
-          ],
-          edges: [],
+          workflow: {
+            nodes: [
+              { id: "generate", label: "Generate answers", type: "inference", config: {} },
+            ],
+          },
           parameters: {},
-          providerConfig: {},
+          provider: {},
           outputs: [],
           metadata: {},
-          readiness: {
-            status: "drafting",
-            blockers: [
-              {
-                code: "missing_prompt",
-                message: "Attach a prompt and data file.",
-                resourceId: "prompt",
-              },
-            ],
-            warnings: [],
-          },
         },
       }),
     );
@@ -150,7 +137,7 @@ describe("AgentWorkspace", () => {
       expect(screen.getByText("Generate answers")).toBeInTheDocument();
       expect(screen.getByText("Rubric benchmark")).toBeInTheDocument();
       expect(screen.getByText("Main prompt")).toBeInTheDocument();
-      expect(screen.getByText("Attach a prompt and data file.")).toBeInTheDocument();
+      expect(screen.getByText("Attach prompt for 'Main prompt'.")).toBeInTheDocument();
     });
   });
 
@@ -229,19 +216,18 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ threadId: "thr_123" });
         case "get_current_method_draft":
           return Promise.resolve({
-            schemaVersion: 1,
+            schema_version: 1,
             id: "draft-1",
             title: "Edge Model 50% Flash-Card Accuracy Benchmark",
             objective: "Measure accuracy",
-            lifecycle: "ready",
             resources: [],
-            nodes: [{ id: "generate", label: "Generate", type: "inference", status: "ready", config: null }],
-            edges: [],
+            workflow: {
+              nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
+            },
             parameters: {},
-            providerConfig: {},
+            provider: {},
             outputs: [],
             metadata: {},
-            readiness: { status: "ready", blockers: [], warnings: [] },
           });
         case "list_methods":
           return Promise.resolve([
@@ -280,19 +266,18 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ threadId: "thr_123" });
         case "get_current_method_draft":
           return Promise.resolve({
-            schemaVersion: 1,
+            schema_version: 1,
             id: "draft-1",
             title: "Edge method",
             objective: "Measure accuracy",
-            lifecycle: "ready",
             resources: [],
-            nodes: [{ id: "generate", label: "Generate", type: "eval", status: "ready", config: {} }],
-            edges: [],
+            workflow: {
+              nodes: [{ id: "generate", label: "Generate", type: "eval", config: {} }],
+            },
             parameters: {},
-            providerConfig: {},
+            provider: {},
             outputs: [],
             metadata: {},
-            readiness: { status: "ready", blockers: [], warnings: [] },
           });
         case "list_methods":
           return Promise.resolve([]);
@@ -327,19 +312,18 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ threadId: "thr_123" });
         case "get_current_method_draft":
           return Promise.resolve({
-            schemaVersion: 1,
+            schema_version: 1,
             id: "draft-1",
             title: "Edge method",
             objective: "Measure accuracy",
-            lifecycle: "ready",
             resources: [],
-            nodes: [{ id: "generate", label: "Generate", type: "eval", status: "ready", config: {} }],
-            edges: [],
+            workflow: {
+              nodes: [{ id: "generate", label: "Generate", type: "eval", config: {} }],
+            },
             parameters: {},
-            providerConfig: {},
+            provider: {},
             outputs: [],
             metadata: {},
-            readiness: { status: "ready", blockers: [], warnings: [] },
           });
         case "list_methods":
           return Promise.resolve([]);

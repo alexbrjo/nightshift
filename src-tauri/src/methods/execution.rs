@@ -15,21 +15,21 @@ use super::config::{
     resolve_configured_file, yaml_lookup, yaml_string,
 };
 use super::model::{
-    MethodArtifactSummary, MethodExecutionEventSummary, MethodExecutionNodeSummary,
-    MethodExecutionSummary, MethodManifest, MethodWorkflowNode,
+    MethodArtifactSummary, MethodDocument, MethodExecutionEventSummary, MethodExecutionNodeSummary,
+    MethodExecutionSummary, MethodWorkflowNode,
 };
 use super::paths::{method_dir, project_root, validate_method_id};
 use super::storage::{hash_directory, hex, read_manifest};
 use super::validation::validate_method;
 
-fn method_level_config_string(method: &MethodManifest, key: &str) -> Option<String> {
+fn method_level_config_string(method: &MethodDocument, key: &str) -> Option<String> {
     yaml_string(yaml_lookup(&method.parameters, key))
         .or_else(|| yaml_string(yaml_lookup(&method.provider, key)))
 }
 
 pub(crate) async fn insert_execution(
     db: &DatabaseState,
-    method: &MethodManifest,
+    method: &MethodDocument,
     content_hash: &str,
 ) -> Result<i64, String> {
     let result = sqlx::query(
@@ -251,7 +251,7 @@ pub(crate) fn topological_nodes(
 
 pub(crate) async fn create_inference_job_for_node(
     db: &DatabaseState,
-    method: &MethodManifest,
+    method: &MethodDocument,
     node: &MethodWorkflowNode,
     execution_id: i64,
     model_override: Option<&str>,
@@ -364,7 +364,7 @@ pub(crate) async fn create_inference_job_for_node(
 
 pub(crate) async fn create_transform_job_for_node(
     db: &DatabaseState,
-    method: &MethodManifest,
+    method: &MethodDocument,
     node: &MethodWorkflowNode,
     execution_id: i64,
     data_source_override: Option<String>,
@@ -559,7 +559,7 @@ pub(crate) async fn run_job_agent(
 pub(crate) async fn run_inference_agent(
     app: &AppHandle,
     db: &DatabaseState,
-    method: &MethodManifest,
+    method: &MethodDocument,
     node: &MethodWorkflowNode,
     execution_id: i64,
 ) -> Result<String, String> {
@@ -658,7 +658,7 @@ pub(crate) fn slug_for_ref(value: &str) -> String {
 pub(crate) async fn run_transform_agent(
     app: &AppHandle,
     db: &DatabaseState,
-    method: &MethodManifest,
+    method: &MethodDocument,
     node: &MethodWorkflowNode,
     execution_id: i64,
     node_outputs: &HashMap<String, String>,
@@ -858,7 +858,7 @@ async fn mark_execution_cancelled(
 async fn run_method_node(
     app: &AppHandle,
     db: &DatabaseState,
-    method: &MethodManifest,
+    method: &MethodDocument,
     execution_id: i64,
     node: &MethodWorkflowNode,
     node_outputs: &HashMap<String, String>,
@@ -906,7 +906,7 @@ pub(crate) async fn orchestrate_method_execution(
     app: AppHandle,
     db: DatabaseState,
     execution_id: i64,
-    method: MethodManifest,
+    method: MethodDocument,
     control: MethodExecutionControl,
 ) -> Result<(), String> {
     update_execution_status(&db, execution_id, "running", None).await?;

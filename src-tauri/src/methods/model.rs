@@ -42,7 +42,7 @@ pub struct AgentThreadState {
 #[serde(rename_all = "camelCase")]
 #[allow(dead_code)]
 pub struct DraftMethodState {
-    pub method: MethodDraft,
+    pub method: MethodDocument,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -89,64 +89,44 @@ pub struct MethodSummaryForState {
     pub content_hash: String,
 }
 
+/// Canonical durable Method document.
+///
+/// Add new persisted Method fields here. Keep UI-only or execution-derived state
+/// (readiness, lifecycle, graph edges, resource status, layout, execution status)
+/// in derived view helpers instead of serialized Method structs.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct MethodDraft {
+pub struct MethodDocument {
     pub schema_version: u32,
     pub id: String,
     pub title: String,
+    #[serde(default)]
     pub objective: String,
-    pub lifecycle: MethodLifecycleState,
     #[serde(default)]
-    pub resources: Vec<MethodDraftResource>,
+    pub resources: Vec<MethodResource>,
     #[serde(default)]
-    pub nodes: Vec<MethodDraftNode>,
-    #[serde(default)]
-    pub edges: Vec<MethodDraftEdge>,
+    pub workflow: MethodWorkflow,
     #[serde(default)]
     pub parameters: serde_json::Value,
     #[serde(default)]
-    pub provider_config: serde_json::Value,
-    #[serde(default)]
+    pub provider: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outputs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub metadata: serde_json::Value,
-    pub readiness: MethodDraftReadiness,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MethodDraftResource {
+pub struct MethodResource {
     pub id: String,
     pub kind: String,
+    #[serde(default)]
     pub label: String,
-    pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference: Option<String>,
     #[serde(default)]
     pub consumed_by: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct MethodDraftNode {
-    pub id: String,
-    pub label: String,
-    #[serde(rename = "type")]
-    pub node_type: String,
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
-    pub config: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MethodDraftEdge {
-    pub from: String,
-    pub to: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -185,25 +165,21 @@ pub struct UpdateMethodDraftMetadataInput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct UpdateMethodDraftExecutionConfigInput {
     #[serde(default)]
-    pub provider_config: Option<serde_json::Value>,
+    pub provider: Option<serde_json::Value>,
     #[serde(default)]
     pub parameters: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct ReplaceMethodDraftGraphInput {
-    pub nodes: Vec<MethodDraftNode>,
-    pub edges: Vec<MethodDraftEdge>,
+    pub workflow: MethodWorkflow,
     #[serde(default)]
-    pub resources: Option<Vec<MethodDraftResource>>,
+    pub resources: Option<Vec<MethodResource>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct AttachMethodResourceInput {
     pub id: String,
     pub kind: String,
@@ -275,30 +251,6 @@ pub struct ModelDefaults {
     pub model: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct MethodManifest {
-    pub schema_version: u32,
-    pub id: String,
-    pub title: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub objective: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<MethodFileRef>,
-    #[serde(default)]
-    pub workflow: MethodWorkflow,
-    #[serde(default, skip_serializing_if = "serde_yaml::Value::is_null")]
-    pub parameters: serde_yaml::Value,
-    #[serde(default, skip_serializing_if = "serde_yaml::Value::is_null")]
-    pub provider: serde_yaml::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MethodFileRef {
-    pub id: String,
-    pub kind: String,
-    pub path: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct MethodWorkflow {
     #[serde(default)]
@@ -308,18 +260,20 @@ pub struct MethodWorkflow {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MethodWorkflowNode {
     pub id: String,
+    #[serde(default)]
+    pub label: String,
     #[serde(rename = "type")]
     pub node_type: String,
     #[serde(default)]
     pub depends_on: Vec<String>,
-    #[serde(default, skip_serializing_if = "serde_yaml::Value::is_null")]
-    pub config: serde_yaml::Value,
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub config: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SaveMethodInput {
-    pub method: MethodManifest,
+    pub method: MethodDocument,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -60,20 +60,20 @@ pub fn method_function_tools() -> Vec<Value> {
             "name": UPDATE_EXECUTION_CONFIG,
             "description": "Update durable execution configuration for the current draft Method, such as provider config and parameters. Use this before save/freeze when execution requires a model name.",
             "parameters": object_schema(json!({
-                "providerConfig": object_schema(json!({
+                "provider": object_schema(json!({
                     "provider": { "type": ["string", "null"], "description": "Provider label, for example Local." },
                     "model": { "type": ["string", "null"], "description": "Default model name used by inference nodes." },
-                    "serverUrl": { "type": ["string", "null"], "description": "Local inference server URL." }
-                }), vec!["provider", "model", "serverUrl"]),
+                    "server_url": { "type": ["string", "null"], "description": "Local inference server URL." }
+                }), vec!["provider", "model", "server_url"]),
                 "parameters": object_schema(json!({
                     "model": { "type": ["string", "null"], "description": "Single model name." },
-                    "modelValues": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Model sweep values." },
+                    "model_values": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Model sweep values." },
                     "temperature": { "type": ["number", "null"] },
-                    "maxTokens": { "type": ["integer", "null"] },
+                    "max_tokens": { "type": ["integer", "null"] },
                     "samples": { "type": ["integer", "null"] },
                     "strategy": { "type": ["string", "null"] }
-                }), vec!["model", "modelValues", "temperature", "maxTokens", "samples", "strategy"])
-            }), vec!["providerConfig", "parameters"]),
+                }), vec!["model", "model_values", "temperature", "max_tokens", "samples", "strategy"])
+            }), vec!["provider", "parameters"]),
             "strict": true
         }),
         json!({
@@ -81,38 +81,32 @@ pub fn method_function_tools() -> Vec<Value> {
             "name": REPLACE_GRAPH,
             "description": "Replace the current draft Method graph. The graph may be incomplete, but it must be a DAG with valid edge endpoints.",
             "parameters": object_schema(json!({
-                "nodes": {
-                    "type": "array",
-                    "items": object_schema(json!({
-                        "id": { "type": "string", "description": "Stable node id, lower snake/kebab style." },
-                        "label": { "type": "string", "description": "Human-readable node label." },
-                        "type": { "type": "string", "enum": ["inference", "eval", "aggregate", "analysis"] },
-                        "status": { "type": "string", "enum": ["draft", "ready", "blocked"] }
-                    }), vec!["id", "label", "type", "status"])
-                },
-                "edges": {
-                    "type": "array",
-                    "items": object_schema(json!({
-                        "from": { "type": "string" },
-                        "to": { "type": "string" }
-                    }), vec!["from", "to"])
-                },
+                "workflow": object_schema(json!({
+                    "nodes": {
+                        "type": "array",
+                        "items": object_schema(json!({
+                            "id": { "type": "string", "description": "Stable node id, lower snake/kebab style." },
+                            "label": { "type": "string", "description": "Human-readable node label." },
+                            "type": { "type": "string", "enum": ["inference", "eval", "aggregate", "analysis"] },
+                            "depends_on": { "type": "array", "items": { "type": "string" } }
+                        }), vec!["id", "label", "type", "depends_on"])
+                    }
+                }), vec!["nodes"]),
                 "resources": {
                     "type": "array",
                     "items": object_schema(json!({
                         "id": { "type": "string" },
                         "kind": { "type": "string", "enum": ["prompt", "data", "json_schema", "eval_script", "collection", "api_key", "unknown"] },
                         "label": { "type": "string" },
-                        "status": { "type": "string", "enum": ["missing", "named", "attached", "unknown"] },
                         "path": { "type": ["string", "null"] },
                         "reference": { "type": ["string", "null"] },
-                        "consumedBy": {
+                        "consumed_by": {
                             "type": "array",
                             "items": { "type": "string" }
                         }
-                    }), vec!["id", "kind", "label", "status", "path", "reference", "consumedBy"])
+                    }), vec!["id", "kind", "label", "path", "reference", "consumed_by"])
                 }
-            }), vec!["nodes", "edges", "resources"]),
+            }), vec!["workflow", "resources"]),
             "strict": true
         }),
         json!({
@@ -125,8 +119,8 @@ pub fn method_function_tools() -> Vec<Value> {
                 "label": { "type": ["string", "null"], "description": "Human-readable resource label." },
                 "path": { "type": ["string", "null"], "description": "Project-relative or absolute path for file resources." },
                 "reference": { "type": ["string", "null"], "description": "Collection id or API key id for non-file resources." },
-                "consumedBy": { "type": "array", "items": { "type": "string" } }
-            }), vec!["id", "kind", "label", "path", "reference", "consumedBy"]),
+                "consumed_by": { "type": "array", "items": { "type": "string" } }
+            }), vec!["id", "kind", "label", "path", "reference", "consumed_by"]),
             "strict": true
         }),
         json!({
@@ -144,10 +138,10 @@ pub fn method_function_tools() -> Vec<Value> {
             "description": "Resolve a named collection resource to a collection id for the current Method draft.",
             "parameters": object_schema(json!({
                 "id": { "type": "string" },
-                "collectionId": { "type": "string" },
+                "collection_id": { "type": "string" },
                 "label": { "type": ["string", "null"] },
-                "consumedBy": { "type": "array", "items": { "type": "string" } }
-            }), vec!["id", "collectionId", "label", "consumedBy"]),
+                "consumed_by": { "type": "array", "items": { "type": "string" } }
+            }), vec!["id", "collection_id", "label", "consumed_by"]),
             "strict": true
         }),
         json!({
@@ -156,10 +150,10 @@ pub fn method_function_tools() -> Vec<Value> {
             "description": "Resolve an API key resource to an API key id from .nightshift/config.json. Do not put API key values in Method files or bundles.",
             "parameters": object_schema(json!({
                 "id": { "type": "string" },
-                "apiKeyId": { "type": "string" },
+                "api_key_id": { "type": "string" },
                 "label": { "type": ["string", "null"] },
-                "consumedBy": { "type": "array", "items": { "type": "string" } }
-            }), vec!["id", "apiKeyId", "label", "consumedBy"]),
+                "consumed_by": { "type": "array", "items": { "type": "string" } }
+            }), vec!["id", "api_key_id", "label", "consumed_by"]),
             "strict": true
         }),
         json!({
@@ -273,7 +267,7 @@ mod tests {
         let parameters = tool.get("parameters").unwrap();
         assert_eq!(parameters.get("additionalProperties").and_then(Value::as_bool), Some(false));
         let properties = parameters.get("properties").and_then(Value::as_object).unwrap();
-        for key in ["providerConfig", "parameters"] {
+        for key in ["provider", "parameters"] {
             let nested = properties.get(key).unwrap();
             assert_eq!(nested.get("type").and_then(Value::as_str), Some("object"));
             assert_eq!(nested.get("additionalProperties").and_then(Value::as_bool), Some(false));
@@ -299,18 +293,22 @@ mod tests {
             &temp,
             "replace_method_draft_graph",
             json!({
-                "nodes": [
-                    { "id": "generate", "label": "Generate answers", "type": "inference", "status": "draft" },
-                    { "id": "score", "label": "Score answers", "type": "eval", "status": "blocked" }
-                ],
-                "edges": [{ "from": "generate", "to": "score" }],
+                "workflow": {
+                    "nodes": [
+                        { "id": "generate", "label": "Generate answers", "type": "inference", "depends_on": [] },
+                        { "id": "score", "label": "Score answers", "type": "eval", "depends_on": ["generate"] }
+                    ]
+                },
                 "resources": []
             }),
         )
         .unwrap();
 
-        assert_eq!(result["draft"]["nodes"].as_array().unwrap().len(), 2);
-        assert_eq!(get_current_draft_for_root(&temp).unwrap().unwrap().edges.len(), 1);
+        assert_eq!(result["draft"]["workflow"]["nodes"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            get_current_draft_for_root(&temp).unwrap().unwrap().workflow.nodes[1].depends_on,
+            vec!["generate"]
+        );
         fs::remove_dir_all(temp).unwrap();
     }
 }

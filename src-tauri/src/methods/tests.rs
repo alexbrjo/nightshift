@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
@@ -11,8 +11,8 @@ use super::config::{
     resolve_provider_profile,
 };
 use super::draft::{
-    attach_resource_for_root, create_draft_for_root, default_draft, draft_to_method_manifest,
-    get_current_draft_for_root, resolve_api_key_resource_for_root,
+    attach_resource_for_root, create_draft_for_root, default_draft, get_current_draft_for_root,
+    method_document_for_save, resolve_api_key_resource_for_root,
     update_draft_execution_config_for_root, validate_graph,
 };
 use super::execution::{
@@ -21,39 +21,66 @@ use super::execution::{
 };
 use super::model::*;
 use super::preflight::preflight_method_for_root;
-use super::storage::{freeze_files, read_manifest, save_method_to_project};
+use super::storage::{
+    freeze_files, read_manifest, read_method_document, save_method_to_project,
+    write_method_document,
+};
 use super::validation::validate_method;
 
-fn sample_method() -> MethodManifest {
-    MethodManifest {
+fn sample_method() -> MethodDocument {
+    MethodDocument {
         schema_version: 1,
         id: "edge-method".into(),
         title: "Edge method".into(),
-        objective: Some("Compare local models".into()),
-        files: vec![MethodFileRef {
+        objective: "Compare local models".into(),
+        resources: vec![MethodResource {
             id: "prompt".into(),
             kind: "prompt".into(),
-            path: "prompts/main.jinja2".into(),
+            label: "Prompt".into(),
+            path: Some("prompts/main.jinja2".into()),
+            reference: None,
+            consumed_by: vec!["generate".into()],
         }],
         workflow: MethodWorkflow {
             nodes: vec![
                 MethodWorkflowNode {
                     id: "generate".into(),
+                    label: "Generate".into(),
                     node_type: "inference".into(),
                     depends_on: vec![],
-                    config: serde_yaml::Value::Null,
+                    config: serde_json::Value::Null,
                 },
                 MethodWorkflowNode {
                     id: "aggregate".into(),
+                    label: "Aggregate".into(),
                     node_type: "aggregate".into(),
                     depends_on: vec!["generate".into()],
-                    config: serde_yaml::Value::Null,
+                    config: serde_json::Value::Null,
                 },
             ],
         },
-        parameters: serde_yaml::Value::Null,
-        provider: serde_yaml::Value::Null,
+        parameters: serde_json::Value::Null,
+        provider: serde_json::Value::Null,
+        outputs: vec![],
+        metadata: serde_json::Value::Null,
     }
+}
+
+fn method_resource(id: &str, kind: &str, path: &str) -> MethodResource {
+    MethodResource {
+        id: id.into(),
+        kind: kind.into(),
+        label: id.into(),
+        path: Some(path.into()),
+        reference: None,
+        consumed_by: vec![],
+    }
+}
+
+fn yaml_top_level_keys(path: &PathBuf) -> HashSet<String> {
+    let yaml = fs::read_to_string(path).unwrap();
+    let value: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+    value.as_mapping().unwrap().keys().map(|key| key.as_str().unwrap().to_string()).collect()
 }
 
 #[test]
@@ -73,24 +100,24 @@ fn draft_creation_defaults_and_required_fields_are_reported() {
     assert_eq!(draft.schema_version, 1);
     assert!(draft.id.starts_with("draft-"));
     assert_eq!(draft.title, "Untitled Method");
-    assert_eq!(draft.lifecycle, MethodLifecycleState::Drafting);
-    assert!(draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_title"));
-    assert!(draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_objective"));
-    assert!(draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_nodes"));
+    let readiness = super::draft::derive_readiness(&draft);
+    assert_eq!(readiness.status, MethodLifecycleState::Drafting);
+    assert!(readiness.blockers.iter().any(|blocker| blocker.code == "missing_title"));
+    assert!(readiness.blockers.iter().any(|blocker| blocker.code == "missing_objective"));
+    assert!(readiness.blockers.iter().any(|blocker| blocker.code == "missing_nodes"));
 }
 
 #[test]
 fn draft_graph_validation_rejects_unknown_edge_endpoints() {
-    let nodes = vec![MethodDraftNode {
+    let nodes = vec![MethodWorkflowNode {
         id: "generate".into(),
         label: "Generate".into(),
         node_type: "inference".into(),
-        status: "draft".into(),
+        depends_on: vec!["score".into()],
         config: serde_json::json!({}),
     }];
-    let edges = vec![MethodDraftEdge { from: "generate".into(), to: "score".into() }];
 
-    let err = validate_graph(&nodes, &edges).unwrap_err();
+    let err = validate_graph(&nodes).unwrap_err();
 
     assert!(err.contains("unknown node 'score'"), "got: {err}");
 }
@@ -98,27 +125,23 @@ fn draft_graph_validation_rejects_unknown_edge_endpoints() {
 #[test]
 fn draft_graph_validation_rejects_cycles() {
     let nodes = vec![
-        MethodDraftNode {
+        MethodWorkflowNode {
             id: "a".into(),
             label: "A".into(),
             node_type: "inference".into(),
-            status: "draft".into(),
+            depends_on: vec!["b".into()],
             config: serde_json::json!({}),
         },
-        MethodDraftNode {
+        MethodWorkflowNode {
             id: "b".into(),
             label: "B".into(),
             node_type: "eval".into(),
-            status: "draft".into(),
+            depends_on: vec!["a".into()],
             config: serde_json::json!({}),
         },
     ];
-    let edges = vec![
-        MethodDraftEdge { from: "a".into(), to: "b".into() },
-        MethodDraftEdge { from: "b".into(), to: "a".into() },
-    ];
 
-    let err = validate_graph(&nodes, &edges).unwrap_err();
+    let err = validate_graph(&nodes).unwrap_err();
 
     assert!(err.contains("cycle"), "got: {err}");
 }
@@ -141,7 +164,13 @@ fn agent_tool_style_draft_creation_persists_current_draft() {
 
     assert_eq!(persisted.id, draft.id);
     assert_eq!(persisted.title, "Model rubric benchmark");
-    assert_eq!(persisted.lifecycle, MethodLifecycleState::Drafting);
+    assert_eq!(super::draft::derive_readiness(&persisted).status, MethodLifecycleState::Drafting);
+    let yaml_path = temp.join(".nightshift/current_method_draft.yaml");
+    let yaml = fs::read_to_string(&yaml_path).unwrap();
+    assert!(yaml.contains("schema_version:"), "got: {yaml}");
+    assert!(yaml.contains("provider:"), "got: {yaml}");
+    assert!(!yaml.contains("schemaVersion"), "got: {yaml}");
+    assert!(!yaml.contains("providerConfig"), "got: {yaml}");
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -162,14 +191,15 @@ fn attaching_file_resource_persists_project_relative_status_and_consumers() {
     super::draft::replace_draft_graph_for_root(
         &temp,
         ReplaceMethodDraftGraphInput {
-            nodes: vec![MethodDraftNode {
-                id: "generate".into(),
-                label: "Generate".into(),
-                node_type: "inference".into(),
-                status: "draft".into(),
-                config: serde_json::json!({}),
-            }],
-            edges: vec![],
+            workflow: MethodWorkflow {
+                nodes: vec![MethodWorkflowNode {
+                    id: "generate".into(),
+                    label: "Generate".into(),
+                    node_type: "inference".into(),
+                    depends_on: vec![],
+                    config: serde_json::json!({}),
+                }],
+            },
             resources: Some(vec![]),
         },
     )
@@ -189,8 +219,10 @@ fn attaching_file_resource_persists_project_relative_status_and_consumers() {
     .unwrap();
 
     assert_eq!(draft.resources[0].path.as_deref(), Some("prompts/main.md"));
-    assert_eq!(draft.resources[0].status, "attached");
     assert_eq!(draft.resources[0].consumed_by, vec!["generate"]);
+    let yaml = fs::read_to_string(temp.join(".nightshift/current_method_draft.yaml")).unwrap();
+    assert!(yaml.contains("consumed_by:"), "got: {yaml}");
+    assert!(!yaml.contains("consumedBy"), "got: {yaml}");
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -235,113 +267,102 @@ fn attaching_file_resource_rejects_dependency_folders_and_mismatched_nodes() {
         },
     )
     .unwrap();
-    assert_eq!(draft.resources[0].status, "missing");
-    assert!(draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_resource"));
+    assert_eq!(draft.resources[0].path.as_deref(), Some("schemas/out.json"));
     fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]
 fn named_file_resource_with_path_is_not_reported_missing() {
-    let draft = super::draft::refresh_readiness(MethodDraft {
+    let draft = MethodDocument {
         schema_version: 1,
         id: "draft-resource-status".into(),
         title: "Resource status".into(),
         objective: "Keep named resource bindings from duplicating missing blockers".into(),
-        lifecycle: MethodLifecycleState::Drafting,
-        resources: vec![MethodDraftResource {
+        resources: vec![MethodResource {
             id: "data".into(),
             kind: "data".into(),
             label: "Verb dataset".into(),
-            status: "named".into(),
             path: Some("100_Verben.jsonl".into()),
             reference: None,
             consumed_by: vec!["generate".into()],
         }],
-        nodes: vec![MethodDraftNode {
-            id: "generate".into(),
-            label: "Generate".into(),
-            node_type: "inference".into(),
-            status: "ready".into(),
-            config: serde_json::json!({}),
-        }],
-        edges: vec![],
+        workflow: MethodWorkflow {
+            nodes: vec![MethodWorkflowNode {
+                id: "generate".into(),
+                label: "Generate".into(),
+                node_type: "inference".into(),
+                depends_on: vec![],
+                config: serde_json::json!({}),
+            }],
+        },
         parameters: serde_json::json!({}),
-        provider_config: serde_json::json!({}),
+        provider: serde_json::json!({}),
         outputs: vec![],
         metadata: serde_json::json!({}),
-        readiness: MethodDraftReadiness {
-            status: MethodLifecycleState::Drafting,
-            blockers: vec![],
-            warnings: vec![],
-        },
-    });
+    };
 
-    assert!(!draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_resource"));
+    assert!(!super::draft::derive_readiness(&draft)
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == "missing_resource"));
 }
 
 #[test]
-fn ready_draft_converts_to_freezable_method_manifest() {
-    let draft = MethodDraft {
+fn ready_draft_clones_to_freezable_method_document() {
+    let draft = MethodDocument {
         schema_version: 1,
         id: "draft-1".into(),
         title: "Edge Model Flash-Card Accuracy at 98%".into(),
         objective: "Measure edge model flash-card accuracy.".into(),
-        lifecycle: MethodLifecycleState::Ready,
         resources: vec![
-            MethodDraftResource {
+            MethodResource {
                 id: "prompt".into(),
                 kind: "prompt".into(),
                 label: "Prompt".into(),
-                status: "attached".into(),
                 path: Some("flash_cards/flash_card_prompt.jinja2".into()),
                 reference: None,
                 consumed_by: vec!["generate".into()],
             },
-            MethodDraftResource {
+            MethodResource {
                 id: "schema".into(),
                 kind: "json_schema".into(),
                 label: "Schema".into(),
-                status: "attached".into(),
                 path: Some("flash_cards/flash_card.schema.json".into()),
                 reference: None,
                 consumed_by: vec!["generate".into()],
             },
         ],
-        nodes: vec![
-            MethodDraftNode {
-                id: "generate".into(),
-                label: "Generate".into(),
-                node_type: "inference".into(),
-                status: "ready".into(),
-                config: serde_json::json!({ "output_mode": "JSON Schema" }),
-            },
-            MethodDraftNode {
-                id: "analysis".into(),
-                label: "Analyze".into(),
-                node_type: "analysis".into(),
-                status: "ready".into(),
-                config: serde_json::json!({}),
-            },
-        ],
-        edges: vec![MethodDraftEdge { from: "generate".into(), to: "analysis".into() }],
+        workflow: MethodWorkflow {
+            nodes: vec![
+                MethodWorkflowNode {
+                    id: "generate".into(),
+                    label: "Generate".into(),
+                    node_type: "inference".into(),
+                    depends_on: vec![],
+                    config: serde_json::json!({ "output_mode": "JSON Schema" }),
+                },
+                MethodWorkflowNode {
+                    id: "analysis".into(),
+                    label: "Analyze".into(),
+                    node_type: "analysis".into(),
+                    depends_on: vec!["generate".into()],
+                    config: serde_json::json!({}),
+                },
+            ],
+        },
         parameters: serde_json::json!({}),
-        provider_config: serde_json::json!({ "model": "qwen-test" }),
+        provider: serde_json::json!({ "model": "qwen-test" }),
         outputs: vec![],
         metadata: serde_json::json!({}),
-        readiness: MethodDraftReadiness {
-            status: MethodLifecycleState::Ready,
-            blockers: vec![],
-            warnings: vec![],
-        },
     };
 
-    let method = draft_to_method_manifest(&draft).unwrap();
+    let method = method_document_for_save(&draft).unwrap();
 
     assert_eq!(method.id, "draft-1");
-    assert_eq!(method.files[0].kind, "prompt");
-    assert_eq!(method.files[1].kind, "schema");
+    assert_eq!(method.resources[0].kind, "prompt");
+    assert_eq!(method.resources[1].kind, "json_schema");
     assert_eq!(method.workflow.nodes[1].depends_on, vec!["generate"]);
-    assert_eq!(method.provider.get("model").and_then(serde_yaml::Value::as_str), Some("qwen-test"));
+    assert_eq!(method.provider.get("model").and_then(serde_json::Value::as_str), Some("qwen-test"));
 }
 
 #[test]
@@ -361,25 +382,22 @@ fn execution_config_update_persists_provider_model() {
     let draft = update_draft_execution_config_for_root(
         &temp,
         UpdateMethodDraftExecutionConfigInput {
-            provider_config: Some(serde_json::json!({
+            provider: Some(serde_json::json!({
                 "model": "qwen-test",
-                "serverUrl": "http://localhost:11434"
+                "server_url": "http://localhost:11434"
             })),
             parameters: Some(serde_json::json!({
-                "modelValues": ["bonsai-8b", "qwen3.5-4b"],
-                "maxTokens": 2000,
+                "model_values": ["bonsai-8b", "qwen3.5-4b"],
+                "max_tokens": 2000,
                 "samples": 2
             })),
         },
     )
     .unwrap();
 
+    assert_eq!(draft.provider.get("model").and_then(serde_json::Value::as_str), Some("qwen-test"));
     assert_eq!(
-        draft.provider_config.get("model").and_then(serde_json::Value::as_str),
-        Some("qwen-test")
-    );
-    assert_eq!(
-        draft.provider_config.get("server_url").and_then(serde_json::Value::as_str),
+        draft.provider.get("server_url").and_then(serde_json::Value::as_str),
         Some("http://localhost:11434")
     );
     assert_eq!(
@@ -393,50 +411,44 @@ fn execution_config_update_persists_provider_model() {
 
 #[test]
 fn data_resource_cannot_feed_analysis_node_directly() {
-    let draft = super::draft::refresh_readiness(MethodDraft {
+    let draft = MethodDocument {
         schema_version: 1,
         id: "draft-data-analysis".into(),
         title: "Bad data analysis".into(),
         objective: "Prevent raw datasets from being modeled as analysis source nodes".into(),
-        lifecycle: MethodLifecycleState::Drafting,
-        resources: vec![MethodDraftResource {
+        resources: vec![MethodResource {
             id: "dataset".into(),
             kind: "data".into(),
             label: "Verb dataset".into(),
-            status: "attached".into(),
             path: Some("100_Verben.jsonl".into()),
             reference: None,
             consumed_by: vec!["sample_records".into()],
         }],
-        nodes: vec![
-            MethodDraftNode {
-                id: "sample_records".into(),
-                label: "Randomly sample records".into(),
-                node_type: "analysis".into(),
-                status: "ready".into(),
-                config: serde_json::json!({}),
-            },
-            MethodDraftNode {
-                id: "generate".into(),
-                label: "Generate flash cards".into(),
-                node_type: "inference".into(),
-                status: "ready".into(),
-                config: serde_json::json!({}),
-            },
-        ],
-        edges: vec![MethodDraftEdge { from: "sample_records".into(), to: "generate".into() }],
+        workflow: MethodWorkflow {
+            nodes: vec![
+                MethodWorkflowNode {
+                    id: "sample_records".into(),
+                    label: "Randomly sample records".into(),
+                    node_type: "analysis".into(),
+                    depends_on: vec![],
+                    config: serde_json::json!({}),
+                },
+                MethodWorkflowNode {
+                    id: "generate".into(),
+                    label: "Generate flash cards".into(),
+                    node_type: "inference".into(),
+                    depends_on: vec!["sample_records".into()],
+                    config: serde_json::json!({}),
+                },
+            ],
+        },
         parameters: serde_json::json!({}),
-        provider_config: serde_json::json!({}),
+        provider: serde_json::json!({}),
         outputs: vec![],
         metadata: serde_json::json!({}),
-        readiness: MethodDraftReadiness {
-            status: MethodLifecycleState::Drafting,
-            blockers: vec![],
-            warnings: vec![],
-        },
-    });
+    };
 
-    assert!(draft.readiness.blockers.iter().any(|blocker| {
+    assert!(super::draft::derive_readiness(&draft).blockers.iter().any(|blocker| {
         blocker.code == "resource_node_kind_mismatch"
             && blocker.node_id.as_deref() == Some("sample_records")
             && blocker.resource_id.as_deref() == Some("dataset")
@@ -464,14 +476,15 @@ fn api_key_resource_uses_reference_without_persisting_value() {
     super::draft::replace_draft_graph_for_root(
         &temp,
         ReplaceMethodDraftGraphInput {
-            nodes: vec![MethodDraftNode {
-                id: "generate".into(),
-                label: "Generate".into(),
-                node_type: "inference".into(),
-                status: "draft".into(),
-                config: serde_json::json!({}),
-            }],
-            edges: vec![],
+            workflow: MethodWorkflow {
+                nodes: vec![MethodWorkflowNode {
+                    id: "generate".into(),
+                    label: "Generate".into(),
+                    node_type: "inference".into(),
+                    depends_on: vec![],
+                    config: serde_json::json!({}),
+                }],
+            },
             resources: Some(vec![]),
         },
     )
@@ -554,7 +567,7 @@ async fn save_method_rejects_pre_frozen_file_paths() {
     fs::create_dir_all(&temp).unwrap();
     let db = DatabaseState::new(&temp).await.unwrap();
     let mut method = sample_method();
-    method.files[0].path = "files/already-frozen.jinja2".into();
+    method.resources[0].path = Some("files/already-frozen.jinja2".into());
 
     let err = save_method_to_project(&db, &temp, method).await.unwrap_err();
 
@@ -572,8 +585,8 @@ fn freeze_files_rewrites_to_content_addressed_paths() {
 
     freeze_files(&mut method, &temp, &dest).unwrap();
 
-    assert!(method.files[0].path.starts_with("files/"));
-    assert!(dest.join(&method.files[0].path).is_file());
+    assert!(method.resources[0].path.as_deref().unwrap().starts_with("files/"));
+    assert!(dest.join(method.resources[0].path.as_deref().unwrap()).is_file());
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -586,11 +599,7 @@ async fn save_method_persists_metadata_and_frozen_manifest() {
     fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
     let db = DatabaseState::new(&temp).await.unwrap();
     let mut method = sample_method();
-    method.files.push(MethodFileRef {
-        id: "data".into(),
-        kind: "data".into(),
-        path: "data/examples.jsonl".into(),
-    });
+    method.resources.push(method_resource("data", "data", "data/examples.jsonl"));
     method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
 
     let summary = save_method_to_project(&db, &temp, method).await.unwrap();
@@ -605,8 +614,64 @@ async fn save_method_persists_metadata_and_frozen_manifest() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, "edge-method");
     assert_eq!(listed[0].content_hash, summary.content_hash);
-    assert!(manifest.files[0].path.starts_with("files/"));
-    assert!(PathBuf::from(&summary.folder_path).join(&manifest.files[0].path).is_file());
+    assert!(manifest.resources[0].path.as_deref().unwrap().starts_with("files/"));
+    assert!(PathBuf::from(&summary.folder_path)
+        .join(manifest.resources[0].path.as_deref().unwrap())
+        .is_file());
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn method_document_round_trips_through_draft_and_saved_paths() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-roundtrip-test-{}", Uuid::new_v4()));
+    let draft_path = temp.join(".nightshift/current_method_draft.yaml");
+    let saved_path = temp.join("methods/edge-method/method.yaml");
+    fs::create_dir_all(draft_path.parent().unwrap()).unwrap();
+    fs::create_dir_all(saved_path.parent().unwrap()).unwrap();
+    let method = sample_method();
+
+    write_method_document(&draft_path, &method).unwrap();
+    write_method_document(&saved_path, &method).unwrap();
+
+    assert_eq!(read_method_document(&draft_path).unwrap(), method);
+    assert_eq!(read_method_document(&saved_path).unwrap(), method);
+    assert_eq!(yaml_top_level_keys(&draft_path), yaml_top_level_keys(&saved_path));
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn draft_and_saved_yaml_use_same_canonical_shape_without_derived_state() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-shape-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".nightshift")).unwrap();
+    fs::create_dir_all(temp.join("prompts")).unwrap();
+    fs::create_dir_all(temp.join("data")).unwrap();
+    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
+    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let mut method = sample_method();
+    method.resources.push(method_resource("data", "data", "data/examples.jsonl"));
+    method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
+    method.parameters = serde_yaml::from_str("samples: 2").unwrap();
+    let draft_path = temp.join(".nightshift/current_method_draft.yaml");
+
+    write_method_document(&draft_path, &method).unwrap();
+    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
+    let saved_path = PathBuf::from(summary.folder_path).join("method.yaml");
+    let draft_keys = yaml_top_level_keys(&draft_path);
+    let saved_keys = yaml_top_level_keys(&saved_path);
+
+    assert_eq!(draft_keys, saved_keys);
+    for forbidden in ["readiness", "lifecycle", "edges", "files", "schemaVersion", "providerConfig"]
+    {
+        assert!(!draft_keys.contains(forbidden), "draft persisted {forbidden}");
+        assert!(!saved_keys.contains(forbidden), "saved Method persisted {forbidden}");
+    }
+    let saved = fs::read_to_string(&saved_path).unwrap();
+    assert!(saved.contains("resources:"), "got: {saved}");
+    assert!(saved.contains("workflow:"), "got: {saved}");
+    assert!(saved.contains("depends_on:"), "got: {saved}");
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -620,11 +685,7 @@ async fn save_method_updates_existing_method_id_in_place() {
     fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
     let db = DatabaseState::new(&temp).await.unwrap();
     let mut method = sample_method();
-    method.files.push(MethodFileRef {
-        id: "data".into(),
-        kind: "data".into(),
-        path: "data/examples.jsonl".into(),
-    });
+    method.resources.push(method_resource("data", "data", "data/examples.jsonl"));
     method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
 
     let first = save_method_to_project(&db, &temp, method.clone()).await.unwrap();
@@ -664,7 +725,7 @@ fn preflight_reports_missing_required_files() {
         std::env::temp_dir().join(format!("nightshift-method-preflight-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp).unwrap();
     let mut method = sample_method();
-    method.files = vec![];
+    method.resources = vec![];
 
     let result = preflight_method_for_root(&method, &temp);
 
@@ -691,11 +752,7 @@ fn preflight_is_ready_when_required_files_exist() {
     fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
     fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
     let mut method = sample_method();
-    method.files.push(MethodFileRef {
-        id: "data".into(),
-        kind: "data".into(),
-        path: "data/examples.jsonl".into(),
-    });
+    method.resources.push(method_resource("data", "data", "data/examples.jsonl"));
     method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
 
     let result = preflight_method_for_root(&method, &temp);
@@ -714,11 +771,7 @@ fn preflight_accepts_model_sweep_values_for_inference() {
     fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
     fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
     let mut method = sample_method();
-    method.files.push(MethodFileRef {
-        id: "data".into(),
-        kind: "data".into(),
-        path: "data/examples.jsonl".into(),
-    });
+    method.resources.push(method_resource("data", "data", "data/examples.jsonl"));
     method.parameters =
         serde_yaml::from_str("model_values:\n  - bonsai-8b\n  - qwen3.5-4b\n").unwrap();
 
@@ -762,11 +815,7 @@ async fn create_inference_job_for_node_uses_frozen_method_files() {
     fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
     let db = DatabaseState::new(&temp).await.unwrap();
     let mut method = sample_method();
-    method.files.push(MethodFileRef {
-        id: "data".into(),
-        kind: "data".into(),
-        path: "data/examples.jsonl".into(),
-    });
+    method.resources.push(method_resource("data", "data", "data/examples.jsonl"));
     method.provider = serde_yaml::from_str(
         r#"
 provider: Local
@@ -808,23 +857,16 @@ async fn create_transform_job_for_node_uses_frozen_script_and_data() {
     fs::write(temp.join("scripts/score.js"), "return item;").unwrap();
     let db = DatabaseState::new(&temp).await.unwrap();
     let mut method = sample_method();
-    method.files = vec![
-        MethodFileRef {
-            id: "data".into(),
-            kind: "data".into(),
-            path: "data/examples.jsonl".into(),
-        },
-        MethodFileRef {
-            id: "script".into(),
-            kind: "script".into(),
-            path: "scripts/score.js".into(),
-        },
+    method.resources = vec![
+        method_resource("data", "data", "data/examples.jsonl"),
+        method_resource("script", "eval_script", "scripts/score.js"),
     ];
     method.workflow.nodes = vec![MethodWorkflowNode {
         id: "score".into(),
+        label: "Score".into(),
         node_type: "transform".into(),
         depends_on: vec![],
-        config: serde_yaml::Value::Null,
+        config: serde_json::Value::Null,
     }];
 
     let summary = save_method_to_project(&db, &temp, method).await.unwrap();
@@ -904,9 +946,10 @@ async fn aggregate_agent_summarizes_pass_fields_by_job_model() {
     node_outputs.insert("score".to_string(), format!("inference_job:{}", job_id));
     let node = MethodWorkflowNode {
         id: "aggregate".into(),
+        label: "Aggregate".into(),
         node_type: "aggregate".into(),
         depends_on: vec!["score".into()],
-        config: serde_yaml::Value::Null,
+        config: serde_json::Value::Null,
     };
 
     let output_ref = run_aggregate_agent(&db, execution_id, &node, &node_outputs).await.unwrap();

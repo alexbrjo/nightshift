@@ -5,7 +5,7 @@ import type {
   CodexAppServerEvent,
   CodexAppServerSession,
   CodexTurnSummary,
-  MethodDraft,
+  MethodDocument,
   MethodExecutionEventSummary,
   MethodExecutionNodeSummary,
   MethodExecutionSummary,
@@ -59,14 +59,26 @@ function isMissingProjectError(err: unknown) {
     || message.includes("Open a project folder before starting");
 }
 
-function isMethodDraft(value: unknown): value is MethodDraft {
+function isMethodDocument(value: unknown): value is MethodDocument {
   return Boolean(
     value
       && typeof value === "object"
       && !Array.isArray(value)
       && "id" in value
-      && "readiness" in value,
+      && "workflow" in value,
   );
+}
+
+function derivedDraftReadiness(draft: MethodDocument | null) {
+  if (!draft) return { status: "drafting", blockers: [] };
+  const blockers: string[] = [];
+  if (!draft.title.trim() || draft.title === "Untitled Method") blockers.push("title");
+  if (!draft.objective.trim()) blockers.push("objective");
+  if (draft.workflow.nodes.length === 0) blockers.push("nodes");
+  for (const resource of draft.resources) {
+    if (!resource.path && !resource.reference) blockers.push(resource.id);
+  }
+  return { status: blockers.length ? "drafting" : "ready", blockers };
 }
 
 function eventDetail(event: MethodExecutionEventSummary): string | null {
@@ -85,7 +97,7 @@ export default function AgentWorkspace() {
   const hasProjectRootRef = useRef(false);
   const [session, setSession] = useState<CodexAppServerSession | null>(null);
   const [activeTurn, setActiveTurn] = useState<CodexTurnSummary | null>(null);
-  const [draft, setDraft] = useState<MethodDraft | null>(null);
+  const [draft, setDraft] = useState<MethodDocument | null>(null);
   const [methods, setMethods] = useState<MethodSummary[]>([]);
   const [selectedMethodId, setSelectedMethodId] = useState("");
   const [activeExecutionId, setActiveExecutionId] = useState<number | null>(null);
@@ -135,8 +147,8 @@ export default function AgentWorkspace() {
 
   const loadCurrentDraft = useCallback(async (options?: { silentMissingProject?: boolean }) => {
     try {
-      const currentDraft = await invoke<MethodDraft | null>("get_current_method_draft");
-      setDraft(isMethodDraft(currentDraft) ? currentDraft : null);
+      const currentDraft = await invoke<MethodDocument | null>("get_current_method_draft");
+      setDraft(isMethodDocument(currentDraft) ? currentDraft : null);
     } catch (err) {
       if (!options?.silentMissingProject || !isMissingProjectError(err)) {
         addSystemMessage(`I could not load the current Method draft: ${String(err)}`, "failed");
@@ -230,8 +242,8 @@ export default function AgentWorkspace() {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    listen<MethodDraft | null>("method-draft-updated", (event) => {
-      if (!cancelled) setDraft(isMethodDraft(event.payload) ? event.payload : null);
+    listen<MethodDocument | null>("method-draft-updated", (event) => {
+      if (!cancelled) setDraft(isMethodDocument(event.payload) ? event.payload : null);
     })
       .then((fn) => {
         if (cancelled) fn();
@@ -386,7 +398,7 @@ export default function AgentWorkspace() {
   };
 
   const saveCurrentDraftAsMethod = async () => {
-    if (!draft || draft.readiness.blockers.length > 0 || isSavingMethod) return;
+    if (!draft || derivedDraftReadiness(draft).blockers.length > 0 || isSavingMethod) return;
     setIsSavingMethod(true);
     setMethodActionFeedback({ tone: "info", text: "Saving Method..." });
     try {
@@ -445,7 +457,7 @@ export default function AgentWorkspace() {
             <div className="method-draft-header">
               {draft ? (
                 <div>
-                  <span>{draft.lifecycle}</span>
+                  <span>{derivedDraftReadiness(draft).status}</span>
                   <strong>{draft.title}</strong>
                 </div>
               ) : (
@@ -454,7 +466,7 @@ export default function AgentWorkspace() {
                   <strong>No Method draft exists yet.</strong>
                 </div>
               )}
-              <span>{draft ? `${draft.readiness.blockers.length} blockers` : `${methods.length} saved`}</span>
+              <span>{draft ? `${derivedDraftReadiness(draft).blockers.length} blockers` : `${methods.length} saved`}</span>
             </div>
 
             <section className="method-execution-panel" aria-label="Method execution">
@@ -485,7 +497,7 @@ export default function AgentWorkspace() {
                 <button
                   type="button"
                   onClick={() => void saveCurrentDraftAsMethod()}
-                  disabled={!draft || draft.readiness.blockers.length > 0 || isSavingMethod || isExecutingMethod}
+                  disabled={!draft || derivedDraftReadiness(draft).blockers.length > 0 || isSavingMethod || isExecutingMethod}
                 >
                   {isSavingMethod ? "Saving" : "Save Method"}
                 </button>
