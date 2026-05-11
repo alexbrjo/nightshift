@@ -63,19 +63,16 @@ pub fn method_function_tools() -> Vec<Value> {
                 "providerConfig": object_schema(json!({
                     "provider": { "type": ["string", "null"], "description": "Provider label, for example Local." },
                     "model": { "type": ["string", "null"], "description": "Default model name used by inference nodes." },
-                    "server_url": { "type": ["string", "null"], "description": "Local inference server URL." },
                     "serverUrl": { "type": ["string", "null"], "description": "Local inference server URL." }
-                }), vec!["provider", "model", "server_url", "serverUrl"]),
+                }), vec!["provider", "model", "serverUrl"]),
                 "parameters": object_schema(json!({
                     "model": { "type": ["string", "null"], "description": "Single model name." },
-                    "model_values": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Model sweep values." },
                     "modelValues": { "type": ["array", "null"], "items": { "type": "string" }, "description": "Model sweep values." },
                     "temperature": { "type": ["number", "null"] },
-                    "max_tokens": { "type": ["integer", "null"] },
                     "maxTokens": { "type": ["integer", "null"] },
                     "samples": { "type": ["integer", "null"] },
                     "strategy": { "type": ["string", "null"] }
-                }), vec!["model", "model_values", "modelValues", "temperature", "max_tokens", "maxTokens", "samples", "strategy"])
+                }), vec!["model", "modelValues", "temperature", "maxTokens", "samples", "strategy"])
             }), vec!["providerConfig", "parameters"]),
             "strict": true
         }),

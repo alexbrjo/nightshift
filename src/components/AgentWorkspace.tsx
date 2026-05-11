@@ -81,17 +81,6 @@ function eventDetail(event: MethodExecutionEventSummary): string | null {
   return null;
 }
 
-function slugForMethodId(value: string) {
-  const slug = value
-    .split("")
-    .map((char) => (/[a-z0-9]/i.test(char) ? char.toLowerCase() : "-"))
-    .join("")
-    .split("-")
-    .filter(Boolean)
-    .join("-");
-  return slug || "method";
-}
-
 export default function AgentWorkspace() {
   const hasProjectRootRef = useRef(false);
   const [session, setSession] = useState<CodexAppServerSession | null>(null);
@@ -283,7 +272,7 @@ export default function AgentWorkspace() {
     }
     const timer = window.setInterval(() => {
       void refreshExecution(activeExecutionId);
-    }, 1000);
+    }, 5000);
     return () => window.clearInterval(timer);
   }, [activeExecutionId, executionStatus, refreshExecution]);
 
@@ -367,7 +356,7 @@ export default function AgentWorkspace() {
 
   const executeSelectedMethod = async () => {
     if (!selectedMethodId || isExecutingMethod) return;
-    if (draft && slugForMethodId(draft.title) !== selectedMethodId) {
+    if (draft && draft.id !== selectedMethodId) {
       setMethodActionFeedback({
         tone: "error",
         text: `The visible draft is '${draft.title}', but Execute is pointed at saved Method '${selectedMethodId}'. Save the draft first or choose the matching saved Method.`,

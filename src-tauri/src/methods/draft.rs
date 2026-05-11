@@ -312,22 +312,6 @@ fn write_draft_to_root(root: &Path, draft: &MethodDraft) -> Result<(), String> {
     fs::write(&path, text).map_err(|e| format!("Failed to write Method draft: {}", e))
 }
 
-fn slug_for_method_id(value: &str) -> String {
-    let slug = value
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>()
-        .join("-");
-    if slug.is_empty() {
-        format!("method-{}", Uuid::new_v4())
-    } else {
-        slug
-    }
-}
-
 fn draft_resource_file_kind(kind: &str) -> Option<&'static str> {
     match kind {
         "prompt" => Some("prompt"),
@@ -422,7 +406,7 @@ pub(crate) fn draft_to_method_manifest(draft: &MethodDraft) -> Result<MethodMani
 
     Ok(MethodManifest {
         schema_version: refreshed.schema_version,
-        id: slug_for_method_id(&refreshed.title),
+        id: refreshed.id.clone(),
         title: refreshed.title.clone(),
         objective: Some(refreshed.objective.clone()),
         files,

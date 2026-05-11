@@ -141,12 +141,6 @@ pub(crate) async fn save_method_to_project(
         ));
     }
     let final_dir = method_dir(root, &method_input.id);
-    if final_dir.exists() {
-        return Err(format!(
-            "Method '{}' already exists; create a new method id for revisions",
-            method_input.id
-        ));
-    }
 
     fs::create_dir_all(methods_dir(&root))
         .map_err(|e| format!("Failed to create methods directory: {}", e))?;
@@ -172,9 +166,26 @@ pub(crate) async fn save_method_to_project(
         }
     };
 
+    let backup_dir = if final_dir.exists() {
+        let backup = methods_dir(&root).join(format!(".{}.bak", Uuid::new_v4()));
+        if let Err(e) = fs::rename(&final_dir, &backup) {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err(format!("Failed to replace existing method folder: {}", e));
+        }
+        Some(backup)
+    } else {
+        None
+    };
+
     if let Err(e) = fs::rename(&temp_dir, &final_dir) {
+        if let Some(backup) = backup_dir.as_ref() {
+            let _ = fs::rename(backup, &final_dir);
+        }
         let _ = fs::remove_dir_all(&temp_dir);
         return Err(format!("Failed to finalize method folder: {}", e));
+    }
+    if let Some(backup) = backup_dir {
+        let _ = fs::remove_dir_all(backup);
     }
 
     upsert_method_metadata(db, &method, &content_hash, &final_dir).await?;

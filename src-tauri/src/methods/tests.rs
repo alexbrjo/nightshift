@@ -338,7 +338,7 @@ fn ready_draft_converts_to_freezable_method_manifest() {
 
     let method = draft_to_method_manifest(&draft).unwrap();
 
-    assert_eq!(method.id, "edge-model-flash-card-accuracy-at-98");
+    assert_eq!(method.id, "draft-1");
     assert_eq!(method.files[0].kind, "prompt");
     assert_eq!(method.files[1].kind, "schema");
     assert_eq!(method.workflow.nodes[1].depends_on, vec!["generate"]);
@@ -611,6 +611,42 @@ async fn save_method_persists_metadata_and_frozen_manifest() {
     fs::remove_dir_all(temp).unwrap();
 }
 
+#[tokio::test]
+async fn save_method_updates_existing_method_id_in_place() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-resave-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("prompts")).unwrap();
+    fs::create_dir_all(temp.join("data")).unwrap();
+    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
+    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let mut method = sample_method();
+    method.files.push(MethodFileRef {
+        id: "data".into(),
+        kind: "data".into(),
+        path: "data/examples.jsonl".into(),
+    });
+    method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
+
+    let first = save_method_to_project(&db, &temp, method.clone()).await.unwrap();
+    method.title = "Renamed edge method".into();
+    let second = save_method_to_project(&db, &temp, method).await.unwrap();
+    let listed = sqlx::query_as::<_, MethodSummary>(
+        "SELECT id, title, content_hash, folder_path, created_at FROM methods",
+    )
+    .fetch_all(&db.pool())
+    .await
+    .unwrap();
+    let manifest = read_manifest(&PathBuf::from(&second.folder_path)).unwrap();
+
+    assert_eq!(first.id, "edge-method");
+    assert_eq!(second.id, "edge-method");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].title, "Renamed edge method");
+    assert_eq!(manifest.title, "Renamed edge method");
+    fs::remove_dir_all(temp).unwrap();
+}
+
 #[test]
 fn topological_nodes_orders_dependencies_first() {
     let method = sample_method();
@@ -624,7 +660,7 @@ fn topological_nodes_orders_dependencies_first() {
 }
 
 #[test]
-fn method_graph_execution_plan_linearizes_topological_order_for_graph_flow() {
+fn method_graph_execution_plan_preserves_workflow_dependencies() {
     let mut method = sample_method();
     method.workflow.nodes = vec![
         MethodWorkflowNode {
@@ -645,16 +681,24 @@ fn method_graph_execution_plan_linearizes_topological_order_for_graph_flow() {
             depends_on: vec!["generate".into()],
             config: serde_yaml::Value::Null,
         },
+        MethodWorkflowNode {
+            id: "summary".into(),
+            node_type: "analysis".into(),
+            depends_on: vec!["eval".into(), "aggregate".into()],
+            config: serde_yaml::Value::Null,
+        },
     ];
 
     let (task_ids, edges) = method_graph_execution_plan(&method.workflow.nodes).unwrap();
 
-    assert_eq!(task_ids, vec!["generate", "eval", "aggregate"]);
+    assert_eq!(task_ids, vec!["generate", "eval", "aggregate", "summary"]);
     assert_eq!(
         edges,
         vec![
             ("generate".to_string(), "eval".to_string()),
-            ("eval".to_string(), "aggregate".to_string())
+            ("eval".to_string(), "aggregate".to_string()),
+            ("eval".to_string(), "summary".to_string()),
+            ("aggregate".to_string(), "summary".to_string())
         ]
     );
 }
