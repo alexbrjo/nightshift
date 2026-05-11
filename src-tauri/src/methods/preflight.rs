@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use super::config::{config_string, method_file_by_kind, yaml_lookup, yaml_string};
+use super::config::{config_string, method_file_by_kind, model_values, yaml_lookup, yaml_string};
 use super::model::{
     MethodManifest, MethodPreflightBlocker, MethodPreflightResult, MethodWorkflowNode,
 };
@@ -98,7 +98,7 @@ pub(crate) fn preflight_method_for_root(
     if has_inference {
         let model = yaml_string(yaml_lookup(&method.provider, "model"))
             .or_else(|| yaml_string(yaml_lookup(&method.parameters, "model")));
-        if model.as_deref().unwrap_or("").trim().is_empty() {
+        if model.as_deref().unwrap_or("").trim().is_empty() && model_values(method).is_empty() {
             blockers.push(MethodPreflightBlocker {
                 code: "missing_model".into(),
                 message: "Inference needs a model name.".into(),

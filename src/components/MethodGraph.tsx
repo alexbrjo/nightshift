@@ -9,7 +9,13 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import type { MethodDraft, MethodDraftIssue, MethodDraftNode, MethodDraftResource } from "../database";
+import type {
+  MethodDraft,
+  MethodDraftIssue,
+  MethodDraftNode,
+  MethodDraftResource,
+  MethodExecutionNodeSummary,
+} from "../database";
 
 const NODE_HEIGHT = 180;
 const ROW_GAP = NODE_HEIGHT + 64;
@@ -61,6 +67,25 @@ function configHints(config: Record<string, unknown> | undefined) {
   return Object.entries(config)
     .slice(0, MAX_CONFIG_HINTS)
     .map(([key, value]) => `${key}: ${formatConfigValue(value)}`);
+}
+
+function effectiveConfigHints(draft: MethodDraft, node: MethodDraftNode) {
+  const ownHints = configHints(node.config);
+  if (ownHints.length > 0 || node.type !== "inference") return ownHints;
+
+  const hints = [
+    ["provider", draft.providerConfig?.provider],
+    ["server_url", draft.providerConfig?.server_url ?? draft.providerConfig?.serverUrl],
+    ["model_values", draft.parameters?.model_values ?? draft.parameters?.modelValues],
+    ["samples", draft.parameters?.samples],
+    ["max_tokens", draft.parameters?.max_tokens ?? draft.parameters?.maxTokens],
+    ["temperature", draft.parameters?.temperature],
+  ]
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .slice(0, MAX_CONFIG_HINTS)
+    .map(([key, value]) => `${key}: ${formatConfigValue(value)}`);
+
+  return hints;
 }
 
 function resourceKindLabel(kind: string) {
@@ -148,11 +173,24 @@ function issuesForNode(
   return issues.filter((issue) => issueAppliesToNode(issue, nodeId, resources));
 }
 
-export function buildMethodGraphElements(draft: MethodDraft): MethodGraphElements {
+function nodeWithExecutionStatus(
+  node: MethodDraftNode,
+  executionNodes: MethodExecutionNodeSummary[],
+): MethodDraftNode {
+  const executionNode = executionNodes.find((candidate) => candidate.nodeId === node.id);
+  if (!executionNode) return node;
+  return { ...node, status: executionNode.status };
+}
+
+export function buildMethodGraphElements(
+  draft: MethodDraft,
+  executionNodes: MethodExecutionNodeSummary[] = [],
+): MethodGraphElements {
   const nodeById = new Map(draft.nodes.map((node) => [node.id, node]));
   const order = buildNodeOrder(draft);
 
   const nodes: MethodFlowNode[] = draft.nodes.map((node) => {
+    const displayNode = nodeWithExecutionStatus(node, executionNodes);
     const row = order.get(node.id) ?? 0;
     const incomingLabels = draft.edges
       .filter((edge) => edge.to === node.id)
@@ -166,13 +204,13 @@ export function buildMethodGraphElements(draft: MethodDraft): MethodGraphElement
       type: "method",
       position: { x: METHOD_NODE_X, y: row * ROW_GAP },
       data: {
-        draftNode: node,
+        draftNode: displayNode,
         incomingLabels,
         blockerCount: blockers.length,
         warningCount: warnings.length,
         resourceCount: resources.length,
         issues: [...blockers, ...warnings],
-        configHints: configHints(node.config),
+        configHints: effectiveConfigHints(draft, node),
       },
     };
   });
@@ -328,10 +366,11 @@ const nodeTypes = {
 
 interface MethodGraphProps {
   draft: MethodDraft;
+  executionNodes?: MethodExecutionNodeSummary[];
 }
 
-export default function MethodGraph({ draft }: MethodGraphProps) {
-  const { nodes, edges } = buildMethodGraphElements(draft);
+export default function MethodGraph({ draft, executionNodes = [] }: MethodGraphProps) {
+  const { nodes, edges } = buildMethodGraphElements(draft, executionNodes);
 
   if (nodes.length === 0) {
     return <div className="agent-empty-visual">No nodes yet.</div>;

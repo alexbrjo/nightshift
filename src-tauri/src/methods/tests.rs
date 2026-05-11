@@ -11,8 +11,9 @@ use super::config::{
     resolve_provider_profile,
 };
 use super::draft::{
-    attach_resource_for_root, create_draft_for_root, default_draft, get_current_draft_for_root,
-    resolve_api_key_resource_for_root, validate_graph,
+    attach_resource_for_root, create_draft_for_root, default_draft, draft_to_method_manifest,
+    get_current_draft_for_root, resolve_api_key_resource_for_root,
+    update_draft_execution_config_for_root, validate_graph,
 };
 use super::execution::{
     create_inference_job_for_node, create_transform_job_for_node, insert_artifact,
@@ -275,11 +276,119 @@ fn named_file_resource_with_path_is_not_reported_missing() {
         },
     });
 
-    assert!(!draft
-        .readiness
-        .blockers
-        .iter()
-        .any(|blocker| blocker.code == "missing_resource"));
+    assert!(!draft.readiness.blockers.iter().any(|blocker| blocker.code == "missing_resource"));
+}
+
+#[test]
+fn ready_draft_converts_to_freezable_method_manifest() {
+    let draft = MethodDraft {
+        schema_version: 1,
+        id: "draft-1".into(),
+        title: "Edge Model Flash-Card Accuracy at 98%".into(),
+        objective: "Measure edge model flash-card accuracy.".into(),
+        lifecycle: MethodLifecycleState::Ready,
+        resources: vec![
+            MethodDraftResource {
+                id: "prompt".into(),
+                kind: "prompt".into(),
+                label: "Prompt".into(),
+                status: "attached".into(),
+                path: Some("flash_cards/flash_card_prompt.jinja2".into()),
+                reference: None,
+                consumed_by: vec!["generate".into()],
+            },
+            MethodDraftResource {
+                id: "schema".into(),
+                kind: "json_schema".into(),
+                label: "Schema".into(),
+                status: "attached".into(),
+                path: Some("flash_cards/flash_card.schema.json".into()),
+                reference: None,
+                consumed_by: vec!["generate".into()],
+            },
+        ],
+        nodes: vec![
+            MethodDraftNode {
+                id: "generate".into(),
+                label: "Generate".into(),
+                node_type: "inference".into(),
+                status: "ready".into(),
+                config: serde_json::json!({ "output_mode": "JSON Schema" }),
+            },
+            MethodDraftNode {
+                id: "analysis".into(),
+                label: "Analyze".into(),
+                node_type: "analysis".into(),
+                status: "ready".into(),
+                config: serde_json::json!({}),
+            },
+        ],
+        edges: vec![MethodDraftEdge { from: "generate".into(), to: "analysis".into() }],
+        parameters: serde_json::json!({}),
+        provider_config: serde_json::json!({ "model": "qwen-test" }),
+        outputs: vec![],
+        metadata: serde_json::json!({}),
+        readiness: MethodDraftReadiness {
+            status: MethodLifecycleState::Ready,
+            blockers: vec![],
+            warnings: vec![],
+        },
+    };
+
+    let method = draft_to_method_manifest(&draft).unwrap();
+
+    assert_eq!(method.id, "draft-1");
+    assert_eq!(method.files[0].kind, "prompt");
+    assert_eq!(method.files[1].kind, "schema");
+    assert_eq!(method.workflow.nodes[1].depends_on, vec!["generate"]);
+    assert_eq!(method.provider.get("model").and_then(serde_yaml::Value::as_str), Some("qwen-test"));
+}
+
+#[test]
+fn execution_config_update_persists_provider_model() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-config-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp).unwrap();
+    create_draft_for_root(
+        &temp,
+        CreateMethodDraftInput {
+            title: Some("Configurable Method".into()),
+            objective: Some("Exercise execution config".into()),
+        },
+    )
+    .unwrap();
+
+    let draft = update_draft_execution_config_for_root(
+        &temp,
+        UpdateMethodDraftExecutionConfigInput {
+            provider_config: Some(serde_json::json!({
+                "model": "qwen-test",
+                "serverUrl": "http://localhost:11434"
+            })),
+            parameters: Some(serde_json::json!({
+                "modelValues": ["bonsai-8b", "qwen3.5-4b"],
+                "maxTokens": 2000,
+                "samples": 2
+            })),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        draft.provider_config.get("model").and_then(serde_json::Value::as_str),
+        Some("qwen-test")
+    );
+    assert_eq!(
+        draft.provider_config.get("server_url").and_then(serde_json::Value::as_str),
+        Some("http://localhost:11434")
+    );
+    assert_eq!(
+        draft.parameters.get("model_values").and_then(serde_json::Value::as_array).unwrap().len(),
+        2
+    );
+    assert_eq!(draft.parameters.get("max_tokens").and_then(serde_json::Value::as_i64), Some(2000));
+    assert_eq!(draft.parameters.get("samples").and_then(serde_json::Value::as_i64), Some(2));
+    fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]
@@ -315,10 +424,7 @@ fn data_resource_cannot_feed_analysis_node_directly() {
                 config: serde_json::json!({}),
             },
         ],
-        edges: vec![MethodDraftEdge {
-            from: "sample_records".into(),
-            to: "generate".into(),
-        }],
+        edges: vec![MethodDraftEdge { from: "sample_records".into(), to: "generate".into() }],
         parameters: serde_json::json!({}),
         provider_config: serde_json::json!({}),
         outputs: vec![],
@@ -504,6 +610,42 @@ async fn save_method_persists_metadata_and_frozen_manifest() {
     fs::remove_dir_all(temp).unwrap();
 }
 
+#[tokio::test]
+async fn save_method_updates_existing_method_id_in_place() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-resave-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("prompts")).unwrap();
+    fs::create_dir_all(temp.join("data")).unwrap();
+    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
+    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let mut method = sample_method();
+    method.files.push(MethodFileRef {
+        id: "data".into(),
+        kind: "data".into(),
+        path: "data/examples.jsonl".into(),
+    });
+    method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
+
+    let first = save_method_to_project(&db, &temp, method.clone()).await.unwrap();
+    method.title = "Renamed edge method".into();
+    let second = save_method_to_project(&db, &temp, method).await.unwrap();
+    let listed = sqlx::query_as::<_, MethodSummary>(
+        "SELECT id, title, content_hash, folder_path, created_at FROM methods",
+    )
+    .fetch_all(&db.pool())
+    .await
+    .unwrap();
+    let manifest = read_manifest(&PathBuf::from(&second.folder_path)).unwrap();
+
+    assert_eq!(first.id, "edge-method");
+    assert_eq!(second.id, "edge-method");
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].title, "Renamed edge method");
+    assert_eq!(manifest.title, "Renamed edge method");
+    fs::remove_dir_all(temp).unwrap();
+}
+
 #[test]
 fn topological_nodes_orders_dependencies_first() {
     let method = sample_method();
@@ -555,6 +697,30 @@ fn preflight_is_ready_when_required_files_exist() {
         path: "data/examples.jsonl".into(),
     });
     method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
+
+    let result = preflight_method_for_root(&method, &temp);
+
+    assert_eq!(result.status, "ready");
+    assert!(result.blockers.is_empty());
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn preflight_accepts_model_sweep_values_for_inference() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-preflight-sweep-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("prompts")).unwrap();
+    fs::create_dir_all(temp.join("data")).unwrap();
+    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
+    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
+    let mut method = sample_method();
+    method.files.push(MethodFileRef {
+        id: "data".into(),
+        kind: "data".into(),
+        path: "data/examples.jsonl".into(),
+    });
+    method.parameters =
+        serde_yaml::from_str("model_values:\n  - bonsai-8b\n  - qwen3.5-4b\n").unwrap();
 
     let result = preflight_method_for_root(&method, &temp);
 

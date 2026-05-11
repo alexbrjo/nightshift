@@ -2284,7 +2284,7 @@ legend {
   height: 100%;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   background: var(--bg-deepest);
 }
 
@@ -2318,6 +2318,143 @@ legend {
   text-transform: capitalize;
 }
 
+.method-execution-panel {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-surface);
+}
+
+.method-execution-controls {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  gap: 8px;
+}
+
+.method-execution-controls select,
+.method-execution-controls button {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.method-execution-controls select {
+  padding: 0 9px;
+}
+
+.method-execution-controls button {
+  padding: 0 10px;
+}
+
+.method-execution-controls button:disabled,
+.method-execution-controls select:disabled {
+  opacity: 0.55;
+}
+
+.method-action-feedback {
+  min-width: 0;
+  padding: 7px 9px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.method-action-feedback.success {
+  color: var(--status-completed);
+}
+
+.method-action-feedback.error {
+  color: var(--status-failed);
+}
+
+.method-execution-summary,
+.method-execution-node-list div,
+.method-execution-events div {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.method-execution-summary span,
+.method-execution-node-list span,
+.method-execution-events span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.method-execution-node-list span,
+.method-execution-events span {
+  display: grid;
+  gap: 3px;
+  white-space: normal;
+}
+
+.method-execution-node-list em,
+.method-execution-events em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal;
+  color: var(--status-failed);
+}
+
+.method-execution-summary strong,
+.method-execution-node-list strong,
+.method-execution-events code {
+  flex-shrink: 0;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
+.method-execution-summary strong,
+.method-execution-node-list strong {
+  text-transform: capitalize;
+}
+
+.method-execution-node-list,
+.method-execution-events {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.method-execution-events code {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.method-execution-node-list .status-running {
+  color: var(--status-running);
+}
+
+.method-execution-node-list .status-completed {
+  color: var(--status-completed);
+}
+
+.method-execution-node-list .status-failed,
+.method-execution-node-list .status-cancelled,
+.method-execution-node-list .status-not_implemented {
+  color: var(--status-failed);
+}
+
 .method-flow {
   width: 100%;
   height: 100%;
@@ -2331,6 +2468,8 @@ legend {
 }
 
 .method-flow .react-flow__controls {
+  left: auto;
+  right: 16px;
   box-shadow: var(--shadow-sm);
 }
 

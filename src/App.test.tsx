@@ -122,6 +122,44 @@ describe("App", () => {
     expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
   });
 
+  it("keeps agent chat state alive when switching sections", async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "send_design_chat_message":
+          return Promise.resolve({ threadId: "thr_123", turnId: "turn_456" });
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve([]);
+      }
+    });
+
+    render(<App />);
+    const buttons = document.querySelectorAll(".sidebar-btn");
+
+    fireEvent.click(buttons[3]);
+    const input = await screen.findByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(input, { target: { value: "keep this chat around" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(screen.getByText("keep this chat around")).toBeDefined();
+    });
+
+    fireEvent.click(buttons[0]);
+    expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
+
+    fireEvent.click(buttons[3]);
+    expect(screen.getByText("keep this chat around")).toBeDefined();
+  });
+
   it("workspace has full-width class for non-editor sections", () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");

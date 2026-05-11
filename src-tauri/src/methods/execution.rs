@@ -12,7 +12,7 @@ use crate::state::{MethodExecutionControl, MethodExecutionManager};
 
 use super::config::{
     config_f64, config_i32, config_string, method_file_by_kind, model_values,
-    resolve_configured_file,
+    resolve_configured_file, yaml_lookup, yaml_string,
 };
 use super::model::{
     MethodArtifactSummary, MethodExecutionEventSummary, MethodExecutionNodeSummary,
@@ -21,6 +21,11 @@ use super::model::{
 use super::paths::{method_dir, project_root, validate_method_id};
 use super::storage::{hash_directory, hex, read_manifest};
 use super::validation::validate_method;
+
+fn method_level_config_string(method: &MethodManifest, key: &str) -> Option<String> {
+    yaml_string(yaml_lookup(&method.parameters, key))
+        .or_else(|| yaml_string(yaml_lookup(&method.provider, key)))
+}
 
 pub(crate) async fn insert_execution(
     db: &DatabaseState,
@@ -40,6 +45,16 @@ pub(crate) async fn insert_execution(
     .map_err(|e| format!("Failed to create method execution: {}", e))?;
 
     let execution_id = result.last_insert_rowid();
+    tracing::info!(
+        execution_id,
+        method_id = %method.id,
+        content_hash,
+        nodes = method.workflow.nodes.len(),
+        provider = ?method_level_config_string(method, "provider"),
+        server_url = ?method_level_config_string(method, "server_url"),
+        model_values = ?model_values(method),
+        "Created Method execution"
+    );
     for node in &method.workflow.nodes {
         sqlx::query(
             r#"
@@ -274,6 +289,48 @@ pub(crate) async fn create_inference_job_for_node(
         node.id,
         name_suffix.map(|suffix| format!("-{}", suffix)).unwrap_or_default()
     );
+    let provider =
+        config_string(node, method, "provider", Some("Local")).unwrap_or_else(|| "Local".into());
+    let model = model_override
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| config_string(node, method, "model", Some("")).unwrap_or_default());
+    let server_url = config_string(node, method, "server_url", Some("")).unwrap_or_default();
+    let output_mode = config_string(node, method, "output_mode", Some("Unstructured"))
+        .unwrap_or_else(|| "Unstructured".into());
+    let temperature = config_f64(node, method, "temperature");
+    let max_tokens = config_i32(node, method, "max_tokens", None);
+    let samples = config_i32(node, method, "samples", Some(1)).unwrap_or(1);
+    let strategy =
+        config_string(node, method, "strategy", Some("single")).unwrap_or_else(|| "single".into());
+    if server_url.trim().is_empty() {
+        tracing::warn!(
+            execution_id,
+            method_id = %method.id,
+            node_id = %node.id,
+            provider = %provider,
+            model = %model,
+            model_override = ?model_override,
+            "Creating Method inference job with an empty server_url"
+        );
+    }
+    tracing::info!(
+        execution_id,
+        method_id = %method.id,
+        node_id = %node.id,
+        job_name = %name,
+        provider = %provider,
+        model = %model,
+        server_url = %server_url,
+        output_mode = %output_mode,
+        temperature = ?temperature,
+        max_tokens = ?max_tokens,
+        samples,
+        strategy = %strategy,
+        prompt_file = %prompt_file,
+        data_source = %data_source,
+        json_schema_file = ?json_schema_file,
+        "Creating Method inference job"
+    );
     let result = sqlx::query(
         r#"
         INSERT INTO inference_jobs (
@@ -289,19 +346,15 @@ pub(crate) async fn create_inference_job_for_node(
     .bind(name)
     .bind(prompt_file)
     .bind(data_source)
-    .bind(config_string(node, method, "provider", Some("Local")).unwrap_or_else(|| "Local".into()))
-    .bind(
-        model_override
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| config_string(node, method, "model", Some("")).unwrap_or_default()),
-    )
-    .bind(config_string(node, method, "server_url", Some("")).unwrap_or_default())
-    .bind(config_string(node, method, "output_mode", Some("Unstructured")).unwrap())
-    .bind(config_f64(node, method, "temperature"))
-    .bind(config_i32(node, method, "max_tokens", None))
+    .bind(provider)
+    .bind(model)
+    .bind(server_url)
+    .bind(output_mode)
+    .bind(temperature)
+    .bind(max_tokens)
     .bind(config_i32(node, method, "thinking_budget", None))
-    .bind(config_i32(node, method, "samples", Some(1)).unwrap_or(1))
-    .bind(config_string(node, method, "strategy", Some("single")).unwrap())
+    .bind(samples)
+    .bind(strategy)
     .bind(json_schema_file)
     .execute(&db.pool())
     .await
@@ -355,8 +408,11 @@ pub(crate) async fn create_transform_job_for_node(
     .bind(name)
     .bind(data_source)
     .bind(script_file)
-    .bind(config_string(node, method, "error_mode", Some("stop")).unwrap())
-    .bind(config_string(node, method, "output_mode", Some("one_to_one")).unwrap())
+    .bind(config_string(node, method, "error_mode", Some("stop")).unwrap_or_else(|| "stop".into()))
+    .bind(
+        config_string(node, method, "output_mode", Some("one_to_one"))
+            .unwrap_or_else(|| "one_to_one".into()),
+    )
     .execute(&db.pool())
     .await
     .map_err(|e| format!("Failed to create transform job for method node '{}': {}", node.id, e))?;
@@ -508,6 +564,16 @@ pub(crate) async fn run_inference_agent(
     execution_id: i64,
 ) -> Result<String, String> {
     let models = model_values(method);
+    tracing::info!(
+        execution_id,
+        method_id = %method.id,
+        node_id = %node.id,
+        models = ?models,
+        provider = ?config_string(node, method, "provider", None),
+        server_url = ?config_string(node, method, "server_url", None),
+        model = ?config_string(node, method, "model", None),
+        "Running Method inference node"
+    );
     if models.len() <= 1 {
         let model_name = models
             .first()
@@ -776,6 +842,66 @@ pub(crate) async fn wait_if_paused(
     Ok(())
 }
 
+async fn mark_execution_cancelled(
+    app: &AppHandle,
+    db: &DatabaseState,
+    execution_id: i64,
+    node_id: Option<&str>,
+) -> Result<(), String> {
+    if let Some(node_id) = node_id {
+        update_node_status(db, execution_id, node_id, "cancelled", None, None).await?;
+    }
+    update_execution_status(db, execution_id, "cancelled", None).await?;
+    insert_event(app, db, execution_id, node_id, "execution_cancelled", serde_json::json!({})).await
+}
+
+async fn run_method_node(
+    app: &AppHandle,
+    db: &DatabaseState,
+    method: &MethodManifest,
+    execution_id: i64,
+    node: &MethodWorkflowNode,
+    node_outputs: &HashMap<String, String>,
+    had_not_implemented: &mut bool,
+) -> Result<String, String> {
+    match node.node_type.as_str() {
+        "inference" => run_inference_agent(app, db, method, node, execution_id).await,
+        "transform" => run_transform_agent(app, db, method, node, execution_id, node_outputs).await,
+        "eval"
+            if method_file_by_kind(method, "script").is_some()
+                || config_string(node, method, "script_file", None).is_some() =>
+        {
+            run_transform_agent(app, db, method, node, execution_id, node_outputs).await
+        }
+        "aggregate" => run_aggregate_agent(db, execution_id, node, node_outputs).await,
+        "analysis" => run_analysis_agent(db, execution_id, node, node_outputs).await,
+        "eval" => {
+            *had_not_implemented = true;
+            let artifact = run_not_implemented_agent(db, execution_id, node).await?;
+            update_node_status(
+                db,
+                execution_id,
+                &node.id,
+                "not_implemented",
+                Some(&artifact),
+                Some("Agent implementation is not available yet"),
+            )
+            .await?;
+            insert_event(
+                app,
+                db,
+                execution_id,
+                Some(&node.id),
+                "node_not_implemented",
+                serde_json::json!({ "nodeType": node.node_type, "artifact": artifact }),
+            )
+            .await?;
+            Ok(artifact)
+        }
+        other => Err(format!("Unknown method node type '{}'", other)),
+    }
+}
+
 pub(crate) async fn orchestrate_method_execution(
     app: AppHandle,
     db: DatabaseState,
@@ -794,24 +920,26 @@ pub(crate) async fn orchestrate_method_execution(
     )
     .await?;
 
+    let ordered_nodes = topological_nodes(&method.workflow.nodes)?;
+    if ordered_nodes.is_empty() {
+        return Err("method.workflow.nodes must contain at least one node".into());
+    }
+
+    let mut node_outputs = HashMap::new();
     let mut had_not_implemented = false;
-    let mut node_outputs: HashMap<String, String> = HashMap::new();
-    for node in topological_nodes(&method.workflow.nodes)? {
-        wait_if_paused(&app, &db, execution_id, &control).await?;
+    for node in ordered_nodes {
+        if let Err(e) = wait_if_paused(&app, &db, execution_id, &control).await {
+            if control.cancel_requested.load(Ordering::SeqCst) {
+                mark_execution_cancelled(&app, &db, execution_id, Some(&node.id)).await?;
+                return Ok(());
+            }
+            return Err(e);
+        }
         if control.cancel_requested.load(Ordering::SeqCst) {
-            update_node_status(&db, execution_id, &node.id, "cancelled", None, None).await?;
-            update_execution_status(&db, execution_id, "cancelled", None).await?;
-            insert_event(
-                &app,
-                &db,
-                execution_id,
-                Some(&node.id),
-                "execution_cancelled",
-                serde_json::json!({}),
-            )
-            .await?;
+            mark_execution_cancelled(&app, &db, execution_id, Some(&node.id)).await?;
             return Ok(());
         }
+
         update_node_status(&db, execution_id, &node.id, "running", None, None).await?;
         insert_event(
             &app,
@@ -823,66 +951,45 @@ pub(crate) async fn orchestrate_method_execution(
         )
         .await?;
 
-        let result = match node.node_type.as_str() {
-            "inference" => run_inference_agent(&app, &db, &method, &node, execution_id).await,
-            "transform" => {
-                run_transform_agent(&app, &db, &method, &node, execution_id, &node_outputs).await
-            }
-            "eval"
-                if method_file_by_kind(&method, "script").is_some()
-                    || config_string(&node, &method, "script_file", None).is_some() =>
-            {
-                run_transform_agent(&app, &db, &method, &node, execution_id, &node_outputs).await
-            }
-            "aggregate" => run_aggregate_agent(&db, execution_id, &node, &node_outputs).await,
-            "analysis" => run_analysis_agent(&db, execution_id, &node, &node_outputs).await,
-            "eval" => {
-                had_not_implemented = true;
-                let artifact = run_not_implemented_agent(&db, execution_id, &node).await?;
-                update_node_status(
-                    &db,
-                    execution_id,
-                    &node.id,
-                    "not_implemented",
-                    Some(&artifact),
-                    Some("Agent implementation is not available yet"),
-                )
-                .await?;
-                insert_event(
-                    &app,
-                    &db,
-                    execution_id,
-                    Some(&node.id),
-                    "node_not_implemented",
-                    serde_json::json!({ "nodeType": node.node_type, "artifact": artifact }),
-                )
-                .await?;
-                continue;
-            }
-            other => Err(format!("Unknown method node type '{}'", other)),
-        };
+        let is_not_implemented_eval = node.node_type == "eval"
+            && method_file_by_kind(&method, "script").is_none()
+            && config_string(&node, &method, "script_file", None).is_none();
 
-        match result {
+        match run_method_node(
+            &app,
+            &db,
+            &method,
+            execution_id,
+            &node,
+            &node_outputs,
+            &mut had_not_implemented,
+        )
+        .await
+        {
             Ok(output_ref) => {
                 node_outputs.insert(node.id.clone(), output_ref.clone());
-                update_node_status(
-                    &db,
-                    execution_id,
-                    &node.id,
-                    "completed",
-                    Some(&output_ref),
-                    None,
-                )
-                .await?;
-                insert_event(
-                    &app,
-                    &db,
-                    execution_id,
-                    Some(&node.id),
-                    "node_completed",
-                    serde_json::json!({ "outputRef": output_ref }),
-                )
-                .await?;
+                if !is_not_implemented_eval {
+                    update_node_status(
+                        &db,
+                        execution_id,
+                        &node.id,
+                        "completed",
+                        Some(&output_ref),
+                        None,
+                    )
+                    .await?;
+                }
+                if !is_not_implemented_eval {
+                    insert_event(
+                        &app,
+                        &db,
+                        execution_id,
+                        Some(&node.id),
+                        "node_completed",
+                        serde_json::json!({ "outputRef": output_ref }),
+                    )
+                    .await?;
+                }
             }
             Err(e) => {
                 update_node_status(&db, execution_id, &node.id, "failed", None, Some(&e)).await?;
@@ -928,6 +1035,17 @@ pub async fn execute_method(
     let method = read_manifest(&folder)?;
     validate_method(&method)?;
     let content_hash = hash_directory(&folder)?;
+    tracing::info!(
+        project_root = %root.display(),
+        method_id = %method.id,
+        title = %method.title,
+        folder = %folder.display(),
+        content_hash = %content_hash,
+        provider = ?method_level_config_string(&method, "provider"),
+        server_url = ?method_level_config_string(&method, "server_url"),
+        model_values = ?model_values(&method),
+        "Starting Method execution command"
+    );
     let execution_id = insert_execution(&db, &method, &content_hash).await?;
     let control = MethodExecutionControl::new();
     manager.controls.lock().await.insert(execution_id, control.clone());
