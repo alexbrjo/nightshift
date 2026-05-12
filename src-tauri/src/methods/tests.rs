@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -16,9 +16,10 @@ use super::draft::{
     update_draft_execution_config_for_root, validate_graph,
 };
 use super::execution::{
-    create_inference_job_for_node, create_sample_job_for_node, create_transform_job_for_node,
-    insert_artifact, insert_execution, read_method_artifact_from_db, run_aggregate_agent,
-    topological_nodes,
+    analysis_report_relative_path, analysis_report_repair_prompt, create_inference_job_for_node,
+    create_sample_job_for_node, create_transform_job_for_node, insert_analysis_report_artifact,
+    insert_artifact, insert_execution, read_method_artifact_from_db, run_analysis_sql_query,
+    topological_nodes, validate_analysis_sql,
 };
 use super::model::*;
 use super::preflight::preflight_method_for_root;
@@ -52,9 +53,9 @@ fn sample_method() -> MethodDocument {
                     config: serde_json::Value::Null,
                 },
                 MethodWorkflowNode {
-                    id: "aggregate".into(),
-                    label: "Aggregate".into(),
-                    node_type: "aggregate".into(),
+                    id: "analysis".into(),
+                    label: "Analyze".into(),
+                    node_type: "analysis".into(),
                     depends_on: vec!["generate".into()],
                     config: serde_json::Value::Null,
                 },
@@ -609,7 +610,7 @@ fn nightshift_config_loads_provider_profiles_with_api_keys() {
 #[test]
 fn validate_method_rejects_cycles() {
     let mut method = sample_method();
-    method.workflow.nodes[0].depends_on = vec!["aggregate".into()];
+    method.workflow.nodes[0].depends_on = vec!["analysis".into()];
 
     let err = validate_method(&method).unwrap_err();
 
@@ -781,7 +782,7 @@ fn topological_nodes_orders_dependencies_first() {
 
     assert_eq!(
         ordered.iter().map(|node| node.id.as_str()).collect::<Vec<_>>(),
-        vec!["generate", "aggregate",]
+        vec!["generate", "analysis",]
     );
 }
 
@@ -1153,13 +1154,89 @@ model_values:
     assert_eq!(model_values(&method), vec!["bonsai-8b", "qwen3.5-4b"]);
 }
 
-#[tokio::test]
-async fn aggregate_agent_summarizes_pass_fields_by_job_model() {
+#[test]
+fn method_tool_schema_exposes_analysis_without_aggregate() {
+    let tools = super::method_function_tools();
+    let replace_graph = tools
+        .iter()
+        .find(|tool| {
+            tool.get("name").and_then(serde_json::Value::as_str)
+                == Some("replace_method_draft_graph")
+        })
+        .unwrap();
+    let enum_values = replace_graph["parameters"]["properties"]["workflow"]["properties"]["nodes"]
+        ["items"]["properties"]["type"]["enum"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|value| value.as_str().unwrap())
+        .collect::<Vec<_>>();
+
+    assert!(enum_values.contains(&"analysis"));
+    assert!(!enum_values.contains(&"aggregate"));
+}
+
+#[test]
+fn aggregate_draft_nodes_are_normalized_to_analysis() {
     let temp =
-        std::env::temp_dir().join(format!("nightshift-method-aggregate-test-{}", Uuid::new_v4()));
+        std::env::temp_dir().join(format!("nightshift-method-normalize-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".nightshift")).unwrap();
+    create_draft_for_root(
+        &temp,
+        CreateMethodDraftInput {
+            title: Some("Normalize aggregate".into()),
+            objective: Some("Migrate aggregate draft nodes".into()),
+        },
+    )
+    .unwrap();
+
+    let draft = super::draft::replace_draft_graph_for_root(
+        &temp,
+        ReplaceMethodDraftGraphInput {
+            workflow: MethodWorkflow {
+                nodes: vec![MethodWorkflowNode {
+                    id: "aggregate".into(),
+                    label: "Aggregate".into(),
+                    node_type: "aggregate".into(),
+                    depends_on: vec![],
+                    config: serde_json::Value::Null,
+                }],
+            },
+            resources: Some(vec![]),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(draft.workflow.nodes[0].node_type, "analysis");
+    assert_eq!(
+        get_current_draft_for_root(&temp).unwrap().unwrap().workflow.nodes[0].node_type,
+        "analysis"
+    );
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn analysis_sql_guardrails_allow_only_read_queries() {
+    assert!(validate_analysis_sql("SELECT * FROM collection_items").is_ok());
+    assert!(validate_analysis_sql("WITH rows AS (SELECT 1 AS n) SELECT n FROM rows;").is_ok());
+    for sql in [
+        "INSERT INTO collection_items VALUES (1)",
+        "SELECT 1; SELECT 2",
+        "PRAGMA table_info(collection_items)",
+        "SELECT 1 -- hidden",
+        "/* hidden */ SELECT 1",
+        "WITH deleted AS (DELETE FROM collection_items RETURNING *) SELECT * FROM deleted",
+    ] {
+        assert!(validate_analysis_sql(sql).is_err(), "query should be rejected: {sql}");
+    }
+}
+
+#[tokio::test]
+async fn analysis_sql_query_applies_row_limit() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-analysis-sql-test-{}", Uuid::new_v4()));
     fs::create_dir_all(&temp).unwrap();
     let db = DatabaseState::new(&temp).await.unwrap();
-    let execution_id = insert_execution(&db, &sample_method(), "hash").await.unwrap();
 
     let job_id = sqlx::query(
         r#"
@@ -1190,22 +1267,113 @@ async fn aggregate_agent_summarizes_pass_fields_by_job_model() {
             .await
             .unwrap();
     }
-    let mut node_outputs = HashMap::new();
-    node_outputs.insert("score".to_string(), format!("inference_job:{}", job_id));
+
+    let result =
+        run_analysis_sql_query(&db, "SELECT id, data FROM collection_items ORDER BY id", 1)
+            .await
+            .unwrap();
+
+    assert_eq!(result["row_count"], 1);
+    assert_eq!(result["truncated"], true);
+    assert_eq!(result["rows"][0]["data"]["pass"], true);
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn analysis_report_artifact_requires_required_sections() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-report-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let execution_id = insert_execution(&db, &sample_method(), "hash").await.unwrap();
+    let report = r#"# Experiment Report
+
+## Abstract
+Summary.
+
+## Method Summary
+Method.
+
+## Data Summaries
+Data.
+
+## Discussion Points
+Discussion.
+
+## Caveats
+Caveats.
+
+## Conclusion
+Conclusion.
+"#;
+
+    let mut method = sample_method();
+    method.id = "report-method".into();
     let node = MethodWorkflowNode {
-        id: "aggregate".into(),
-        label: "Aggregate".into(),
-        node_type: "aggregate".into(),
-        depends_on: vec!["score".into()],
+        id: "analysis".into(),
+        label: "Analyze".into(),
+        node_type: "analysis".into(),
+        depends_on: vec![],
         config: serde_json::Value::Null,
     };
 
-    let output_ref = run_aggregate_agent(&db, execution_id, &node, &node_outputs).await.unwrap();
+    let output_ref =
+        insert_analysis_report_artifact(&db, &method, execution_id, &node, report).await.unwrap();
+    let bad_report = report.replace("## Caveats", "## Limitations");
 
-    assert!(output_ref.starts_with("inline_json:"));
-    assert!(output_ref.contains("bonsai-8b"));
-    assert!(output_ref.contains("\"success_rate\": 0.5"));
+    assert!(output_ref.starts_with("method_execution_file:"));
+    assert!(temp
+        .join(".nightshift/executions")
+        .join(execution_id.to_string())
+        .join("report-method")
+        .join("analysis.md")
+        .is_file());
+    assert!(insert_analysis_report_artifact(&db, &method, execution_id, &node, &bad_report)
+        .await
+        .is_err());
     fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn analysis_report_path_uses_configurable_output_file() {
+    let mut method = sample_method();
+    method.id = "branch-method".into();
+    let node = MethodWorkflowNode {
+        id: "analyze_branch_a".into(),
+        label: "Analyze branch A".into(),
+        node_type: "analysis".into(),
+        depends_on: vec![],
+        config: serde_json::json!({ "output_file": "branch-a/report" }),
+    };
+
+    let path = analysis_report_relative_path(&method, 42, &node).unwrap();
+
+    assert_eq!(
+        path.to_string_lossy().replace('\\', "/"),
+        ".nightshift/executions/42/branch-method/branch-a/report.md"
+    );
+    assert!(!path.starts_with("methods/branch-method"));
+}
+
+#[test]
+fn analysis_report_repair_prompt_requires_exact_headings() {
+    let prompt = analysis_report_repair_prompt(
+        "Analysis report is missing required section 'Abstract'",
+        "# Abstract\nDraft",
+    );
+
+    for heading in [
+        "## Abstract",
+        "## Method Summary",
+        "## Data Summaries",
+        "## Discussion Points",
+        "## Caveats",
+        "## Conclusion",
+    ] {
+        assert!(prompt.contains(heading), "missing heading in prompt: {heading}");
+    }
+    assert!(prompt.contains("Prior draft"));
+    assert!(prompt.contains("# Abstract\nDraft"));
 }
 
 #[tokio::test]

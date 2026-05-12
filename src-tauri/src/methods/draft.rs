@@ -118,6 +118,19 @@ pub(crate) fn refresh_readiness(draft: MethodDocument) -> MethodDocument {
     draft
 }
 
+pub(crate) fn normalize_analysis_nodes(mut draft: MethodDocument) -> MethodDocument {
+    normalize_analysis_workflow_nodes(&mut draft.workflow.nodes);
+    draft
+}
+
+fn normalize_analysis_workflow_nodes(nodes: &mut [MethodWorkflowNode]) {
+    for node in nodes {
+        if node.node_type == "aggregate" {
+            node.node_type = "analysis".into();
+        }
+    }
+}
+
 fn validate_resource_contracts(
     draft: &MethodDocument,
     blockers: &mut Vec<MethodDraftIssue>,
@@ -425,7 +438,14 @@ fn emit_draft(
 }
 
 pub(crate) fn get_current_draft_for_root(root: &Path) -> Result<Option<MethodDocument>, String> {
-    read_draft_from_root(root)
+    let Some(draft) = read_draft_from_root(root)? else {
+        return Ok(None);
+    };
+    let normalized = normalize_analysis_nodes(draft.clone());
+    if normalized != draft {
+        write_draft_to_root(root, &normalized)?;
+    }
+    Ok(Some(normalized))
 }
 
 pub(crate) fn create_draft_for_root(
@@ -489,6 +509,7 @@ pub(crate) fn replace_draft_graph_for_root(
     let mut draft = read_draft_from_root(root)?
         .unwrap_or_else(|| default_draft(CreateMethodDraftInput { title: None, objective: None }));
     draft.workflow = input.workflow;
+    normalize_analysis_workflow_nodes(&mut draft.workflow.nodes);
     if let Some(resources) = input.resources {
         draft.resources = resources;
     }

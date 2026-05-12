@@ -6,6 +6,8 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
+const METHOD_AGENT_MAX_TOOL_LOOPS: usize = 20;
+
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendDesignChatMessageInput {
@@ -69,10 +71,7 @@ pub async fn send_design_chat_message(
     let turn_id = format!("turn-{}", Uuid::new_v4());
     match run_method_agent_turn(&app, &root, message).await {
         Ok(text) => emit_agent_message(&app, &thread_id, &turn_id, &text, "completed", None)?,
-        Err(error) => {
-            emit_agent_message(&app, &thread_id, &turn_id, &error, "failed", Some(error.clone()))?;
-            return Err(error);
-        }
+        Err(error) => return Err(error),
     }
     Ok(CodexTurnSummary { thread_id, turn_id })
 }
@@ -97,7 +96,7 @@ async fn run_method_agent_turn(
         "tools": tools
     });
 
-    for _ in 0..5 {
+    for _ in 0..METHOD_AGENT_MAX_TOOL_LOOPS {
         let response = post_responses_request(&client, &api_key, body).await?;
         let function_calls = response_function_calls(&response)?;
         if function_calls.is_empty() {
@@ -142,11 +141,12 @@ async fn run_method_agent_turn(
             "tools": tools
         });
     }
-    Err("Method agent exceeded the maximum function-call loop depth.".into())
+    emit_current_draft(app, root)?;
+    Ok("I updated the visible Method draft, but stopped before the design agent produced a final summary because it kept calling tools. Review the draft panel for the current state.".into())
 }
 
 fn method_agent_instructions() -> &'static str {
-    "You are Nightshift's Method design agent. Use the provided function tools whenever the user describes, creates, or changes a Method. Nightshift owns durable Method draft state; do not pretend a Method is executable while blockers remain. Use App Server native file tools to discover/read candidate project files, then use Nightshift Method tools for durable resource attachment decisions. Use the execution-config tool when the user provides model names, provider settings, temperature, token limits, sample counts, strategy, or model sweep values. Prefer creating a concise draft with a DAG of inference, eval, aggregate, and analysis nodes, plus missing prompt, data, JSON schema, eval script, collection, or api_key resources when details are not yet known. Treat prompt, data, JSON schema, and api_key resources as direct inputs to inference nodes unless the user says otherwise; eval_script resources feed eval nodes. Do not create separate analysis nodes merely to sample or stage an input dataset. Aggregate and analysis nodes should usually consume upstream node outputs through graph edges, not raw file resources. API key values may live in .nightshift/config.json, but Method drafts and bundles should reference API key ids rather than copying values. After tool calls, briefly summarize what changed and what is still missing."
+    "You are Nightshift's Method design agent. Use the provided function tools whenever the user describes, creates, or changes a Method. Nightshift owns durable Method draft state; do not pretend a Method is executable while blockers remain. Use App Server native file tools to discover/read candidate project files, then use Nightshift Method tools for durable resource attachment decisions. Use the execution-config tool when the user provides model names, provider settings, temperature, token limits, sample counts, strategy, or model sweep values. Prefer creating a concise draft with a DAG of inference, eval, and analysis nodes, plus missing prompt, data, JSON schema, eval script, collection, or api_key resources when details are not yet known. Treat prompt, data, JSON schema, and api_key resources as direct inputs to inference nodes unless the user says otherwise; eval_script resources feed eval nodes. Do not create separate analysis nodes merely to sample or stage an input dataset. Analysis nodes should consume upstream node outputs through graph edges, not raw file resources, and produce experiment reports from execution results. API key values may live in .nightshift/config.json, but Method drafts and bundles should reference API key ids rather than copying values. After tool calls, briefly summarize what changed and what is still missing."
 }
 
 async fn post_responses_request(

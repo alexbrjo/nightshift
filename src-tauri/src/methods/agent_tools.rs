@@ -87,9 +87,15 @@ pub fn method_function_tools() -> Vec<Value> {
                         "items": object_schema(json!({
                             "id": { "type": "string", "description": "Stable node id, lower snake/kebab style." },
                             "label": { "type": "string", "description": "Human-readable node label." },
-                            "type": { "type": "string", "enum": ["sample", "inference", "eval", "aggregate", "analysis"] },
-                            "depends_on": { "type": "array", "items": { "type": "string" } }
-                        }), vec!["id", "label", "type", "depends_on"])
+                            "type": { "type": "string", "enum": ["sample", "inference", "eval", "analysis"] },
+                            "depends_on": { "type": "array", "items": { "type": "string" } },
+                            "config": object_schema(json!({
+                                "output_file": {
+                                    "type": ["string", "null"],
+                                    "description": "Analysis nodes only: Markdown filename or relative subpath under this Method execution folder."
+                                }
+                            }), vec!["output_file"])
+                        }), vec!["id", "label", "type", "depends_on", "config"])
                     }
                 }), vec!["nodes"]),
                 "resources": {
@@ -295,8 +301,8 @@ mod tests {
             json!({
                 "workflow": {
                     "nodes": [
-                        { "id": "generate", "label": "Generate answers", "type": "inference", "depends_on": [] },
-                        { "id": "score", "label": "Score answers", "type": "eval", "depends_on": ["generate"] }
+                        { "id": "generate", "label": "Generate answers", "type": "inference", "depends_on": [], "config": { "output_file": null } },
+                        { "id": "score", "label": "Score answers", "type": "eval", "depends_on": ["generate"], "config": { "output_file": null } }
                     ]
                 },
                 "resources": []
