@@ -2146,8 +2146,124 @@ legend {
   color: var(--text-secondary);
 }
 
+.agent-message.trace {
+  max-width: 680px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.agent-message.trace.reasoning {
+  max-width: 760px;
+}
+
+.agent-message.trace.tool {
+  display: none;
+}
+
+.agent-tool-trace-group {
+  max-width: 680px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.agent-tool-trace-group summary {
+  width: fit-content;
+  cursor: pointer;
+  list-style: none;
+  padding: 2px 0;
+  color: var(--text-secondary);
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.agent-tool-trace-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-tool-trace-group.failed summary,
+.agent-tool-trace-item.failed > summary {
+  color: var(--status-failed);
+}
+
+.agent-tool-trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+  padding-left: 14px;
+}
+
+.agent-tool-trace-item {
+  color: var(--text-secondary);
+}
+
+.agent-tool-trace-item summary {
+  width: fit-content;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 1px 0;
+}
+
+.agent-tool-trace-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-trace-caret {
+  display: inline-block;
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.agent-tool-trace-group[open] > summary .agent-trace-caret,
+.agent-tool-trace-item[open] > summary .agent-trace-caret {
+  transform: rotate(90deg);
+}
+
+.agent-tool-trace-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0 2px 18px;
+}
+
+.agent-tool-trace-json {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-tool-trace-json strong {
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.agent-tool-trace-detail pre {
+  max-width: min(720px, 100%);
+  max-height: 260px;
+  overflow: auto;
+  margin: 4px 0 0 16px;
+  padding: 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-deepest);
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .agent-message.pending,
-.agent-message.streaming {
+.agent-message.streaming:not(.trace) {
   border-color: var(--status-running);
 }
 

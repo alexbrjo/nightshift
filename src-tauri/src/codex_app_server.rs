@@ -34,6 +34,12 @@ pub struct CodexAppServerEvent {
     pub item_id: Option<String>,
     pub text_delta: Option<String>,
     pub message_text: Option<String>,
+    pub trace_kind: Option<String>,
+    pub tool_name: Option<String>,
+    pub tool_arguments: Option<Value>,
+    pub tool_output: Option<Value>,
+    pub output_summary: Option<String>,
+    pub duration_ms: Option<u128>,
     pub status: Option<String>,
     pub error_message: Option<String>,
     pub raw: Value,
@@ -172,6 +178,12 @@ async fn spawn_app_server_with_command(
                             item_id: None,
                             text_delta: None,
                             message_text: None,
+                            trace_kind: None,
+                            tool_name: None,
+                            tool_arguments: None,
+                            tool_output: None,
+                            output_summary: None,
+                            duration_ms: None,
                             status: Some("failed".into()),
                             error_message: Some("Codex App Server connection closed".into()),
                             raw: json!({}),
@@ -194,6 +206,12 @@ async fn spawn_app_server_with_command(
                             item_id: None,
                             text_delta: None,
                             message_text: None,
+                            trace_kind: None,
+                            tool_name: None,
+                            tool_arguments: None,
+                            tool_output: None,
+                            output_summary: None,
+                            duration_ms: None,
                             status: Some("failed".into()),
                             error_message: Some(error.to_string()),
                             raw: json!({}),
@@ -255,6 +273,12 @@ async fn handle_app_server_line(
                     item_id: None,
                     text_delta: None,
                     message_text: None,
+                    trace_kind: None,
+                    tool_name: None,
+                    tool_arguments: None,
+                    tool_output: None,
+                    output_summary: None,
+                    duration_ms: None,
                     status: Some("failed".into()),
                     error_message: Some(format!("Invalid JSON from Codex App Server: {}", error)),
                     raw: json!({ "line": line }),
@@ -313,6 +337,17 @@ pub fn normalize_app_server_event(raw: &Value) -> Option<CodexAppServerEvent> {
         .map(str::to_string);
     let message_text =
         item.and_then(|item| item.get("text")).and_then(Value::as_str).map(str::to_string);
+    let trace_kind = params.get("traceKind").and_then(Value::as_str).map(str::to_string);
+    let tool_name = params
+        .get("toolName")
+        .and_then(Value::as_str)
+        .or_else(|| item.and_then(|item| item.get("toolName")).and_then(Value::as_str))
+        .or_else(|| item.and_then(|item| item.get("name")).and_then(Value::as_str))
+        .map(str::to_string);
+    let tool_arguments = params.get("toolArguments").cloned();
+    let tool_output = params.get("toolOutput").cloned();
+    let output_summary = params.get("outputSummary").and_then(Value::as_str).map(str::to_string);
+    let duration_ms = params.get("durationMs").and_then(Value::as_u64).map(u128::from);
     let status = turn
         .and_then(|turn| turn.get("status"))
         .and_then(Value::as_str)
@@ -335,6 +370,12 @@ pub fn normalize_app_server_event(raw: &Value) -> Option<CodexAppServerEvent> {
         item_id,
         text_delta,
         message_text,
+        trace_kind,
+        tool_name,
+        tool_arguments,
+        tool_output,
+        output_summary,
+        duration_ms,
         status,
         error_message,
         raw: raw.clone(),
@@ -513,6 +554,33 @@ mod tests {
 
         assert_eq!(event.status.as_deref(), Some("failed"));
         assert_eq!(event.error_message.as_deref(), Some("No account"));
+    }
+
+    #[test]
+    fn normalizes_planning_trace_fields() {
+        let event = normalize_app_server_event(&json!({
+            "method": "item/toolCall/started",
+            "params": {
+                "threadId": "thr_1",
+                "turnId": "turn_1",
+                "itemId": "tool_1",
+                "traceKind": "tool",
+                "toolName": "replace_method_draft_graph",
+                "toolArguments": { "workflow": { "nodes": [] } },
+                "toolOutput": { "ok": true },
+                "outputSummary": "Draft updated",
+                "durationMs": 42
+            }
+        }))
+        .expect("event");
+
+        assert_eq!(event.event_type, "item/toolCall/started");
+        assert_eq!(event.trace_kind.as_deref(), Some("tool"));
+        assert_eq!(event.tool_name.as_deref(), Some("replace_method_draft_graph"));
+        assert_eq!(event.tool_arguments.as_ref().unwrap()["workflow"]["nodes"], json!([]));
+        assert_eq!(event.tool_output.as_ref().unwrap()["ok"], true);
+        assert_eq!(event.output_summary.as_deref(), Some("Draft updated"));
+        assert_eq!(event.duration_ms, Some(42));
     }
 
     #[test]

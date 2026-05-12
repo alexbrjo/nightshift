@@ -15,10 +15,24 @@ import MethodGraph from "./MethodGraph";
 
 interface ChatMessage {
   id: string;
-  role: "assistant" | "user" | "system";
+  role: "assistant" | "user" | "system" | "trace";
   text: string;
   status?: "pending" | "streaming" | "completed" | "failed";
+  traceKind?: "reasoning" | "tool";
+  toolName?: string;
+  toolArguments?: Record<string, unknown>;
+  toolOutput?: Record<string, unknown>;
+  outputSummary?: string;
+  durationMs?: number;
 }
+
+interface ToolTraceGroup {
+  id: string;
+  role: "toolTraceGroup";
+  messages: ChatMessage[];
+}
+
+type ChatItem = ChatMessage | ToolTraceGroup;
 
 interface MethodExecutionEventPayload {
   executionId: number;
@@ -47,6 +61,72 @@ function upsertAssistantMessage(messages: ChatMessage[], itemId: string, text: s
   return messages.map((message, currentIndex) =>
     currentIndex === index ? { ...message, text, status: "completed" } : message,
   );
+}
+
+function upsertTraceMessage(
+  messages: ChatMessage[],
+  itemId: string,
+  text: string,
+  status: ChatMessage["status"] = "completed",
+  traceKind: ChatMessage["traceKind"] = "reasoning",
+  metadata: Partial<ChatMessage> = {},
+): ChatMessage[] {
+  const index = messages.findIndex((message) => message.id === itemId);
+  const nextMessage: ChatMessage = { id: itemId, role: "trace", text, status, traceKind, ...metadata };
+  if (index === -1) return [...messages, nextMessage];
+  return messages.map((message, currentIndex) =>
+    currentIndex === index ? { ...message, text, status, traceKind, ...metadata } : message,
+  );
+}
+
+function formatDuration(durationMs?: number) {
+  if (durationMs === undefined || durationMs === null) return null;
+  return durationMs < 1000 ? `${durationMs} ms` : `${(durationMs / 1000).toFixed(1)} s`;
+}
+
+function toolTraceText(payload: CodexAppServerEvent): string {
+  const name = payload.toolName ?? "Method tool";
+  if (payload.status === "started") return `Calling ${name}`;
+  const parts = [
+    `${name} ${payload.status === "failed" ? "failed" : "completed"}`,
+    formatDuration(payload.durationMs),
+    payload.outputSummary,
+  ].filter(Boolean);
+  const text = parts.join(" - ");
+  return payload.status === "failed" && payload.errorMessage ? `${text}: ${payload.errorMessage}` : text;
+}
+
+function prettyJson(value: unknown): string {
+  if (value === undefined || value === null) return "";
+  const text = JSON.stringify(value, null, 2);
+  return text.length > 5000 ? `${text.slice(0, 5000)}\n... truncated` : text;
+}
+
+function groupToolTraceMessages(messages: ChatMessage[]): ChatItem[] {
+  const items: ChatItem[] = [];
+  let pendingTools: ChatMessage[] = [];
+
+  const flushTools = () => {
+    if (pendingTools.length === 0) return;
+    items.push({
+      id: `tool-group-${pendingTools[0].id}`,
+      role: "toolTraceGroup",
+      messages: pendingTools,
+    });
+    pendingTools = [];
+  };
+
+  for (const message of messages) {
+    if (message.role === "trace" && message.traceKind === "tool") {
+      pendingTools.push(message);
+    } else {
+      flushTools();
+      items.push(message);
+    }
+  }
+  flushTools();
+
+  return items;
 }
 
 function userFacingError(err: unknown) {
@@ -312,6 +392,35 @@ export default function AgentWorkspace() {
           ),
         );
       }
+      if (payload.eventType.includes("reasoningSummary") && payload.messageText) {
+        setMessages((current) =>
+          upsertTraceMessage(
+            current,
+            payload.itemId ?? `reasoning-${payload.turnId ?? Date.now()}`,
+            payload.messageText ?? "",
+            payload.status === "failed" ? "failed" : "completed",
+            "reasoning",
+          ),
+        );
+      }
+      if (payload.eventType.startsWith("item/toolCall/")) {
+        setMessages((current) =>
+          upsertTraceMessage(
+            current,
+            payload.itemId ?? `tool-${payload.turnId ?? Date.now()}-${payload.toolName ?? "unknown"}`,
+            toolTraceText(payload),
+            payload.status === "failed" ? "failed" : payload.status === "started" ? "streaming" : "completed",
+            "tool",
+            {
+              toolName: payload.toolName,
+              toolArguments: payload.toolArguments,
+              toolOutput: payload.toolOutput,
+              outputSummary: payload.outputSummary,
+              durationMs: payload.durationMs,
+            },
+          ),
+        );
+      }
       if (payload.eventType === "turn/completed") {
         setIsSending(false);
         setActiveTurn(null);
@@ -420,17 +529,62 @@ export default function AgentWorkspace() {
     }
   };
 
+  const chatItems = groupToolTraceMessages(messages);
+
   return (
     <div className="agent-chat-workspace">
       <main className="agent-chat-main">
         <section className="agent-chat-panel">
           <div className="agent-chat-title">Methods</div>
           <div className="agent-chat-scroll">
-            {messages.map((message) => (
-              <div key={message.id} className={`agent-message ${message.role} ${message.status ?? ""}`}>
-                {message.text}
-              </div>
-            ))}
+            {chatItems.map((item) => {
+              if (item.role === "toolTraceGroup") {
+                const failedCount = item.messages.filter((message) => message.status === "failed").length;
+                return (
+                  <details
+                    key={item.id}
+                    className={`agent-tool-trace-group ${failedCount > 0 ? "failed" : ""}`}
+                  >
+                    <summary>
+                      <span>{item.messages.length} tool call{item.messages.length === 1 ? "" : "s"}</span>
+                      <span className="agent-trace-caret" aria-hidden="true">▸</span>
+                    </summary>
+                    <div className="agent-tool-trace-list">
+                      {item.messages.map((message) => (
+                        <details key={message.id} className={`agent-tool-trace-item ${message.status ?? ""}`}>
+                          <summary>
+                            <span>{message.toolName ?? "Method tool"}</span>
+                            <span>{message.status === "streaming" ? "running" : message.status}</span>
+                            {formatDuration(message.durationMs) && <span>{formatDuration(message.durationMs)}</span>}
+                            <span className="agent-trace-caret" aria-hidden="true">▸</span>
+                          </summary>
+                          <div className="agent-tool-trace-detail">
+                            {message.outputSummary && <div>{message.outputSummary}</div>}
+                            {message.toolArguments && (
+                              <div className="agent-tool-trace-json">
+                                <strong>Parameters</strong>
+                                <pre>{prettyJson(message.toolArguments)}</pre>
+                              </div>
+                            )}
+                            {message.toolOutput && (
+                              <div className="agent-tool-trace-json">
+                                <strong>Output</strong>
+                                <pre>{prettyJson(message.toolOutput)}</pre>
+                              </div>
+                            )}
+                          </div>
+                        </details>
+                      ))}
+                    </div>
+                  </details>
+                );
+              }
+              return (
+                <div key={item.id} className={`agent-message ${item.role} ${item.traceKind ?? ""} ${item.status ?? ""}`}>
+                  {item.text}
+                </div>
+              );
+            })}
           </div>
 
           <form

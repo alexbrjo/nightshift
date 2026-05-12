@@ -92,6 +92,117 @@ describe("AgentWorkspace", () => {
     });
   });
 
+  it("renders planning trace summaries and tool call status", async () => {
+    render(<AgentWorkspace />);
+
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
+      handler({
+        payload: {
+          eventType: "item/reasoningSummary/completed",
+          threadId: "thr_123",
+          turnId: "turn_456",
+          itemId: "reasoning_1",
+          messageText: "Checked the draft graph and missing resources.",
+          traceKind: "reasoning",
+          status: "completed",
+          raw: {},
+        },
+      }),
+    );
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
+      handler({
+        payload: {
+          eventType: "item/toolCall/started",
+          threadId: "thr_123",
+          turnId: "turn_456",
+          itemId: "tool_1",
+          toolName: "replace_method_draft_graph",
+          traceKind: "tool",
+          status: "started",
+          raw: {},
+        },
+      }),
+    );
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
+      handler({
+        payload: {
+          eventType: "item/toolCall/completed",
+          threadId: "thr_123",
+          turnId: "turn_456",
+          itemId: "tool_1",
+          toolName: "replace_method_draft_graph",
+          traceKind: "tool",
+          status: "completed",
+          durationMs: 42,
+          outputSummary: "Draft 'Edge method' - 2 nodes - 1 resource",
+          toolArguments: {
+            workflow: { nodes: [{ id: "generate" }] },
+            resources: [],
+          },
+          toolOutput: {
+            ok: true,
+            result: { draft: { title: "Edge method" } },
+          },
+          raw: {},
+        },
+      }),
+    );
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
+      handler({
+        payload: {
+          eventType: "item/toolCall/completed",
+          threadId: "thr_123",
+          turnId: "turn_456",
+          itemId: "tool_2",
+          toolName: "attach_method_resource",
+          traceKind: "tool",
+          status: "completed",
+          durationMs: 7,
+          outputSummary: "Draft 'Edge method' - 2 nodes - 2 resources",
+          raw: {},
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Checked the draft graph and missing resources.")).toBeInTheDocument();
+      expect(screen.getByText("2 tool calls")).toBeInTheDocument();
+      expect(screen.getByText("replace_method_draft_graph")).toBeInTheDocument();
+      expect(screen.getByText("attach_method_resource")).toBeInTheDocument();
+      expect(screen.getByText("42 ms")).toBeInTheDocument();
+      expect(screen.getByText("Draft 'Edge method' - 2 nodes - 1 resource")).toBeInTheDocument();
+      expect(screen.getByText("Parameters")).toBeInTheDocument();
+      expect(screen.getByText("Output")).toBeInTheDocument();
+      expect(screen.queryByText("item/toolCall/completed")).not.toBeInTheDocument();
+    });
+
+    const toolGroup = screen.getByText("2 tool calls").closest("details") as HTMLDetailsElement;
+    fireEvent.click(screen.getByText("2 tool calls"));
+    expect(toolGroup.open).toBe(true);
+
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
+      handler({
+        payload: {
+          eventType: "item/toolCall/completed",
+          threadId: "thr_123",
+          turnId: "turn_456",
+          itemId: "tool_3",
+          toolName: "explain_current_method_draft",
+          traceKind: "tool",
+          status: "completed",
+          durationMs: 3,
+          outputSummary: "Ready with no blockers",
+          raw: {},
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("3 tool calls")).toBeInTheDocument();
+      expect(toolGroup.open).toBe(true);
+    });
+  });
+
   it("shows a draft panel after chat creates Method state", async () => {
     render(<AgentWorkspace />);
 

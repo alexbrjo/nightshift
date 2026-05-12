@@ -129,6 +129,12 @@ export interface CodexAppServerEvent {
   itemId?: string;
   textDelta?: string;
   messageText?: string;
+  traceKind?: string;
+  toolName?: string;
+  toolArguments?: Record<string, unknown>;
+  toolOutput?: Record<string, unknown>;
+  outputSummary?: string;
+  durationMs?: number;
   status?: string;
   errorMessage?: string;
   raw: Record<string, unknown>;
