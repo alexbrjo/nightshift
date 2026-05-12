@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -66,14 +66,20 @@ describe("JobViewPage failure surfacing", () => {
   });
 
   it("shows completed-with-errors status, skipped item errors, and available output", async () => {
-    render(<JobViewPage jobId={7} onViewCollection={vi.fn()} />);
+    const onViewCollection = vi.fn();
+    render(<JobViewPage jobId={7} onViewCollection={onViewCollection} />);
 
     expect(await screen.findByText("Completed with errors")).toBeInTheDocument();
     expect(screen.getByText("Job completed and skipped 1 failed item.")).toBeInTheDocument();
     expect(screen.getByText("Skipped Items")).toBeInTheDocument();
     expect(screen.getByText("Item 3")).toBeInTheDocument();
     expect(screen.getByText("Transform script failed: missing questions array")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "View Collection (1)" })).toBeEnabled();
+    const viewCollectionButton = screen.getByRole("button", { name: "View Collection (1)" });
+    expect(viewCollectionButton).toBeEnabled();
+    fireEvent.click(viewCollectionButton);
+    expect(onViewCollection).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 12, name: "Transform with skips outputs" }),
+    );
     expect(listen).toHaveBeenCalledWith("job-completed", expect.any(Function));
   });
 });

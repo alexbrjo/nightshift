@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { InferenceJob, Collection, JobFailure } from "../database";
-import { formatLongDateTime } from "../utils/date";
+import { formatDetailTimestamp } from "../utils/date";
 
 interface JobViewPageProps {
   jobId: number;
   onBack?: () => void;
-  onViewCollection?: (collectionId: number) => void;
+  onViewCollection?: (collection: Collection) => void;
 }
 
 export default function JobViewPage({ jobId, onBack, onViewCollection }: JobViewPageProps) {
@@ -173,7 +173,7 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
   const handleViewCollection = () => {
     if (collections.length > 0 && onViewCollection) {
       // Use the first collection (or could show a selection dialog for multiple)
-      onViewCollection(collections[0].id);
+      onViewCollection(collections[0]);
     }
   };
 
@@ -368,8 +368,8 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
         </div>
 
         <div className="timestamps">
-          <span>Created: {formatLongDateTime(job.created_at)}</span>
-          <span>Last Updated: {formatLongDateTime(job.updated_at)}</span>
+          <span>Created: {formatDetailTimestamp(job.created_at)}</span>
+          <span>Last Updated: {formatDetailTimestamp(job.updated_at)}</span>
         </div>
       </div>
 

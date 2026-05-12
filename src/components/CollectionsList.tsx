@@ -3,12 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Collection } from "../database";
 import { useActiveRefresh } from "../hooks/useActiveRefresh";
-import { formatDate } from "../utils/date";
+import { formatDetailTimestamp, formatListTimestamp } from "../utils/date";
 
 interface CollectionsListProps {
   isActive?: boolean;
   selectedId: number | null;
-  onSelectCollection: (collectionId: number) => void;
+  onSelectCollection: (collection: Collection) => void;
 }
 
 export default function CollectionsList({
@@ -78,17 +78,22 @@ export default function CollectionsList({
       ) : (
         <ul className="collection-list">
           {collections.map((c) => {
-            const date = formatDate(c.created_at);
+            const date = formatListTimestamp(c.created_at);
+            const fullDate = formatDetailTimestamp(c.created_at);
             return (
               <li
                 key={c.id}
                 className={`collection-item${selectedId === c.id ? " selected" : ""}`}
-                onClick={() => onSelectCollection(c.id)}
+                onClick={() => onSelectCollection(c)}
               >
                 <div className="collection-name">{c.name}</div>
                 <div className="collection-meta">
                   <span>#{c.id}</span>
-                  {date && <span>{date}</span>}
+                  {date && (
+                    <span className="collection-created-time" title={fullDate || undefined}>
+                      {date}
+                    </span>
+                  )}
                 </div>
               </li>
             );

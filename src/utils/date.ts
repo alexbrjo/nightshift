@@ -14,7 +14,7 @@ function parseSqliteDate(dateStr: string): Date | null {
 }
 
 /** Short date (e.g. "Apr 30, 2026"). Returns "" on parse failure. */
-export function formatDate(dateStr?: string): string {
+export function formatShortDate(dateStr?: string): string {
   if (!dateStr) return "";
   const d = parseSqliteDate(dateStr);
   if (!d) return "";
@@ -24,6 +24,9 @@ export function formatDate(dateStr?: string): string {
     year: "numeric",
   });
 }
+
+/** @deprecated Prefer formatShortDate for date-only UI. */
+export const formatDate = formatShortDate;
 
 /** Short date + 24h time (e.g. "Apr 30, 14:23"). Returns "" on parse failure. */
 export function formatDateTime(dateStr?: string): string {
@@ -39,7 +42,7 @@ export function formatDateTime(dateStr?: string): string {
 }
 
 /** Relative time for compact lists (e.g. "Now", "3 Min ago", "1 Hour ago"). */
-export function formatRelativeTime(dateStr?: string, now: Date = new Date()): string {
+export function formatListTimestamp(dateStr?: string, now: Date = new Date()): string {
   if (!dateStr) return "";
   const d = parseSqliteDate(dateStr);
   if (!d) return "";
@@ -70,10 +73,16 @@ export function formatRelativeTime(dateStr?: string, now: Date = new Date()): st
   return `${diffYears} ${diffYears === 1 ? "year" : "years"} ago`;
 }
 
+/** @deprecated Prefer formatListTimestamp for compact list UI. */
+export const formatRelativeTime = formatListTimestamp;
+
 /** Long, locale-aware date+time (e.g. "4/30/2026, 2:23:45 PM"). Returns "" on parse failure. */
-export function formatLongDateTime(dateStr?: string): string {
+export function formatDetailTimestamp(dateStr?: string): string {
   if (!dateStr) return "";
   const d = parseSqliteDate(dateStr);
   if (!d) return "";
   return d.toLocaleString();
 }
+
+/** @deprecated Prefer formatDetailTimestamp for detail UI. */
+export const formatLongDateTime = formatDetailTimestamp;

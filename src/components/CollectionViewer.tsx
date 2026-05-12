@@ -4,6 +4,7 @@ import type { CollectionItem } from "../database";
 
 interface CollectionViewerProps {
   collectionId: number;
+  collectionName?: string;
   onBack?: () => void;
 }
 
@@ -62,7 +63,7 @@ function formatExpanded(value: unknown): string {
   return String(value);
 }
 
-export default function CollectionViewer({ collectionId, onBack }: CollectionViewerProps) {
+export default function CollectionViewer({ collectionId, collectionName, onBack }: CollectionViewerProps) {
   const [items, setItems] = useState<CollectionItem[]>([]);
   const [totalItems, setTotalItems] = useState(0);
   const [currentPage, setCurrentPage] = useState(1);
@@ -195,7 +196,7 @@ export default function CollectionViewer({ collectionId, onBack }: CollectionVie
             ← Back
           </button>
         )}
-        <h1>Collection #{collectionId}</h1>
+        <h1>{collectionName?.trim() || `Collection #${collectionId}`}</h1>
         <div className="header-actions">
           <button className="btn-secondary" onClick={handleExportJSONL}>
             Export JSONL

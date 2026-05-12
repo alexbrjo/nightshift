@@ -6,6 +6,7 @@ import JobRunnerPage from "./components/JobRunnerPage";
 import CollectionViewer from "./components/CollectionViewer";
 import CollectionsList from "./components/CollectionsList";
 import { ToastProvider } from "./components/Toast";
+import type { Collection } from "./database";
 import {
   DropperIcon,
   CabinetIcon,
@@ -62,6 +63,7 @@ export default function App() {
     language?: string;
   } | null>(null);
   const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
+  const [selectedCollectionName, setSelectedCollectionName] = useState<string | undefined>();
   const fileContentsRef = useRef(new Map<string, string>());
   // Per-file disk content captured the first time a file is opened (and after
   // each save). A path is "dirty" iff its in-memory content differs from this
@@ -211,8 +213,9 @@ export default function App() {
         <main className={`workspace job-runner-workspace full-width${activeSection === "job-runner" ? "" : " hidden"}`}>
           <JobRunnerPage
             isActive={activeSection === "job-runner"}
-            onViewCollection={(collectionId) => {
-              setSelectedCollectionId(collectionId);
+            onViewCollection={(collection) => {
+              setSelectedCollectionId(collection.id);
+              setSelectedCollectionName(collection.name);
               setActiveSection("collection-viewer");
             }}
           />
@@ -222,10 +225,16 @@ export default function App() {
           <CollectionsList
             isActive={activeSection === "collection-viewer"}
             selectedId={selectedCollectionId}
-            onSelectCollection={setSelectedCollectionId}
+            onSelectCollection={(collection: Collection) => {
+              setSelectedCollectionId(collection.id);
+              setSelectedCollectionName(collection.name);
+            }}
           />
           {selectedCollectionId ? (
-            <CollectionViewer collectionId={selectedCollectionId} />
+            <CollectionViewer
+              collectionId={selectedCollectionId}
+              collectionName={selectedCollectionName}
+            />
           ) : (
             <div className="collections-placeholder">
               <p>Select a collection to view its items.</p>

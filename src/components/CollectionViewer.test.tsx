@@ -48,10 +48,10 @@ describe("CollectionViewer", () => {
       .mockResolvedValueOnce(mockItems) // get_collection_items
       .mockResolvedValueOnce(mockItems.length); // get_collection_count
 
-    render(<CollectionViewer collectionId={mockCollectionId} />);
+    render(<CollectionViewer collectionId={mockCollectionId} collectionName="Eval outputs" />);
 
     await waitFor(() => {
-      expect(screen.getByText("Collection #1")).toBeInTheDocument();
+      expect(screen.getByRole("heading", { name: "Eval outputs" })).toBeInTheDocument();
     });
 
     // Check that items are displayed
@@ -63,6 +63,16 @@ describe("CollectionViewer", () => {
     expect(screen.getByText("name")).toBeInTheDocument();
     expect(screen.getByText("age")).toBeInTheDocument();
     expect(screen.getByText("email")).toBeInTheDocument();
+  });
+
+  it("falls back to the collection id when no name is provided", async () => {
+    (invoke as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(mockItems)
+      .mockResolvedValueOnce(mockItems.length);
+
+    render(<CollectionViewer collectionId={mockCollectionId} />);
+
+    expect(await screen.findByRole("heading", { name: "Collection #1" })).toBeInTheDocument();
   });
 
   it("displays empty state when no items", async () => {

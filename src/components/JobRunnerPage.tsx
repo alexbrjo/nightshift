@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import InferenceJobForm from "./InferenceJobForm";
 import JobListSidebar from "./JobListSidebar";
 import JobViewPage from "./JobViewPage";
+import type { Collection } from "../database";
 
 interface JobRunnerPageProps {
   isActive?: boolean;
@@ -10,7 +11,7 @@ interface JobRunnerPageProps {
    * handler switches to the Collections section and selects the given id, so
    * the user lands in the Collections sidebar with the collection open.
    */
-  onViewCollection?: (collectionId: number) => void;
+  onViewCollection?: (collection: Collection) => void;
 }
 
 export default function JobRunnerPage({ isActive = true, onViewCollection }: JobRunnerPageProps) {

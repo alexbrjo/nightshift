@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { InferenceJob } from "../database";
 import { useActiveRefresh } from "../hooks/useActiveRefresh";
-import { formatRelativeTime } from "../utils/date";
+import { formatDetailTimestamp, formatListTimestamp } from "../utils/date";
 
 interface JobListSidebarProps {
   selectedId?: number | null;
@@ -92,7 +92,8 @@ export default function JobListSidebar({
       ) : (
         <ul className="job-list">
           {jobs.map((job) => {
-            const date = formatRelativeTime(job.created_at);
+            const date = formatListTimestamp(job.created_at);
+            const fullDate = formatDetailTimestamp(job.created_at);
             return (
               <li
                 key={job.id}
@@ -115,7 +116,11 @@ export default function JobListSidebar({
                         ? "Transform"
                         : "Inference"}
                   </span>
-                  {date && <span className="job-relative-time">{date}</span>}
+                  {date && (
+                    <span className="job-relative-time" title={fullDate || undefined}>
+                      {date}
+                    </span>
+                  )}
                 </div>
               </li>
             );
