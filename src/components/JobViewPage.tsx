@@ -276,14 +276,20 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
         
         <div className="config-grid">
           <div className="config-group">
-            <h3>{job.job_type === "transform" ? "Transform & Data" : "Prompt & Data"}</h3>
+            <h3>
+              {job.job_type === "sample"
+                ? "Sample & Data"
+                : job.job_type === "transform"
+                  ? "Transform & Data"
+                  : "Prompt & Data"}
+            </h3>
             <dl>
               {job.job_type === "transform" ? (
                 <>
                   <dt>Script File</dt>
                   <dd>{job.transform_script_file}</dd>
                 </>
-              ) : (
+              ) : job.job_type === "sample" ? null : (
                 <>
                   <dt>Prompt File</dt>
                   <dd>{job.prompt_file}</dd>
@@ -313,7 +319,7 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
             </dl>
           </div>
 
-          {job.job_type !== "transform" && (
+          {job.job_type !== "transform" && job.job_type !== "sample" && (
             <div className="config-group">
             <h3>LLM Configuration</h3>
             <dl>

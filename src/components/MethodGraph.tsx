@@ -72,7 +72,17 @@ function configHints(config: Record<string, unknown> | undefined) {
 
 function effectiveConfigHints(draft: MethodDocument, node: MethodWorkflowNode) {
   const ownHints = configHints(node.config);
-  if (ownHints.length > 0 || node.type !== "inference") return ownHints;
+  if (ownHints.length > 0) return ownHints;
+  if (node.type === "sample") {
+    return [
+      ["samples", draft.parameters?.samples],
+      ["strategy", draft.parameters?.strategy],
+    ]
+      .filter(([, value]) => value !== undefined && value !== null && value !== "")
+      .slice(0, MAX_CONFIG_HINTS)
+      .map(([key, value]) => `${key}: ${formatConfigValue(value)}`);
+  }
+  if (node.type !== "inference") return ownHints;
 
   const hints = [
     ["provider", draft.provider?.provider],

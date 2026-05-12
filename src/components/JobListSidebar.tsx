@@ -109,7 +109,11 @@ export default function JobListSidebar({
                 </div>
                 <div className="job-meta">
                   <span className="job-type-badge">
-                    {job.job_type === "transform" ? "Transform" : "Inference"}
+                    {job.job_type === "sample"
+                      ? "Sample"
+                      : job.job_type === "transform"
+                        ? "Transform"
+                        : "Inference"}
                   </span>
                   {date && <span className="job-relative-time">{date}</span>}
                 </div>

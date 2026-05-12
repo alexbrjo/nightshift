@@ -130,9 +130,25 @@ pub(crate) fn method_file_by_kind<'a>(
     method.resources.iter().find(|resource| resource.kind == normalized)
 }
 
+pub(crate) fn method_file_for_node_by_kind<'a>(
+    method: &'a MethodDocument,
+    node_id: &str,
+    kind: &str,
+) -> Option<&'a MethodResource> {
+    let normalized = match kind {
+        "schema" => "json_schema",
+        "script" => "eval_script",
+        other => other,
+    };
+    method.resources.iter().find(|resource| {
+        resource.kind == normalized && resource.consumed_by.iter().any(|id| id == node_id)
+    })
+}
+
 pub(crate) fn resolve_configured_file(
     method: &MethodDocument,
     method_id: &str,
+    node_id: &str,
     configured: Option<String>,
     fallback_kind: &str,
 ) -> Result<String, String> {
@@ -144,6 +160,7 @@ pub(crate) fn resolve_configured_file(
                 .iter()
                 .find(|resource| resource.id == id || resource.path.as_deref() == Some(id))
         })
+        .or_else(|| method_file_for_node_by_kind(method, node_id, fallback_kind))
         .or_else(|| method_file_by_kind(method, fallback_kind))
         .ok_or_else(|| format!("No method file with kind '{}' is available", fallback_kind))?;
     let path = file

@@ -87,7 +87,7 @@ pub fn method_function_tools() -> Vec<Value> {
                         "items": object_schema(json!({
                             "id": { "type": "string", "description": "Stable node id, lower snake/kebab style." },
                             "label": { "type": "string", "description": "Human-readable node label." },
-                            "type": { "type": "string", "enum": ["inference", "eval", "aggregate", "analysis"] },
+                            "type": { "type": "string", "enum": ["sample", "inference", "eval", "aggregate", "analysis"] },
                             "depends_on": { "type": "array", "items": { "type": "string" } }
                         }), vec!["id", "label", "type", "depends_on"])
                     }

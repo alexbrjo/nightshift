@@ -254,21 +254,28 @@ pub(crate) async fn create_inference_job_for_node(
     method: &MethodDocument,
     node: &MethodWorkflowNode,
     execution_id: i64,
+    data_source_override: Option<String>,
     model_override: Option<&str>,
     name_suffix: Option<&str>,
 ) -> Result<i64, String> {
     let prompt_file = resolve_configured_file(
         method,
         &method.id,
+        &node.id,
         config_string(node, method, "prompt_file", None),
         "prompt",
     )?;
-    let data_source = resolve_configured_file(
-        method,
-        &method.id,
-        config_string(node, method, "data_source", None),
-        "data",
-    )?;
+    let has_upstream_sample = data_source_override.is_some();
+    let data_source = match data_source_override {
+        Some(source) => source,
+        None => resolve_configured_file(
+            method,
+            &method.id,
+            &node.id,
+            config_string(node, method, "data_source", None),
+            "data",
+        )?,
+    };
     let json_schema_file = if config_string(node, method, "output_mode", Some("Unstructured"))
         .as_deref()
         == Some("JSON Schema")
@@ -276,6 +283,7 @@ pub(crate) async fn create_inference_job_for_node(
         Some(resolve_configured_file(
             method,
             &method.id,
+            &node.id,
             config_string(node, method, "json_schema_file", None),
             "schema",
         )?)
@@ -299,9 +307,16 @@ pub(crate) async fn create_inference_job_for_node(
         .unwrap_or_else(|| "Unstructured".into());
     let temperature = config_f64(node, method, "temperature");
     let max_tokens = config_i32(node, method, "max_tokens", None);
-    let samples = config_i32(node, method, "samples", Some(1)).unwrap_or(1);
-    let strategy =
-        config_string(node, method, "strategy", Some("single")).unwrap_or_else(|| "single".into());
+    let samples = if has_upstream_sample {
+        1
+    } else {
+        config_i32(node, method, "samples", Some(1)).unwrap_or(1)
+    };
+    let strategy = if has_upstream_sample {
+        "exhaustive".to_string()
+    } else {
+        config_string(node, method, "strategy", Some("single")).unwrap_or_else(|| "single".into())
+    };
     if server_url.trim().is_empty() {
         tracing::warn!(
             execution_id,
@@ -362,6 +377,51 @@ pub(crate) async fn create_inference_job_for_node(
     Ok(result.last_insert_rowid())
 }
 
+pub(crate) async fn create_sample_job_for_node(
+    db: &DatabaseState,
+    method: &MethodDocument,
+    node: &MethodWorkflowNode,
+    execution_id: i64,
+    data_source_override: Option<String>,
+) -> Result<i64, String> {
+    let data_source = match data_source_override {
+        Some(source) => source,
+        None => resolve_configured_file(
+            method,
+            &method.id,
+            &node.id,
+            config_string(node, method, "data_source", None),
+            "data",
+        )?,
+    };
+    let name = format!("method-{}-{}-{}", method.id, execution_id, node.id);
+    let samples = config_i32(node, method, "samples", Some(1)).unwrap_or(1);
+    let strategy =
+        config_string(node, method, "strategy", Some("single")).unwrap_or_else(|| "single".into());
+
+    let result = sqlx::query(
+        r#"
+        INSERT INTO inference_jobs (
+            job_type, name, prompt_file, data_source, provider, model, server_url,
+            output_mode, samples, strategy, status
+        )
+        VALUES (
+            'sample', ?1, '', ?2, 'Nightshift', 'Sampling', '', 'Sample',
+            ?3, ?4, 'pending'
+        )
+        "#,
+    )
+    .bind(name)
+    .bind(data_source)
+    .bind(samples)
+    .bind(strategy)
+    .execute(&db.pool())
+    .await
+    .map_err(|e| format!("Failed to create sample job for method node '{}': {}", node.id, e))?;
+
+    Ok(result.last_insert_rowid())
+}
+
 pub(crate) async fn create_transform_job_for_node(
     db: &DatabaseState,
     method: &MethodDocument,
@@ -375,6 +435,7 @@ pub(crate) async fn create_transform_job_for_node(
         None => resolve_configured_file(
             method,
             &method.id,
+            &node.id,
             config_string(node, method, "data_source", None),
             "data",
         )?,
@@ -382,6 +443,7 @@ pub(crate) async fn create_transform_job_for_node(
     let script_file = resolve_configured_file(
         method,
         &method.id,
+        &node.id,
         config_string(node, method, "script_file", None),
         "script",
     )?;
@@ -562,6 +624,7 @@ pub(crate) async fn run_inference_agent(
     method: &MethodDocument,
     node: &MethodWorkflowNode,
     execution_id: i64,
+    node_outputs: &HashMap<String, String>,
 ) -> Result<String, String> {
     let models = model_values(method);
     tracing::info!(
@@ -574,6 +637,7 @@ pub(crate) async fn run_inference_agent(
         model = ?config_string(node, method, "model", None),
         "Running Method inference node"
     );
+    let upstream_source = upstream_collection_source(db, node, node_outputs).await?;
     if models.len() <= 1 {
         let model_name = models
             .first()
@@ -585,6 +649,7 @@ pub(crate) async fn run_inference_agent(
             method,
             node,
             execution_id,
+            upstream_source.clone(),
             models.first().map(String::as_str),
             None,
         )
@@ -621,6 +686,7 @@ pub(crate) async fn run_inference_agent(
             method,
             node,
             execution_id,
+            upstream_source.clone(),
             Some(&model),
             Some(&slug_for_ref(&model)),
         )
@@ -644,6 +710,33 @@ pub(crate) async fn run_inference_agent(
     let storage_ref = job_ids.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
     insert_artifact(db, execution_id, Some(&node.id), "job_set", "job_set", &storage_ref).await?;
     Ok(format!("job_set:{}", storage_ref))
+}
+
+pub(crate) async fn run_sample_agent(
+    app: &AppHandle,
+    db: &DatabaseState,
+    method: &MethodDocument,
+    node: &MethodWorkflowNode,
+    execution_id: i64,
+    node_outputs: &HashMap<String, String>,
+) -> Result<String, String> {
+    let upstream_source = upstream_collection_source(db, node, node_outputs).await?;
+    let job_id =
+        create_sample_job_for_node(db, method, node, execution_id, upstream_source).await?;
+    insert_event(
+        app,
+        db,
+        execution_id,
+        Some(&node.id),
+        "sample_job_created",
+        serde_json::json!({
+            "jobId": job_id,
+            "samples": config_i32(node, method, "samples", Some(1)).unwrap_or(1),
+            "strategy": config_string(node, method, "strategy", Some("single")).unwrap_or_else(|| "single".into()),
+        }),
+    )
+    .await?;
+    run_job_agent(app, db, execution_id, &node.id, job_id).await
 }
 
 pub(crate) fn slug_for_ref(value: &str) -> String {
@@ -865,7 +958,8 @@ async fn run_method_node(
     had_not_implemented: &mut bool,
 ) -> Result<String, String> {
     match node.node_type.as_str() {
-        "inference" => run_inference_agent(app, db, method, node, execution_id).await,
+        "sample" => run_sample_agent(app, db, method, node, execution_id, node_outputs).await,
+        "inference" => run_inference_agent(app, db, method, node, execution_id, node_outputs).await,
         "transform" => run_transform_agent(app, db, method, node, execution_id, node_outputs).await,
         "eval"
             if method_file_by_kind(method, "script").is_some()

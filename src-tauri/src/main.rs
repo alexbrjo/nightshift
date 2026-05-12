@@ -5,6 +5,7 @@ mod commands;
 mod database;
 mod job_executor;
 mod methods;
+mod sampling;
 mod state;
 mod transform_runner;
 mod utils;

@@ -220,7 +220,7 @@ fn resource_kind_matches_node(kind: &str, node_type: &str) -> bool {
         "prompt" | "api_key" => node_type == "inference",
         "json_schema" => matches!(node_type, "inference" | "eval"),
         "eval_script" => node_type == "eval",
-        "data" | "collection" => matches!(node_type, "inference" | "eval"),
+        "data" | "collection" => matches!(node_type, "sample" | "inference" | "eval"),
         _ => false,
     }
 }

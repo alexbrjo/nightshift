@@ -203,4 +203,20 @@ describe("buildMethodGraphElements", () => {
     ]);
     expect(methodNodes[1].data.configHints).toEqual([]);
   });
+
+  it("shows inherited sampling config on sample nodes without node-level config", () => {
+    const draft = methodDraft({
+      workflow: {
+        nodes: [{ id: "sample_records", label: "Sample records", type: "sample", config: undefined }],
+      },
+      parameters: {
+        samples: 3,
+        strategy: "random",
+      },
+    });
+
+    const graph = buildMethodGraphElements(draft);
+
+    expect(graph.nodes[0].data.configHints).toEqual(["samples: 3", "strategy: random"]);
+  });
 });

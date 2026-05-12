@@ -14,16 +14,23 @@ pub(crate) fn required_file_kind_for_node(
 ) -> Vec<(&'static str, String)> {
     match node.node_type.as_str() {
         "inference" => {
-            let mut kinds = vec![
-                ("prompt", "Inference needs a prompt template".to_string()),
-                ("data", "Inference needs a data source".to_string()),
-            ];
+            let mut kinds = vec![("prompt", "Inference needs a prompt template".to_string())];
+            if node.depends_on.is_empty() {
+                kinds.push(("data", "Inference needs a data source".to_string()));
+            }
             if config_string(node, method, "output_mode", Some("Unstructured")).as_deref()
                 == Some("JSON Schema")
             {
                 kinds.push(("schema", "Structured inference needs a JSON schema".to_string()));
             }
             kinds
+        }
+        "sample" => {
+            if node.depends_on.is_empty() {
+                vec![("data", "Sample needs a data source".to_string())]
+            } else {
+                vec![]
+            }
         }
         "transform" | "eval" => {
             let mut kinds = vec![("script", "Transform/eval needs a script file".to_string())];

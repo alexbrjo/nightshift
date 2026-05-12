@@ -16,8 +16,9 @@ use super::draft::{
     update_draft_execution_config_for_root, validate_graph,
 };
 use super::execution::{
-    create_inference_job_for_node, create_transform_job_for_node, insert_artifact,
-    insert_execution, read_method_artifact_from_db, run_aggregate_agent, topological_nodes,
+    create_inference_job_for_node, create_sample_job_for_node, create_transform_job_for_node,
+    insert_artifact, insert_execution, read_method_artifact_from_db, run_aggregate_agent,
+    topological_nodes,
 };
 use super::model::*;
 use super::preflight::preflight_method_for_root;
@@ -456,6 +457,71 @@ fn data_resource_cannot_feed_analysis_node_directly() {
 }
 
 #[test]
+fn sample_node_allows_inference_without_direct_data_resource() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-preflight-sample-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("prompts")).unwrap();
+    fs::create_dir_all(temp.join("data")).unwrap();
+    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
+    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
+    let method = MethodDocument {
+        schema_version: 1,
+        id: "sample-then-infer".into(),
+        title: "Sample then infer".into(),
+        objective: "Share a fixed sample".into(),
+        resources: vec![
+            MethodResource {
+                id: "prompt".into(),
+                kind: "prompt".into(),
+                label: "Prompt".into(),
+                path: Some("prompts/main.jinja2".into()),
+                reference: None,
+                consumed_by: vec!["infer_a".into(), "infer_b".into()],
+            },
+            MethodResource {
+                id: "data".into(),
+                kind: "data".into(),
+                label: "Data".into(),
+                path: Some("data/examples.jsonl".into()),
+                reference: None,
+                consumed_by: vec!["sample_records".into()],
+            },
+        ],
+        workflow: MethodWorkflow {
+            nodes: vec![
+                MethodWorkflowNode {
+                    id: "sample_records".into(),
+                    label: "Sample records".into(),
+                    node_type: "sample".into(),
+                    depends_on: vec![],
+                    config: serde_json::json!({ "samples": 1, "strategy": "single" }),
+                },
+                MethodWorkflowNode {
+                    id: "infer_a".into(),
+                    label: "Infer A".into(),
+                    node_type: "inference".into(),
+                    depends_on: vec!["sample_records".into()],
+                    config: serde_json::Value::Null,
+                },
+            ],
+        },
+        parameters: serde_json::Value::Null,
+        provider: serde_json::json!({ "model": "qwen-test" }),
+        outputs: vec![],
+        metadata: serde_json::Value::Null,
+    };
+
+    let result = preflight_method_for_root(&method, &temp);
+
+    assert!(
+        !result.blockers.iter().any(|blocker| blocker.message.contains("data source")),
+        "got blockers: {:?}",
+        result.blockers
+    );
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
 fn api_key_resource_uses_reference_without_persisting_value() {
     let temp =
         std::env::temp_dir().join(format!("nightshift-method-api-key-test-{}", Uuid::new_v4()));
@@ -835,6 +901,7 @@ model: qwen-test
         execution_id,
         None,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -843,6 +910,187 @@ model: qwen-test
     assert!(job.prompt_file.starts_with("methods/edge-method/files/"));
     assert!(job.data_source.starts_with("methods/edge-method/files/"));
     assert_eq!(job.model, "qwen-test");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn create_inference_job_for_node_prefers_prompt_consumed_by_node() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-node-prompt-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("prompts")).unwrap();
+    fs::create_dir_all(temp.join("data")).unwrap();
+    fs::write(temp.join("prompts/generate.jinja2"), "Generate {{name}}").unwrap();
+    fs::write(temp.join("prompts/judge.jinja2"), "Judge {{word_de}}").unwrap();
+    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let method = MethodDocument {
+        schema_version: 1,
+        id: "node-prompt-method".into(),
+        title: "Node prompt method".into(),
+        objective: "Use node-specific prompts".into(),
+        resources: vec![
+            MethodResource {
+                id: "generate_prompt".into(),
+                kind: "prompt".into(),
+                label: "Generation prompt".into(),
+                path: Some("prompts/generate.jinja2".into()),
+                reference: None,
+                consumed_by: vec!["generate".into()],
+            },
+            MethodResource {
+                id: "judge_prompt".into(),
+                kind: "prompt".into(),
+                label: "Judge prompt".into(),
+                path: Some("prompts/judge.jinja2".into()),
+                reference: None,
+                consumed_by: vec!["judge".into()],
+            },
+            MethodResource {
+                id: "data".into(),
+                kind: "data".into(),
+                label: "Data".into(),
+                path: Some("data/examples.jsonl".into()),
+                reference: None,
+                consumed_by: vec!["generate".into()],
+            },
+        ],
+        workflow: MethodWorkflow {
+            nodes: vec![
+                MethodWorkflowNode {
+                    id: "generate".into(),
+                    label: "Generate".into(),
+                    node_type: "inference".into(),
+                    depends_on: vec![],
+                    config: serde_json::Value::Null,
+                },
+                MethodWorkflowNode {
+                    id: "judge".into(),
+                    label: "Judge".into(),
+                    node_type: "inference".into(),
+                    depends_on: vec!["generate".into()],
+                    config: serde_json::Value::Null,
+                },
+            ],
+        },
+        parameters: serde_json::Value::Null,
+        provider: serde_json::json!({
+            "provider": "Local",
+            "server_url": "http://localhost:1234",
+            "model": "qwen-test",
+        }),
+        outputs: vec![],
+        metadata: serde_json::Value::Null,
+    };
+
+    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
+    let frozen = read_manifest(&PathBuf::from(&summary.folder_path)).unwrap();
+    let execution_id = insert_execution(&db, &frozen, &summary.content_hash).await.unwrap();
+    let judge_node = frozen.workflow.nodes.iter().find(|node| node.id == "judge").unwrap();
+
+    let job_id = create_inference_job_for_node(
+        &db,
+        &frozen,
+        judge_node,
+        execution_id,
+        Some("collection:42".into()),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
+
+    assert!(job.prompt_file.starts_with("methods/node-prompt-method/files/"));
+    assert!(job.prompt_file.ends_with(".jinja2"));
+    let prompt = fs::read_to_string(temp.join(&job.prompt_file)).unwrap();
+    assert_eq!(prompt, "Judge {{word_de}}");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn create_inference_job_for_node_uses_upstream_sample_without_resampling() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-sampled-inference-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("prompts")).unwrap();
+    fs::create_dir_all(temp.join("data")).unwrap();
+    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
+    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let mut method = sample_method();
+    method.resources.push(method_resource("data", "data", "data/examples.jsonl"));
+    method.provider = serde_json::json!({
+        "provider": "Local",
+        "server_url": "http://localhost:1234",
+        "model": "qwen-test"
+    });
+    method.parameters = serde_json::json!({
+        "samples": 99,
+        "strategy": "random"
+    });
+    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
+    let frozen = read_manifest(&PathBuf::from(&summary.folder_path)).unwrap();
+    let execution_id = insert_execution(&db, &frozen, &summary.content_hash).await.unwrap();
+
+    let job_id = create_inference_job_for_node(
+        &db,
+        &frozen,
+        &frozen.workflow.nodes[0],
+        execution_id,
+        Some("collection:42".into()),
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
+
+    assert_eq!(job.data_source, "collection:42");
+    assert_eq!(job.samples, 1);
+    assert_eq!(job.strategy, "exhaustive");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn create_sample_job_for_node_persists_sampling_config() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-sample-job-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("data")).unwrap();
+    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let method = MethodDocument {
+        schema_version: 1,
+        id: "sample-method".into(),
+        title: "Sample method".into(),
+        objective: "Share one sample".into(),
+        resources: vec![method_resource("data", "data", "data/examples.jsonl")],
+        workflow: MethodWorkflow {
+            nodes: vec![MethodWorkflowNode {
+                id: "sample_records".into(),
+                label: "Sample records".into(),
+                node_type: "sample".into(),
+                depends_on: vec![],
+                config: serde_json::json!({ "samples": 2, "strategy": "random" }),
+            }],
+        },
+        parameters: serde_json::Value::Null,
+        provider: serde_json::Value::Null,
+        outputs: vec![],
+        metadata: serde_json::Value::Null,
+    };
+    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
+    let frozen = read_manifest(&PathBuf::from(&summary.folder_path)).unwrap();
+    let execution_id = insert_execution(&db, &frozen, &summary.content_hash).await.unwrap();
+
+    let job_id =
+        create_sample_job_for_node(&db, &frozen, &frozen.workflow.nodes[0], execution_id, None)
+            .await
+            .unwrap();
+    let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
+
+    assert_eq!(job.job_type, "sample");
+    assert!(job.data_source.starts_with("methods/sample-method/files/"));
+    assert_eq!(job.samples, 2);
+    assert_eq!(job.strategy, "random");
     fs::remove_dir_all(temp).unwrap();
 }
 
