@@ -3,7 +3,7 @@
 
    Switch themes by setting `data-theme="dark"` on the <html> root
    (defaults to the "lab" theme below — lab-coat white workspaces
-   with a glove-blue nav sidebar). All component CSS uses these
+   with a warm dark nav sidebar). All component CSS uses these
    semantic variables exclusively; hardcoded color values should be
    added here instead of inline.
    ============================================================ */
@@ -19,13 +19,13 @@
 
   /* The vertical icon nav (left rail) and the window topbar. Always contrasts
      with the workspace; the topbar uses the same color so they form an L. */
-  --nav-bg: #2c6cd9;            /* rich royal blue (glove blue, slightly lighter) */
+  --nav-bg: #d36f05;
   --nav-fg: #ffffff;
   --nav-fg-muted: rgba(255, 255, 255, 0.7);
   --nav-fg-active: #ffffff;
   --nav-active-bg: rgba(255, 255, 255, 0.2);
   --nav-hover-bg: rgba(255, 255, 255, 0.12);
-  --nav-border: rgba(0, 0, 0, 0.18);
+  --nav-border: rgba(211, 111, 5, 0.24);
 
   /* Topbar (window chrome). On macOS the traffic-light buttons overlay this. */
   --topbar-bg: var(--nav-bg);
@@ -33,18 +33,18 @@
   --topbar-height: 32px;
 
   /* ----- Text ----- */
-  --text-primary: #1c2535;      /* dark navy-charcoal */
-  --text-secondary: #4a5566;
-  --text-muted: #8b95a4;
+  --text-primary: #191118;
+  --text-secondary: #483a43;
+  --text-muted: #d36f05;
   --text-on-accent: #ffffff;    /* readable text over --accent */
 
   /* ----- Accent ----- */
-  --accent: #2563eb;            /* royal blue, slightly brighter than nav for highlights */
-  --accent-dim: #1d4ed8;        /* button hover */
+  --accent: #ef9333;
+  --accent-dim: #d36f05;        /* button hover */
   /* Translucent accent variants for borders / glows / soft fills. */
-  --accent-soft: rgba(37, 99, 235, 0.08);
-  --accent-medium: rgba(37, 99, 235, 0.22);
-  --accent-strong: rgba(37, 99, 235, 0.4);
+  --accent-soft: rgba(239, 147, 51, 0.12);
+  --accent-medium: rgba(239, 147, 51, 0.28);
+  --accent-strong: rgba(239, 147, 51, 0.45);
 
   /* Legacy aliases — these names are referenced widely in the codebase. */
   --moon-glow: var(--accent);
@@ -53,17 +53,17 @@
   --moon-glow-strong: var(--accent-strong);
 
   /* ----- Borders ----- */
-  --border-color: rgba(28, 37, 53, 0.12);
-  --border-subtle: rgba(28, 37, 53, 0.05);
+  --border-color: rgba(211, 111, 5, 0.2);
+  --border-subtle: rgba(249, 186, 68, 0.16);
 
   /* ----- Status ----- */
   --status-completed: #15803d;
-  --status-running: #1d4ed8;
+  --status-running: #d36f05;
   --status-warning: #b45309;
   --status-failed: #b91c1c;
   --status-pending: #525964;
   --status-completed-bg: rgba(21, 128, 61, 0.1);
-  --status-running-bg: rgba(29, 78, 216, 0.1);
+  --status-running-bg: rgba(241, 176, 50, 0.16);
   --status-warning-bg: rgba(180, 83, 9, 0.12);
   --status-failed-bg: rgba(185, 28, 28, 0.1);
 
@@ -72,7 +72,7 @@
   --input-bg-readonly: #f3f3ee;
 
   /* ----- Scrollbar / shadows / overlays ----- */
-  --scrollbar-thumb: rgba(28, 37, 53, 0.18);
+  --scrollbar-thumb: rgba(211, 111, 5, 0.24);
   --scrollbar-track: transparent;
   --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.06);
   --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
@@ -286,6 +286,8 @@ body {
 .workspace {
   display: flex;
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -2066,7 +2068,10 @@ legend {
 }
 
 .agent-chat-workspace {
+  flex: 1;
+  width: 100%;
   height: 100%;
+  min-width: 0;
   min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -2092,25 +2097,45 @@ legend {
 .agent-chat-main {
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(420px, 0.95fr) minmax(360px, 0.75fr);
+  height: 100%;
+  width: 100%;
 }
 
 .agent-chat-panel {
+  min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid var(--border-color);
   background: var(--bg-deepest);
 }
 
-.agent-chat-title {
-  padding: 14px 18px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-surface);
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 600;
+.agent-pane-resizer {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 10px;
+  width: 10px;
+  cursor: col-resize;
+  background: var(--bg-deepest);
+  touch-action: none;
+}
+
+.agent-pane-resizer::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 4px;
+  width: 1px;
+  background: var(--border-color);
+}
+
+.agent-pane-resizer:hover::before,
+.agent-pane-resizer:focus-visible::before {
+  width: 2px;
+  background: var(--accent);
+}
+
+.agent-pane-resizer:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .agent-chat-scroll {
@@ -2326,6 +2351,10 @@ legend {
 }
 
 .agent-graph-sidebar {
+  min-width: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
   padding: 0;
 }
@@ -2333,44 +2362,6 @@ legend {
 .agent-graph-sidebar .agent-empty-visual {
   margin: 0;
   padding: 20px;
-}
-
-.method-draft-panel {
-  height: 100%;
-  min-height: 0;
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  background: var(--bg-deepest);
-}
-
-.method-draft-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px;
-  border-bottom: 1px solid var(--border-color);
-  background: var(--bg-surface);
-}
-
-.method-draft-header div {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.method-draft-header strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-.method-draft-header span {
-  color: var(--text-secondary);
-  font-size: 12px;
-  text-transform: capitalize;
 }
 
 .method-execution-panel {
@@ -2430,86 +2421,6 @@ legend {
   color: var(--status-failed);
 }
 
-.method-execution-summary,
-.method-execution-node-list div,
-.method-execution-events div {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.method-execution-summary span,
-.method-execution-node-list span,
-.method-execution-events span {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.method-execution-node-list span,
-.method-execution-events span {
-  display: grid;
-  gap: 3px;
-  white-space: normal;
-}
-
-.method-execution-node-list em,
-.method-execution-events em {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-style: normal;
-  color: var(--status-failed);
-}
-
-.method-execution-summary strong,
-.method-execution-node-list strong,
-.method-execution-events code {
-  flex-shrink: 0;
-  color: var(--text-primary);
-  font-size: 12px;
-}
-
-.method-execution-summary strong,
-.method-execution-node-list strong {
-  text-transform: capitalize;
-}
-
-.method-execution-node-list,
-.method-execution-events {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-}
-
-.method-execution-events code {
-  max-width: 170px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono);
-  color: var(--text-secondary);
-}
-
-.method-execution-node-list .status-running {
-  color: var(--status-running);
-}
-
-.method-execution-node-list .status-completed {
-  color: var(--status-completed);
-}
-
-.method-execution-node-list .status-failed,
-.method-execution-node-list .status-cancelled,
-.method-execution-node-list .status-not_implemented {
-  color: var(--status-failed);
-}
-
 .method-flow {
   width: 100%;
   height: 100%;
@@ -2554,14 +2465,14 @@ legend {
 .method-flow .react-flow__handle {
   width: 8px;
   height: 8px;
-  border: 1px solid var(--bg-elevated);
+  border: 2px solid var(--bg-elevated);
   background: var(--accent);
 }
 
 .method-flow-node {
   width: 300px;
   min-height: 180px;
-  border: 1px solid var(--border-color);
+  border: 2px solid var(--border-color);
   border-radius: 8px;
   padding: 11px;
   display: grid;
@@ -2572,6 +2483,12 @@ legend {
 
 .method-flow-node.status-running {
   border-color: var(--status-running);
+}
+
+.method-flow-node.status-queued,
+.method-flow-node.status-pending,
+.method-flow-node.status-blocked {
+  border-style: dashed;
 }
 
 .method-flow-node.status-completed {
@@ -2605,7 +2522,7 @@ legend {
   font-size: 13px;
 }
 
-.method-flow-node-header span,
+.method-flow-node-description,
 .method-flow-node-meta span,
 .method-flow-config span,
 .method-flow-more {
@@ -2613,16 +2530,81 @@ legend {
   font-size: 11px;
 }
 
+.method-flow-node-description {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .method-flow-status {
   flex-shrink: 0;
-  max-width: 82px;
+  max-width: 112px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  text-transform: capitalize;
+  overflow: visible;
+}
+
+.method-flow-status > span:first-child {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border: 1px solid var(--border-color);
+}
+
+.method-flow-status-icon {
+  flex: 0 0 auto;
+  display: inline-grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.method-flow-status.status-completed .method-flow-status-icon {
+  color: var(--status-completed);
+}
+
+.method-flow-status.status-failed .method-flow-status-icon,
+.method-flow-status.status-cancelled .method-flow-status-icon,
+.method-flow-status.status-not_implemented .method-flow-status-icon {
+  color: var(--status-failed);
+}
+
+.method-flow-recording-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
   border-radius: 999px;
-  padding: 3px 7px;
-  background: var(--bg-surface);
+  background: var(--status-failed);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-failed) 38%, transparent);
+  animation: method-recording-pulse 1.1s ease-out infinite;
+}
+
+@keyframes method-recording-pulse {
+  0% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-failed) 38%, transparent);
+  }
+  70% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 transparent;
+  }
 }
 
 .method-flow-node-meta {

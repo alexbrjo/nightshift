@@ -47,11 +47,23 @@ describe("AgentWorkspace", () => {
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("start_design_session");
-      expect(screen.getByText(/No Method draft exists yet/i)).toBeInTheDocument();
+      expect(screen.queryByText("Methods")).not.toBeInTheDocument();
+      expect(screen.queryByText(/No Method draft exists yet/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/connected/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/Thread thr_123/i)).not.toBeInTheDocument();
       expect(screen.queryByText(/Codex Stream/i)).not.toBeInTheDocument();
     });
+  });
+
+  it("uses an accessible resizable panel group for the Method graph", async () => {
+    render(<AgentWorkspace />);
+
+    const separator = await screen.findByRole("separator", { name: "Resize Method graph panel" });
+    const main = separator.closest(".agent-chat-main") as HTMLElement;
+
+    expect(main).toBeInTheDocument();
+    expect(main.style.getPropertyValue("--agent-graph-width")).toBe("");
+    expect(screen.getByRole("combobox", { name: "Saved Method" })).toBeInTheDocument();
   });
 
   it("sends chat through the design bridge", async () => {
@@ -246,7 +258,7 @@ describe("AgentWorkspace", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Generate answers")).toBeInTheDocument();
-      expect(screen.getByText("Rubric benchmark")).toBeInTheDocument();
+      expect(screen.queryByText("Rubric benchmark")).not.toBeInTheDocument();
       expect(screen.getByText("Main prompt")).toBeInTheDocument();
       expect(screen.getByText("Attach prompt for 'Main prompt'.")).toBeInTheDocument();
     });
@@ -258,7 +270,20 @@ describe("AgentWorkspace", () => {
         case "start_design_session":
           return Promise.resolve({ threadId: "thr_123" });
         case "get_current_method_draft":
-          return Promise.resolve(null);
+          return Promise.resolve({
+            schema_version: 1,
+            id: "edge-method",
+            title: "Edge method",
+            objective: "Measure accuracy",
+            resources: [],
+            workflow: {
+              nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
+            },
+            parameters: {},
+            provider: {},
+            outputs: [],
+            metadata: {},
+          });
         case "list_methods":
           return Promise.resolve([
             {
@@ -309,15 +334,17 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findByText("Edge method");
+    await screen.findAllByText("Edge method");
     fireEvent.click(screen.getByRole("button", { name: "Execute" }));
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("execute_method", { id: "edge-method" });
-      expect(screen.getByText("Execution 42")).toBeInTheDocument();
-      expect(screen.getAllByText("running").length).toBeGreaterThan(0);
-      expect(screen.getByText("node_started")).toBeInTheDocument();
+      expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Execution 42")).not.toBeInTheDocument();
+      expect(screen.queryByText("Started Method execution 42.")).not.toBeInTheDocument();
+      expect(screen.queryByText("node_started")).not.toBeInTheDocument();
     });
+    expect(mockInvoke).not.toHaveBeenCalledWith("get_method_execution_events", { executionId: 42 });
   });
 
   it("blocks execution when the visible draft differs from the selected saved Method", async () => {
@@ -361,7 +388,7 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findByText("Edge Model 50% Flash-Card Accuracy Benchmark");
+    await screen.findByRole("option", { name: "Edge Model 98% Flash-Card Accuracy Benchmark" });
     fireEvent.click(screen.getByRole("button", { name: "Execute" }));
 
     await waitFor(() => {
@@ -407,12 +434,16 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findByText("Edge method");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Save Method" })).toBeEnabled();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Save Method" }));
 
     await waitFor(() => {
       expect(mockInvoke).toHaveBeenCalledWith("save_current_method_draft");
-      expect(screen.getAllByText("Saved Method 'Edge method'.").length).toBeGreaterThan(0);
+      expect(screen.getByRole("combobox", { name: "Saved Method" })).toHaveValue("edge-method");
+      expect(screen.queryByText("Saved Method 'Edge method'.")).not.toBeInTheDocument();
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
   });
 
@@ -447,7 +478,9 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findByText("Edge method");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Save Method" })).toBeEnabled();
+    });
     fireEvent.click(screen.getByRole("button", { name: "Save Method" }));
 
     await waitFor(() => {
@@ -464,7 +497,20 @@ describe("AgentWorkspace", () => {
         case "start_design_session":
           return Promise.resolve({ threadId: "thr_123" });
         case "get_current_method_draft":
-          return Promise.resolve(null);
+          return Promise.resolve({
+            schema_version: 1,
+            id: "edge-method",
+            title: "Edge method",
+            objective: "Measure accuracy",
+            resources: [],
+            workflow: {
+              nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
+            },
+            parameters: {},
+            provider: {},
+            outputs: [],
+            metadata: {},
+          });
         case "list_methods":
           return Promise.resolve([
             {
@@ -515,11 +561,12 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findByText("Edge method");
+    await screen.findAllByText("Edge method");
     fireEvent.click(screen.getByRole("button", { name: "Execute" }));
 
     await waitFor(() => {
-      expect(screen.getAllByText("queued").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Queued").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Execution 42")).not.toBeInTheDocument();
     });
     nodeStatus = "completed";
     eventBus.handlers.get("method-execution-event")?.forEach((handler) =>
@@ -534,18 +581,31 @@ describe("AgentWorkspace", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getAllByText("completed").length).toBeGreaterThan(0);
-      expect(screen.getByText("node_completed")).toBeInTheDocument();
+      expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
+      expect(screen.queryByText("node_completed")).not.toBeInTheDocument();
     });
   });
 
-  it("shows node failure details from execution summaries and events", async () => {
+  it("shows node failure status in the graph without raw execution text", async () => {
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
         case "start_design_session":
           return Promise.resolve({ threadId: "thr_123" });
         case "get_current_method_draft":
-          return Promise.resolve(null);
+          return Promise.resolve({
+            schema_version: 1,
+            id: "edge-method",
+            title: "Edge method",
+            objective: "Measure accuracy",
+            resources: [],
+            workflow: {
+              nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
+            },
+            parameters: {},
+            provider: {},
+            outputs: [],
+            metadata: {},
+          });
         case "list_methods":
           return Promise.resolve([
             {
@@ -598,12 +658,13 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findByText("Edge method");
+    await screen.findAllByText("Edge method");
     fireEvent.click(screen.getByRole("button", { name: "Execute" }));
 
     await waitFor(() => {
-      expect(screen.getAllByText("Provider returned 401").length).toBeGreaterThan(0);
-      expect(screen.getByText("node_failed")).toBeInTheDocument();
+      expect(screen.getAllByText("Failed").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Provider returned 401")).not.toBeInTheDocument();
+      expect(screen.queryByText("node_failed")).not.toBeInTheDocument();
     });
   });
 
@@ -623,7 +684,7 @@ describe("AgentWorkspace", () => {
     await waitFor(() => {
       expect(screen.getByText("hello")).toBeInTheDocument();
       expect(screen.getByText(/I could not reach the design agent/i)).toBeInTheDocument();
-      expect(screen.queryByText("failed")).not.toBeInTheDocument();
+      expect(screen.queryByText("Failed")).not.toBeInTheDocument();
     });
   });
 

@@ -1,6 +1,7 @@
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { MethodDocument } from "../database";
-import { buildMethodGraphElements } from "./MethodGraph";
+import MethodGraph, { buildMethodGraphElements, fitMethodGraphViewport } from "./MethodGraph";
 
 function methodDraft(overrides: Partial<MethodDocument> = {}): MethodDocument {
   return {
@@ -218,5 +219,68 @@ describe("buildMethodGraphElements", () => {
     const graph = buildMethodGraphElements(draft);
 
     expect(graph.nodes[0].data.configHints).toEqual(["samples: 3", "strategy: random"]);
+  });
+
+  it("fits graph bounds inside narrow panes without clipping the right edge", () => {
+    const draft = methodDraft({
+      resources: [
+        { id: "data", kind: "data", label: "Dataset", path: "data.jsonl", consumed_by: ["sample"] },
+        { id: "prompt", kind: "prompt", label: "Prompt", path: "prompt.md", consumed_by: ["generate"] },
+      ],
+      workflow: {
+        nodes: [
+          { id: "sample", label: "Sample records", type: "sample", config: {} },
+          { id: "generate", label: "Generate cards", type: "inference", depends_on: ["sample"], config: {} },
+          { id: "judge", label: "Judge cards", type: "inference", depends_on: ["generate"], config: {} },
+        ],
+      },
+    });
+
+    const graph = buildMethodGraphElements(draft);
+    const viewport = fitMethodGraphViewport(graph.nodes, { width: 360, height: 640 });
+
+    const rightEdge = Math.max(
+      ...graph.nodes.map((node) => node.position.x + (node.type === "resource" ? 260 : 300)),
+    );
+    const leftEdge = Math.min(...graph.nodes.map((node) => node.position.x));
+
+    expect(leftEdge * viewport.zoom + viewport.x).toBeGreaterThanOrEqual(0);
+    expect(rightEdge * viewport.zoom + viewport.x).toBeLessThanOrEqual(360);
+    expect(viewport.zoom).toBeLessThan(1);
+  });
+
+  it("renders richer visual status badges for execution nodes", () => {
+    const draft = methodDraft({
+      workflow: {
+        nodes: [
+          { id: "done", label: "Done", type: "sample", config: {} },
+          { id: "run", label: "Run", type: "inference", depends_on: ["done"], config: {} },
+          { id: "wait", label: "Wait", type: "eval", depends_on: ["run"], config: {} },
+          { id: "bad", label: "Bad", type: "analysis", depends_on: ["wait"], config: {} },
+        ],
+      },
+    });
+
+    render(
+      <MethodGraph
+        draft={draft}
+        executionNodes={[
+          { id: 1, executionId: 1, nodeId: "done", nodeType: "sample", status: "completed" },
+          { id: 2, executionId: 1, nodeId: "run", nodeType: "inference", status: "running" },
+          { id: 3, executionId: 1, nodeId: "wait", nodeType: "eval", status: "queued" },
+          { id: 4, executionId: 1, nodeId: "bad", nodeType: "analysis", status: "failed" },
+        ]}
+      />,
+    );
+
+    const runningStatus = screen.getByText("Running").closest(".method-flow-status");
+    expect(runningStatus).toHaveClass("status-running");
+    expect(runningStatus?.lastElementChild).toHaveClass("method-flow-recording-dot");
+    expect(document.querySelector(".method-flow-recording-dot")).toBeInTheDocument();
+    expect(screen.getByText("✓")).toBeInTheDocument();
+    expect(screen.getByText("×")).toBeInTheDocument();
+    expect(screen.getByText("Queued").closest(".method-flow-node")).toHaveClass("status-queued");
+    expect(screen.getByText("inference").closest(".method-flow-node-header")).toBeInTheDocument();
+    expect(screen.getByText("Run")).toHaveClass("method-flow-node-description");
   });
 });

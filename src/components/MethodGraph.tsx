@@ -7,7 +7,9 @@ import {
   type Edge,
   type Node,
   type NodeProps,
+  type Viewport,
 } from "@xyflow/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import "@xyflow/react/dist/style.css";
 import type {
   MethodDocument,
@@ -27,6 +29,11 @@ const RESOURCE_NODE_X = -340;
 const RESOURCE_NODE_HEIGHT = 118;
 const RESOURCE_NODE_GAP = 14;
 const MAX_BUNDLE_RESOURCES = 4;
+const METHOD_NODE_WIDTH = 300;
+const RESOURCE_NODE_WIDTH = 260;
+const GRAPH_FIT_PADDING = 24;
+const MIN_GRAPH_ZOOM = 0.18;
+const MAX_GRAPH_ZOOM = 1.08;
 
 type MethodGraphNodeData = {
   draftNode: MethodWorkflowNode & { status: string; label: string };
@@ -49,6 +56,11 @@ type MethodAnyNode = MethodFlowNode | MethodResourceNode;
 export interface MethodGraphElements {
   nodes: MethodAnyNode[];
   edges: Edge[];
+}
+
+interface FlowSize {
+  width: number;
+  height: number;
 }
 
 function classSafeStatus(status: string) {
@@ -242,6 +254,25 @@ function derivedNodeStatus(node: MethodWorkflowNode & { status?: string }, block
   return blockers.length > 0 ? "blocked" : "ready";
 }
 
+function statusLabel(status: string) {
+  return status
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function statusIcon(status: string) {
+  switch (status) {
+    case "completed":
+      return "✓";
+    case "failed":
+    case "cancelled":
+    case "not_implemented":
+      return "×";
+    default:
+      return null;
+  }
+}
+
 export function buildMethodGraphElements(
   draft: MethodDocument,
   executionNodes: MethodExecutionNodeSummary[] = [],
@@ -358,18 +389,24 @@ function MethodGraphNode({ data }: NodeProps<MethodFlowNode>) {
   const { draftNode, incomingLabels, blockerCount, warningCount, resourceCount, issues, configHints } = data;
   const issueCount = blockerCount + warningCount;
   const shownIssues = issues.slice(0, MAX_NODE_ISSUES);
+  const normalizedStatus = classSafeStatus(draftNode.status);
+  const icon = statusIcon(normalizedStatus);
 
   return (
-    <article className={`method-flow-node status-${classSafeStatus(draftNode.status)}`}>
+    <article className={`method-flow-node status-${normalizedStatus}`}>
       <Handle id="top" type="target" position={Position.Top} isConnectable={false} />
       <Handle id="left" type="target" position={Position.Left} isConnectable={false} />
       <div className="method-flow-node-header">
         <div>
-          <strong>{draftNode.label || draftNode.id}</strong>
-          <span>{draftNode.type}</span>
+          <strong>{draftNode.type}</strong>
         </div>
-        <span className="method-flow-status">{draftNode.status || "draft"}</span>
+        <span className={`method-flow-status status-${normalizedStatus}`}>
+          <span>{statusLabel(draftNode.status || "draft")}</span>
+          {normalizedStatus === "running" && <span className="method-flow-recording-dot" aria-hidden="true" />}
+          {icon && <span className="method-flow-status-icon" aria-hidden="true">{icon}</span>}
+        </span>
       </div>
+      <p className="method-flow-node-description">{draftNode.label || draftNode.id}</p>
       <div className="method-flow-node-meta" aria-label={`Graph details for ${draftNode.id}`}>
         <span>{incomingLabels.length ? `${incomingLabels.length} deps` : "source"}</span>
         <span>{resourceCount ? `${resourceCount} resources` : "no resources"}</span>
@@ -431,20 +468,116 @@ const nodeTypes = {
   resource: MethodGraphResourceNode,
 };
 
+function graphNodeDimensions(node: MethodAnyNode) {
+  return node.type === "resource"
+    ? { width: RESOURCE_NODE_WIDTH, height: RESOURCE_NODE_HEIGHT }
+    : { width: METHOD_NODE_WIDTH, height: NODE_HEIGHT };
+}
+
+export function fitMethodGraphViewport(nodes: MethodGraphElements["nodes"], size: FlowSize): Viewport {
+  if (nodes.length === 0 || size.width <= 0 || size.height <= 0) {
+    return { x: 0, y: 0, zoom: 1 };
+  }
+
+  const bounds = nodes.reduce(
+    (current, node) => {
+      const dimensions = graphNodeDimensions(node);
+      return {
+        minX: Math.min(current.minX, node.position.x),
+        minY: Math.min(current.minY, node.position.y),
+        maxX: Math.max(current.maxX, node.position.x + dimensions.width),
+        maxY: Math.max(current.maxY, node.position.y + dimensions.height),
+      };
+    },
+    {
+      minX: Number.POSITIVE_INFINITY,
+      minY: Number.POSITIVE_INFINITY,
+      maxX: Number.NEGATIVE_INFINITY,
+      maxY: Number.NEGATIVE_INFINITY,
+    },
+  );
+
+  const graphWidth = Math.max(1, bounds.maxX - bounds.minX);
+  const graphHeight = Math.max(1, bounds.maxY - bounds.minY);
+  const availableWidth = Math.max(1, size.width - GRAPH_FIT_PADDING * 2);
+  const availableHeight = Math.max(1, size.height - GRAPH_FIT_PADDING * 2);
+  const zoom = Math.min(
+    Math.max(Math.min(availableWidth / graphWidth, availableHeight / graphHeight), MIN_GRAPH_ZOOM),
+    MAX_GRAPH_ZOOM,
+  );
+  const x = (size.width - graphWidth * zoom) / 2 - bounds.minX * zoom;
+  const y = Math.max(GRAPH_FIT_PADDING, (size.height - graphHeight * zoom) / 2) - bounds.minY * zoom;
+
+  return { x, y, zoom };
+}
+
 interface MethodGraphProps {
   draft: MethodDocument;
   executionNodes?: MethodExecutionNodeSummary[];
 }
 
 export default function MethodGraph({ draft, executionNodes = [] }: MethodGraphProps) {
-  const { nodes, edges } = buildMethodGraphElements(draft, executionNodes);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const { nodes, edges } = useMemo(
+    () => buildMethodGraphElements(draft, executionNodes),
+    [draft, executionNodes],
+  );
+  const [flowSize, setFlowSize] = useState<FlowSize>({ width: 0, height: 0 });
+  const [viewport, setViewport] = useState<Viewport | undefined>();
+  const graphSignature = [
+    nodes.map((node) => `${node.id}:${node.position.x}:${node.position.y}`).join("|"),
+    edges.map((edge) => edge.id).join("|"),
+  ].join("::");
+
+  const updateFlowSize = useCallback(() => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const width = Math.floor(rect.width);
+    const height = Math.floor(rect.height);
+    setFlowSize((current) =>
+      current.width === width && current.height === height ? current : { width, height },
+    );
+  }, []);
+
+  useEffect(() => {
+    updateFlowSize();
+    const container = containerRef.current;
+    const resizeObserver = typeof ResizeObserver === "undefined" || !container
+      ? null
+      : new ResizeObserver(updateFlowSize);
+    if (container) resizeObserver?.observe(container);
+    window.addEventListener("resize", updateFlowSize);
+
+    return () => {
+      resizeObserver?.disconnect();
+      window.removeEventListener("resize", updateFlowSize);
+    };
+  }, [updateFlowSize]);
+
+  const fittedViewport = useMemo(
+    () => fitMethodGraphViewport(nodes, flowSize),
+    [flowSize, graphSignature, nodes],
+  );
+
+  useEffect(() => {
+    if (flowSize.width > 0 && flowSize.height > 0) {
+      setViewport((current) =>
+        current
+          && current.x === fittedViewport.x
+          && current.y === fittedViewport.y
+          && current.zoom === fittedViewport.zoom
+          ? current
+          : fittedViewport,
+      );
+    }
+  }, [fittedViewport, flowSize.height, flowSize.width]);
 
   if (nodes.length === 0) {
     return <div className="agent-empty-visual">No nodes yet.</div>;
   }
 
   return (
-    <div className="method-flow" aria-label="Draft Method graph">
+    <div ref={containerRef} className="method-flow" aria-label="Draft Method graph">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -452,8 +585,9 @@ export default function MethodGraph({ draft, executionNodes = [] }: MethodGraphP
         nodesDraggable={false}
         nodesConnectable={false}
         edgesFocusable={false}
-        defaultViewport={{ x: 390, y: 58, zoom: 1.08 }}
-        minZoom={0.7}
+        viewport={viewport}
+        onViewportChange={setViewport}
+        minZoom={MIN_GRAPH_ZOOM}
         maxZoom={1.8}
         panOnScroll
         proOptions={{ hideAttribution: true }}

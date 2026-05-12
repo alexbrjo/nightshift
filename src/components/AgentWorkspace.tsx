@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import type {
   CodexAppServerEvent,
   CodexAppServerSession,
   CodexTurnSummary,
   MethodDocument,
-  MethodExecutionEventSummary,
   MethodExecutionNodeSummary,
   MethodExecutionSummary,
   MethodSummary,
@@ -161,18 +161,6 @@ function derivedDraftReadiness(draft: MethodDocument | null) {
   return { status: blockers.length ? "drafting" : "ready", blockers };
 }
 
-function eventDetail(event: MethodExecutionEventSummary): string | null {
-  const payload = event.payloadJson;
-  const error = typeof payload?.error === "string" ? payload.error : null;
-  if (error) return error;
-  const status = typeof payload?.status === "string" ? payload.status : null;
-  const message = typeof payload?.message === "string" ? payload.message : null;
-  if (status && message) return `${status}: ${message}`;
-  if (message) return message;
-  if (status) return status;
-  return null;
-}
-
 export default function AgentWorkspace() {
   const hasProjectRootRef = useRef(false);
   const [session, setSession] = useState<CodexAppServerSession | null>(null);
@@ -182,7 +170,6 @@ export default function AgentWorkspace() {
   const [selectedMethodId, setSelectedMethodId] = useState("");
   const [activeExecutionId, setActiveExecutionId] = useState<number | null>(null);
   const [executionNodes, setExecutionNodes] = useState<MethodExecutionNodeSummary[]>([]);
-  const [executionEvents, setExecutionEvents] = useState<MethodExecutionEventSummary[]>([]);
   const [executionStatus, setExecutionStatus] = useState<string>("idle");
   const [isSavingMethod, setIsSavingMethod] = useState(false);
   const [isExecutingMethod, setIsExecutingMethod] = useState(false);
@@ -272,15 +259,13 @@ export default function AgentWorkspace() {
   const refreshExecution = useCallback(
     async (executionId: number) => {
       try {
-        const [executions, nodes, events] = await Promise.all([
+        const [executions, nodes] = await Promise.all([
           invoke<MethodExecutionSummary[]>("list_method_executions", { methodId: selectedMethodId || null }),
           invoke<MethodExecutionNodeSummary[]>("get_method_execution_nodes", { executionId }),
-          invoke<MethodExecutionEventSummary[]>("get_method_execution_events", { executionId }),
         ]);
         const currentExecution = executions.find((execution) => execution.id === executionId);
         setExecutionStatus(currentExecution?.status ?? "running");
         setExecutionNodes(nodes);
-        setExecutionEvents(events);
       } catch (err) {
         addSystemMessage(`I could not refresh Method execution ${executionId}: ${String(err)}`, "failed");
       }
@@ -485,17 +470,14 @@ export default function AgentWorkspace() {
       return;
     }
     setIsExecutingMethod(true);
-    setMethodActionFeedback({ tone: "info", text: "Starting Method execution..." });
+    setMethodActionFeedback(null);
     setExecutionStatus("starting");
     setExecutionNodes([]);
-    setExecutionEvents([]);
     try {
       const executionId = await invoke<number>("execute_method", { id: selectedMethodId });
       setActiveExecutionId(executionId);
       setExecutionStatus("queued");
       await refreshExecution(executionId);
-      setMethodActionFeedback({ tone: "success", text: `Started Method execution ${executionId}.` });
-      addSystemMessage(`Started Method execution ${executionId}.`);
     } catch (err) {
       setExecutionStatus("failed");
       const message = `I could not execute Method '${selectedMethodId}': ${String(err)}`;
@@ -509,7 +491,7 @@ export default function AgentWorkspace() {
   const saveCurrentDraftAsMethod = async () => {
     if (!draft || derivedDraftReadiness(draft).blockers.length > 0 || isSavingMethod) return;
     setIsSavingMethod(true);
-    setMethodActionFeedback({ tone: "info", text: "Saving Method..." });
+    setMethodActionFeedback(null);
     try {
       const summary = await invoke<MethodSummary>("save_current_method_draft");
       const savedMethods = await invoke<MethodSummary[]>("list_methods");
@@ -518,8 +500,6 @@ export default function AgentWorkspace() {
         : [summary, ...savedMethods];
       setMethods(nextMethods);
       setSelectedMethodId(summary.id);
-      setMethodActionFeedback({ tone: "success", text: `Saved Method '${summary.title}'.` });
-      addSystemMessage(`Saved Method '${summary.title}'.`);
     } catch (err) {
       const message = `I could not save the current Method draft: ${String(err)}`;
       setMethodActionFeedback({ tone: "error", text: message });
@@ -533,9 +513,19 @@ export default function AgentWorkspace() {
 
   return (
     <div className="agent-chat-workspace">
-      <main className="agent-chat-main">
-        <section className="agent-chat-panel">
-          <div className="agent-chat-title">Methods</div>
+      <PanelGroup
+        id="agent-chat-main"
+        className="agent-chat-main"
+        direction="horizontal"
+        keyboardResizeBy={4}
+      >
+        <Panel
+          id="agent-chat-panel"
+          order={1}
+          defaultSize={62}
+          minSize={35}
+          className="agent-chat-panel"
+        >
           <div className="agent-chat-scroll">
             {chatItems.map((item) => {
               if (item.role === "toolTraceGroup") {
@@ -604,110 +594,75 @@ export default function AgentWorkspace() {
               {isSending ? "Sending" : "Send"}
             </button>
           </form>
-        </section>
+        </Panel>
 
-        <aside className="agent-visual-panel agent-graph-sidebar">
-          <div className="method-draft-panel">
-            <div className="method-draft-header">
-              {draft ? (
-                <div>
-                  <span>{derivedDraftReadiness(draft).status}</span>
-                  <strong>{draft.title}</strong>
-                </div>
-              ) : (
-                <div>
-                  <span>Execution</span>
-                  <strong>No Method draft exists yet.</strong>
-                </div>
-              )}
-              <span>{draft ? `${derivedDraftReadiness(draft).blockers.length} blockers` : `${methods.length} saved`}</span>
+        <PanelResizeHandle
+          id="agent-graph-resize-handle"
+          className="agent-pane-resizer"
+          aria-label="Resize Method graph panel"
+        />
+
+        <Panel
+          id="agent-graph-panel"
+          order={2}
+          defaultSize={38}
+          minSize={18}
+          className="agent-visual-panel agent-graph-sidebar"
+        >
+          <section className="method-execution-panel" aria-label="Method execution">
+            <div className="method-execution-controls">
+              <select
+                value={selectedMethodId}
+                onChange={(event) => setSelectedMethodId(event.target.value)}
+                disabled={methods.length === 0 || isExecutingMethod}
+                aria-label="Saved Method"
+              >
+                {methods.length === 0 ? (
+                  <option value="">No saved Methods</option>
+                ) : (
+                  methods.map((method) => (
+                    <option key={method.id} value={method.id}>
+                      {method.title}
+                    </option>
+                  ))
+                )}
+              </select>
+              <button
+                type="button"
+                onClick={() => void loadMethods()}
+                disabled={isExecutingMethod || isSavingMethod}
+              >
+                Refresh
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveCurrentDraftAsMethod()}
+                disabled={!draft || derivedDraftReadiness(draft).blockers.length > 0 || isSavingMethod || isExecutingMethod}
+              >
+                {isSavingMethod ? "Saving" : "Save Method"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void executeSelectedMethod()}
+                disabled={!selectedMethodId || isExecutingMethod || isSavingMethod}
+              >
+                {isExecutingMethod ? "Starting" : "Execute"}
+              </button>
             </div>
-
-            <section className="method-execution-panel" aria-label="Method execution">
-              <div className="method-execution-controls">
-                <select
-                  value={selectedMethodId}
-                  onChange={(event) => setSelectedMethodId(event.target.value)}
-                  disabled={methods.length === 0 || isExecutingMethod}
-                  aria-label="Saved Method"
-                >
-                  {methods.length === 0 ? (
-                    <option value="">No saved Methods</option>
-                  ) : (
-                    methods.map((method) => (
-                      <option key={method.id} value={method.id}>
-                        {method.title}
-                      </option>
-                    ))
-                  )}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => void loadMethods()}
-                  disabled={isExecutingMethod || isSavingMethod}
-                >
-                  Refresh
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void saveCurrentDraftAsMethod()}
-                  disabled={!draft || derivedDraftReadiness(draft).blockers.length > 0 || isSavingMethod || isExecutingMethod}
-                >
-                  {isSavingMethod ? "Saving" : "Save Method"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void executeSelectedMethod()}
-                  disabled={!selectedMethodId || isExecutingMethod || isSavingMethod}
-                >
-                  {isExecutingMethod ? "Starting" : "Execute"}
-                </button>
+            {methodActionFeedback && (
+              <div className={`method-action-feedback ${methodActionFeedback.tone}`} role="status">
+                {methodActionFeedback.text}
               </div>
-              {methodActionFeedback && (
-                <div className={`method-action-feedback ${methodActionFeedback.tone}`} role="status">
-                  {methodActionFeedback.text}
-                </div>
-              )}
-              <div className="method-execution-summary">
-                <span>{activeExecutionId ? `Execution ${activeExecutionId}` : "No execution yet"}</span>
-                <strong>{executionStatus}</strong>
-              </div>
-              {executionNodes.length > 0 && (
-                <div className="method-execution-node-list" aria-label="Execution node status">
-                  {executionNodes.map((node) => (
-                    <div key={node.id}>
-                      <span>
-                        {node.nodeId}
-                        {node.errorMessage && <em>{node.errorMessage}</em>}
-                      </span>
-                      <strong className={`status-${node.status}`}>{node.status}</strong>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {executionEvents.length > 0 && (
-                <div className="method-execution-events" aria-label="Execution events">
-                  {executionEvents.slice(-4).map((event) => (
-                    <div key={event.id}>
-                      <span>
-                        {event.nodeId ?? "execution"}
-                        {eventDetail(event) && <em>{eventDetail(event)}</em>}
-                      </span>
-                      <code>{event.eventType}</code>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </section>
-
-            {draft ? (
-              <MethodGraph draft={draft} executionNodes={executionNodes} />
-            ) : (
-              <div className="agent-empty-visual">Saved Methods can be executed from the controls above.</div>
             )}
-          </div>
-        </aside>
-      </main>
+          </section>
+
+          {draft ? (
+            <MethodGraph draft={draft} executionNodes={executionNodes} />
+          ) : (
+            <div className="agent-empty-visual">Saved Methods can be executed from the controls above.</div>
+          )}
+        </Panel>
+      </PanelGroup>
     </div>
   );
 }
