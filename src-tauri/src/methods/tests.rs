@@ -24,7 +24,7 @@ use super::model::*;
 use super::preflight::preflight_method_for_root;
 use super::storage::{
     freeze_files, read_manifest, read_method_document, save_method_to_project,
-    write_method_document,
+    save_method_to_project_content_addressed, write_method_document,
 };
 use super::validation::validate_method;
 
@@ -282,10 +282,12 @@ fn named_file_resource_with_path_is_not_reported_missing() {
         metadata: serde_json::json!({}),
     };
 
-    assert!(!super::draft::derive_readiness(&draft)
-        .blockers
-        .iter()
-        .any(|blocker| blocker.code == "missing_resource"));
+    assert!(
+        !super::draft::derive_readiness(&draft)
+            .blockers
+            .iter()
+            .any(|blocker| blocker.code == "missing_resource")
+    );
 }
 
 #[test]
@@ -497,7 +499,7 @@ fn api_key_resource_uses_reference_without_persisting_value() {
     fs::create_dir_all(temp.join(".nightshift")).unwrap();
     fs::write(
         temp.join(".nightshift/config.json"),
-        r#"{ "apiKeys": { "openai.primary": "sk-test" } }"#,
+        r#"{ "apiKeys": { "openai.primary": "OPENAI_API_KEY" } }"#,
     )
     .unwrap();
     create_draft_for_root(
@@ -548,7 +550,7 @@ fn api_key_resource_uses_reference_without_persisting_value() {
 }
 
 #[test]
-fn nightshift_config_loads_provider_profiles_with_api_keys() {
+fn nightshift_config_loads_provider_profiles_with_api_key_env_vars() {
     let temp =
         std::env::temp_dir().join(format!("nightshift-method-config-test-{}", Uuid::new_v4()));
     fs::create_dir_all(temp.join(".nightshift")).unwrap();
@@ -560,10 +562,10 @@ fn nightshift_config_loads_provider_profiles_with_api_keys() {
               "provider": "OpenAI",
               "baseUrl": "https://api.openai.com/v1",
               "model": "gpt-test",
-              "apiKey": "sk-test"
+              "apiKey": "OPENAI_API_KEY"
             }
           },
-          "apiKeys": { "openai.primary": "sk-test" },
+          "apiKeys": { "openai.primary": "OPENAI_API_KEY" },
           "modelDefaults": { "providerProfile": "openai", "model": "gpt-test" }
         }"#,
     )
@@ -574,9 +576,26 @@ fn nightshift_config_loads_provider_profiles_with_api_keys() {
     let default_profile = resolve_default_provider_profile(&config).unwrap().unwrap();
 
     assert_eq!(config.model_defaults.provider_profile.as_deref(), Some("openai"));
-    assert_eq!(profile.api_key.as_deref(), Some("sk-test"));
+    assert_eq!(profile.api_key.as_deref(), Some("OPENAI_API_KEY"));
     assert!(resolve_api_key_id(&config, "openai.primary").is_ok());
     assert_eq!(default_profile.model.as_deref(), Some("gpt-test"));
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn nightshift_config_rejects_file_stored_api_key_values() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-config-secret-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".nightshift")).unwrap();
+    fs::write(
+        temp.join(".nightshift/config.json"),
+        r#"{ "apiKeys": { "openai.primary": "sk-test" } }"#,
+    )
+    .unwrap();
+
+    let err = load_nightshift_config(&temp).unwrap_err();
+
+    assert!(err.contains("secret-like"), "got: {err}");
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -659,9 +678,46 @@ async fn save_method_persists_metadata_and_frozen_manifest() {
     assert_eq!(listed[0].id, "edge-method");
     assert_eq!(listed[0].content_hash, summary.content_hash);
     assert!(manifest.workflow.nodes[0].path.as_deref().unwrap().starts_with("files/"));
-    assert!(PathBuf::from(&summary.folder_path)
-        .join(manifest.workflow.nodes[0].path.as_deref().unwrap())
-        .is_file());
+    assert!(
+        PathBuf::from(&summary.folder_path)
+            .join(manifest.workflow.nodes[0].path.as_deref().unwrap())
+            .is_file()
+    );
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn content_addressed_method_save_uses_hash_identity_and_reuses_identical_content() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-method-content-id-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("prompts")).unwrap();
+    fs::create_dir_all(temp.join("data")).unwrap();
+    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
+    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let mut method = sample_method();
+    add_resource_dependency(
+        &mut method,
+        method_resource("data", "data", "data/examples.jsonl"),
+        "generate",
+    );
+    method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
+
+    let first = save_method_to_project_content_addressed(&db, &temp, method.clone()).await.unwrap();
+    method.id = "different-draft-id".into();
+    let second = save_method_to_project_content_addressed(&db, &temp, method).await.unwrap();
+    let manifest = read_manifest(&PathBuf::from(&first.folder_path)).unwrap();
+    let listed = sqlx::query_as::<_, MethodSummary>(
+        "SELECT id, title, content_hash, folder_path, created_at FROM methods",
+    )
+    .fetch_all(&db.pool())
+    .await
+    .unwrap();
+
+    assert_eq!(first.id, second.id);
+    assert_eq!(first.id, format!("method-{}", first.content_hash));
+    assert_eq!(manifest.id, first.id);
+    assert_eq!(listed.len(), 1);
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -784,16 +840,14 @@ fn preflight_reports_missing_required_files() {
     let result = preflight_method_for_root(&method, &temp);
 
     assert_eq!(result.status, "drafting");
-    assert!(result
-        .blockers
-        .iter()
-        .any(|blocker| blocker.code == "missing_file"
-            && blocker.file_kind.as_deref() == Some("prompt")));
-    assert!(result
-        .blockers
-        .iter()
-        .any(|blocker| blocker.code == "missing_file"
-            && blocker.file_kind.as_deref() == Some("data")));
+    assert!(
+        result.blockers.iter().any(|blocker| blocker.code == "missing_file"
+            && blocker.file_kind.as_deref() == Some("prompt"))
+    );
+    assert!(
+        result.blockers.iter().any(|blocker| blocker.code == "missing_file"
+            && blocker.file_kind.as_deref() == Some("data"))
+    );
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -1328,15 +1382,18 @@ Conclusion.
     let bad_report = report.replace("## Caveats", "## Limitations");
 
     assert!(output_ref.starts_with("method_execution_file:"));
-    assert!(temp
-        .join(".nightshift/executions")
-        .join(execution_id.to_string())
-        .join("report-method")
-        .join("analysis.md")
-        .is_file());
-    assert!(insert_analysis_report_artifact(&db, &method, execution_id, &node, &bad_report)
-        .await
-        .is_err());
+    assert!(
+        temp.join(".nightshift/executions")
+            .join(execution_id.to_string())
+            .join("report-method")
+            .join("analysis.md")
+            .is_file()
+    );
+    assert!(
+        insert_analysis_report_artifact(&db, &method, execution_id, &node, &bad_report)
+            .await
+            .is_err()
+    );
     fs::remove_dir_all(temp).unwrap();
 }
 

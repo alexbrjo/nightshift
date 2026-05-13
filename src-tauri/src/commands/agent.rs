@@ -1,6 +1,7 @@
 use crate::codex_app_server::{CodexAppServerEvent, CodexAppServerSession, CodexTurnSummary};
 use crate::database::DatabaseState;
 use crate::methods::{dispatch_method_tool, get_current_draft_for_root, method_function_tools};
+use crate::utils::secrets::{is_sensitive_key, looks_like_secret_value};
 use reqwest::Client;
 use serde_json::{json, Value};
 use std::time::Instant;
@@ -455,49 +456,12 @@ fn sanitize_tool_value_at_depth(value: &Value, depth: usize) -> Value {
     }
 }
 
-fn is_sensitive_key(key: &str) -> bool {
-    matches!(
-        key.to_ascii_lowercase().as_str(),
-        "api_key"
-            | "apikey"
-            | "api-key"
-            | "secret"
-            | "password"
-            | "passwd"
-            | "pwd"
-            | "token"
-            | "access_token"
-            | "refresh_token"
-            | "bearer_token"
-            | "authorization"
-    )
-}
-
 fn redact_secret_like_string(text: &str) -> String {
     if looks_like_secret_value(text) {
         "[redacted]".into()
     } else {
         truncate_text(text, MAX_TOOL_TRACE_STRING_CHARS)
     }
-}
-
-fn looks_like_secret_value(text: &str) -> bool {
-    let trimmed = text.trim();
-    let lower = trimmed.to_ascii_lowercase();
-    if lower.starts_with("bearer ") || lower.starts_with("basic ") {
-        return true;
-    }
-    if trimmed.starts_with("sk-") || trimmed.starts_with("sk_") || trimmed.starts_with("nskey-") {
-        return true;
-    }
-    if trimmed.len() >= 32
-        && trimmed.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
-    {
-        let has_alpha = trimmed.chars().any(|ch| ch.is_ascii_alphabetic());
-        let has_digit = trimmed.chars().any(|ch| ch.is_ascii_digit());
-        return has_alpha && has_digit;
-    }
-    false
 }
 
 fn truncate_text(text: &str, max_chars: usize) -> String {
@@ -723,6 +687,8 @@ mod tests {
             "api_key": "secret-value",
             "max_tokens": 2000,
             "reference": "sk-example1234567890example1234567890",
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "oauth": "ya29.a0AfH6SMB1234567890abcdef/abcdefghi=",
             "path": "flash_cards/conjugations_prompt.jinja2",
             "long": "x".repeat(900)
         });
@@ -735,6 +701,8 @@ mod tests {
         assert_eq!(sanitized["api_key"], "[redacted]");
         assert_eq!(sanitized["max_tokens"], 2000);
         assert_eq!(sanitized["reference"], "[redacted]");
+        assert_eq!(sanitized["commit"], "0123456789abcdef0123456789abcdef01234567");
+        assert_eq!(sanitized["oauth"], "[redacted]");
         assert_eq!(sanitized["path"], "flash_cards/conjugations_prompt.jinja2");
         assert!(sanitized["long"].as_str().unwrap().ends_with("..."));
     }

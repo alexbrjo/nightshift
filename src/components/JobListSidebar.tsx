@@ -75,18 +75,19 @@ export default function JobListSidebar({
     <aside className="job-list-sidebar">
       <header className="job-list-header">
         <h2>Jobs</h2>
-        <button className="btn-primary btn-small" onClick={onNewJob}>
-          + New
-        </button>
+        {jobs.length > 0 && (
+          <button className="btn-primary btn-small" onClick={onNewJob}>
+            + New
+          </button>
+        )}
       </header>
 
       {isLoading ? (
         <div className="loading-indicator">Loading…</div>
       ) : jobs.length === 0 ? (
         <div className="job-list-empty">
-          <p>No jobs yet.</p>
-          <button className="btn-secondary btn-small" onClick={onNewJob}>
-            Create your first job
+          <button className="resource-create-button" onClick={onNewJob}>
+            Create a new job
           </button>
         </div>
       ) : (

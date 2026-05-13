@@ -1,7 +1,12 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../setupTests";
-import AgentWorkspace from "./AgentWorkspace";
+import AgentWorkspace, {
+  ChatPanel,
+  MethodExecutionGraphPanel,
+  MethodWorkspaceProvider,
+  shouldPersistProjectConversations,
+} from "./AgentWorkspace";
 
 const eventBus = vi.hoisted(() => ({
   handlers: new Map<string, Array<(event: { payload: Record<string, unknown> | null }) => void>>(),
@@ -16,12 +21,24 @@ vi.mock("@tauri-apps/api/event", () => ({
   }),
 }));
 
+async function emitCodexEvent(payload: Record<string, unknown>) {
+  await waitFor(() => {
+    expect(eventBus.handlers.get("codex-app-server-event")?.length ?? 0).toBeGreaterThan(0);
+  });
+  await act(async () => {
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) => handler({ payload }));
+  });
+}
+
 describe("AgentWorkspace", () => {
+  let projectConversations: unknown | null;
+
   beforeEach(() => {
     eventBus.handlers = new Map();
+    projectConversations = null;
     localStorage.clear();
     mockInvoke.mockReset();
-    mockInvoke.mockImplementation((command: string) => {
+    mockInvoke.mockImplementation((command: string, payload?: { conversations?: unknown }) => {
       switch (command) {
         case "get_root_path":
           return Promise.resolve("/tmp/project");
@@ -31,6 +48,11 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ threadId: "thr_123", turnId: "turn_456" });
         case "get_design_agent_config":
           return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_conversations":
+          return Promise.resolve(projectConversations);
+        case "save_project_conversations":
+          projectConversations = payload?.conversations ?? null;
+          return Promise.resolve(null);
         case "get_current_method_draft":
           return Promise.resolve(null);
         case "list_methods":
@@ -58,6 +80,23 @@ describe("AgentWorkspace", () => {
     });
   });
 
+  it("renders welcome guidance without storing it as a chat", async () => {
+    render(<AgentWorkspace />);
+
+    expect(await screen.findByText(/Describe the Method you want to design/)).toBeInTheDocument();
+    expect(screen.queryByText("New planning chat")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("load_project_conversations");
+    });
+    expect(mockInvoke).not.toHaveBeenCalledWith("save_project_conversations", expect.anything());
+  });
+
+  it("persists an empty conversation list after saved chats are removed", () => {
+    expect(shouldPersistProjectConversations(true, 0, 1)).toBe(true);
+    expect(shouldPersistProjectConversations(true, 0, 0)).toBe(false);
+    expect(shouldPersistProjectConversations(false, 1, 1)).toBe(false);
+  });
+
   it("uses an accessible resizable panel group for the Method graph", async () => {
     render(<AgentWorkspace />);
 
@@ -66,7 +105,70 @@ describe("AgentWorkspace", () => {
 
     expect(main).toBeInTheDocument();
     expect(main.style.getPropertyValue("--agent-graph-width")).toBe("");
-    expect(screen.getByRole("combobox", { name: "Saved Method" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Execute Draft" })).toBeInTheDocument();
+  });
+
+  it("refreshes execution graph panels from execution events without polling", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    let executionStatus = "running";
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_conversations":
+          return Promise.resolve(null);
+        case "save_project_conversations":
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "list_method_executions":
+          return Promise.resolve([{ id: 42, methodId: "method-hash", status: executionStatus, createdAt: "2026-05-13T00:00:00Z" }]);
+        case "get_method":
+          return Promise.resolve({
+            schema_version: 2,
+            id: "method-hash",
+            title: "Evented Method",
+            objective: "Verify execution refresh",
+            workflow: { nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }] },
+            parameters: {},
+            provider: {},
+            outputs: [],
+            metadata: {},
+          });
+        case "get_method_execution_nodes":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(
+      <MethodWorkspaceProvider>
+        <MethodExecutionGraphPanel executionId={42} />
+      </MethodWorkspaceProvider>,
+    );
+
+    expect(await screen.findByText("running")).toBeInTheDocument();
+    expect(setIntervalSpy.mock.calls.some(([, delay]) => delay === 5000)).toBe(false);
+    const initialLoads = mockInvoke.mock.calls.filter(([command]) => command === "list_method_executions").length;
+
+    executionStatus = "completed";
+    await waitFor(() => {
+      expect(eventBus.handlers.get("method-execution-event")?.length ?? 0).toBeGreaterThan(0);
+    });
+    await act(async () => {
+      eventBus.handlers.get("method-execution-event")?.forEach((handler) =>
+        handler({ payload: { executionId: 42 } }),
+      );
+    });
+
+    expect(await screen.findByText("completed")).toBeInTheDocument();
+    expect(mockInvoke.mock.calls.filter(([command]) => command === "list_method_executions").length)
+      .toBeGreaterThan(initialLoads);
+    setIntervalSpy.mockRestore();
   });
 
   it("sends chat through the design bridge", async () => {
@@ -83,6 +185,31 @@ describe("AgentWorkspace", () => {
       expect(screen.getAllByText("Help me design a benchmark Method").length).toBeGreaterThan(0);
       expect(screen.queryByText(/Turn turn_456/i)).not.toBeInTheDocument();
     });
+  });
+
+  it("keeps separate mounted ChatPanel instances independent before they become saved chats", async () => {
+    render(
+      <MethodWorkspaceProvider>
+        <ChatPanel />
+        <ChatPanel />
+      </MethodWorkspaceProvider>,
+    );
+
+    const inputs = await screen.findAllByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(inputs[0], { target: { value: "Independent first draft" } });
+    fireEvent.change(inputs[1], { target: { value: "Independent second draft" } });
+
+    expect(inputs[0]).toHaveValue("Independent first draft");
+    expect(inputs[1]).toHaveValue("Independent second draft");
+
+    fireEvent.submit(inputs[0].closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("send_design_chat_message", {
+        input: { message: "Independent first draft" },
+      });
+    });
+    expect(inputs[1]).toHaveValue("Independent second draft");
   });
 
   it("renders user messages and thinking state as passive chat history", async () => {
@@ -253,18 +380,14 @@ describe("AgentWorkspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "+ New" }));
     expect(document.querySelector(".agent-chat-scroll")).not.toHaveTextContent("First active plan");
 
-    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          eventType: "item/completed",
-          threadId: "thr_123",
-          turnId: "turn_456",
-          itemId: "assistant_1",
-          messageText: "Original chat response",
-          raw: {},
-        },
-      }),
-    );
+    await emitCodexEvent({
+      eventType: "item/completed",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "assistant_1",
+      messageText: "Original chat response",
+      raw: {},
+    });
 
     await waitFor(() => {
       expect(document.querySelector(".agent-chat-scroll")).not.toHaveTextContent("Original chat response");
@@ -277,18 +400,14 @@ describe("AgentWorkspace", () => {
   it("renders streamed assistant deltas without event names", async () => {
     render(<AgentWorkspace />);
 
-    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          eventType: "item/agentMessage/delta",
-          threadId: "thr_123",
-          turnId: "turn_456",
-          itemId: "item_1",
-          textDelta: "Draft the Method",
-          raw: {},
-        },
-      }),
-    );
+    await emitCodexEvent({
+      eventType: "item/agentMessage/delta",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "item_1",
+      textDelta: "Draft the Method",
+      raw: {},
+    });
 
     await waitFor(() => {
       expect(screen.getByText("Draft the Method")).toBeInTheDocument();
@@ -299,18 +418,14 @@ describe("AgentWorkspace", () => {
   it("renders assistant Markdown for readable chat output", async () => {
     render(<AgentWorkspace />);
 
-    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          eventType: "item/completed",
-          threadId: "thr_123",
-          turnId: "turn_456",
-          itemId: "item_1",
-          messageText: "Updated the draft:\n\n- Added `prompt.jinja2`\n- Set **model** options",
-          raw: {},
-        },
-      }),
-    );
+    await emitCodexEvent({
+      eventType: "item/completed",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "item_1",
+      messageText: "Updated the draft:\n\n- Added `prompt.jinja2`\n- Set **model** options",
+      raw: {},
+    });
 
     await waitFor(() => {
       expect(screen.getAllByRole("list").length).toBeGreaterThan(0);
@@ -323,18 +438,14 @@ describe("AgentWorkspace", () => {
   it("ignores unsafe HTML in assistant Markdown", async () => {
     render(<AgentWorkspace />);
 
-    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          eventType: "item/completed",
-          threadId: "thr_123",
-          turnId: "turn_456",
-          itemId: "item_1",
-          messageText: "Safe summary.<script>alert('bad')</script><img src=x onerror=alert(1)> [bad](javascript:alert(1))",
-          raw: {},
-        },
-      }),
-    );
+    await emitCodexEvent({
+      eventType: "item/completed",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "item_1",
+      messageText: "Safe summary.<script>alert('bad')</script><img src=x onerror=alert(1)> [bad](javascript:alert(1))",
+      raw: {},
+    });
 
     await waitFor(() => {
       expect(screen.getByText("Safe summary.")).toBeInTheDocument();
@@ -348,73 +459,57 @@ describe("AgentWorkspace", () => {
   it("renders planning trace summaries and tool call status", async () => {
     render(<AgentWorkspace />);
 
-    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          eventType: "item/reasoningSummary/completed",
-          threadId: "thr_123",
-          turnId: "turn_456",
-          itemId: "reasoning_1",
-          messageText: "Checked the draft graph and missing resources.",
-          traceKind: "reasoning",
-          status: "completed",
-          raw: {},
-        },
-      }),
-    );
-    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          eventType: "item/toolCall/started",
-          threadId: "thr_123",
-          turnId: "turn_456",
-          itemId: "tool_1",
-          toolName: "replace_method_draft_graph",
-          traceKind: "tool",
-          status: "started",
-          raw: {},
-        },
-      }),
-    );
-    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          eventType: "item/toolCall/completed",
-          threadId: "thr_123",
-          turnId: "turn_456",
-          itemId: "tool_1",
-          toolName: "replace_method_draft_graph",
-          traceKind: "tool",
-          status: "completed",
-          durationMs: 42,
-          outputSummary: "Draft 'Edge method' - 2 nodes - 1 resource",
-          toolArguments: {
-            workflow: { nodes: [{ id: "generate" }] },
-          },
-          toolOutput: {
-            ok: true,
-            result: { draft: { title: "Edge method" } },
-          },
-          raw: {},
-        },
-      }),
-    );
-    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          eventType: "item/toolCall/completed",
-          threadId: "thr_123",
-          turnId: "turn_456",
-          itemId: "tool_2",
-          toolName: "replace_method_draft_graph",
-          traceKind: "tool",
-          status: "completed",
-          durationMs: 7,
-          outputSummary: "Draft 'Edge method' - 2 nodes - 2 resources",
-          raw: {},
-        },
-      }),
-    );
+    await emitCodexEvent({
+      eventType: "item/reasoningSummary/completed",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "reasoning_1",
+      messageText: "Checked the draft graph and missing resources.",
+      traceKind: "reasoning",
+      status: "completed",
+      raw: {},
+    });
+    await emitCodexEvent({
+      eventType: "item/toolCall/started",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "tool_1",
+      toolName: "replace_method_draft_graph",
+      traceKind: "tool",
+      status: "started",
+      raw: {},
+    });
+    await emitCodexEvent({
+      eventType: "item/toolCall/completed",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "tool_1",
+      toolName: "replace_method_draft_graph",
+      traceKind: "tool",
+      status: "completed",
+      durationMs: 42,
+      outputSummary: "Draft 'Edge method' - 2 nodes - 1 resource",
+      toolArguments: {
+        workflow: { nodes: [{ id: "generate" }] },
+      },
+      toolOutput: {
+        ok: true,
+        result: { draft: { title: "Edge method" } },
+      },
+      raw: {},
+    });
+    await emitCodexEvent({
+      eventType: "item/toolCall/completed",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "tool_2",
+      toolName: "replace_method_draft_graph",
+      traceKind: "tool",
+      status: "completed",
+      durationMs: 7,
+      outputSummary: "Draft 'Edge method' - 2 nodes - 2 resources",
+      raw: {},
+    });
 
     await waitFor(() => {
       expect(screen.getByText("Checked the draft graph and missing resources.")).toBeInTheDocument();
@@ -431,27 +526,86 @@ describe("AgentWorkspace", () => {
     fireEvent.click(screen.getByText("2 tool calls"));
     expect(toolGroup.open).toBe(true);
 
-    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          eventType: "item/toolCall/completed",
-          threadId: "thr_123",
-          turnId: "turn_456",
-          itemId: "tool_3",
-          toolName: "explain_current_method_draft",
-          traceKind: "tool",
-          status: "completed",
-          durationMs: 3,
-          outputSummary: "Ready with no blockers",
-          raw: {},
-        },
-      }),
-    );
+    await emitCodexEvent({
+      eventType: "item/toolCall/completed",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "tool_3",
+      toolName: "explain_current_method_draft",
+      traceKind: "tool",
+      status: "completed",
+      durationMs: 3,
+      outputSummary: "Ready with no blockers",
+      raw: {},
+    });
 
     await waitFor(() => {
       expect(screen.getByText("3 tool calls")).toBeInTheDocument();
       expect(toolGroup.open).toBe(true);
     });
+  });
+
+  it("only colors the failed tool status inside a mixed tool trace group", async () => {
+    render(<AgentWorkspace />);
+
+    for (const payload of [
+      {
+        eventType: "item/toolCall/completed",
+        threadId: "thr_123",
+        turnId: "turn_456",
+        itemId: "tool_ok",
+        toolName: "create_method_draft",
+        traceKind: "tool",
+        status: "completed",
+        durationMs: 2,
+        raw: {},
+      },
+      {
+        eventType: "item/toolCall/completed",
+        threadId: "thr_123",
+        turnId: "turn_456",
+        itemId: "tool_failed",
+        toolName: "replace_method_draft_graph",
+        traceKind: "tool",
+        status: "failed",
+        durationMs: 0,
+        raw: {},
+      },
+    ]) {
+      await emitCodexEvent(payload);
+    }
+
+    const groupLabel = await screen.findByText("2 tool calls");
+    fireEvent.click(groupLabel);
+
+    expect(groupLabel.closest("summary")).not.toHaveClass("failed");
+    expect(screen.getByText("completed")).not.toHaveClass("failed");
+    expect(screen.getByText("failed")).toHaveClass("agent-tool-trace-status", "failed");
+  });
+
+  it("announces project file and Method draft changes from completed Method tools", async () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    render(<AgentWorkspace />);
+
+    await emitCodexEvent({
+      eventType: "item/toolCall/completed",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "tool_create",
+      toolName: "create_method_draft",
+      traceKind: "tool",
+      status: "completed",
+      raw: {},
+    });
+
+    await waitFor(() => {
+      const eventTypes = dispatchSpy.mock.calls.map(([event]) => event.type);
+      expect(eventTypes).toContain("nightshift-project-files-changed");
+      expect(eventTypes).toContain("nightshift-method-draft-mutated");
+      expect(mockInvoke).toHaveBeenCalledWith("get_current_method_draft");
+    });
+
+    dispatchSpy.mockRestore();
   });
 
   it("shows a draft panel after chat creates Method state", async () => {
@@ -525,13 +679,22 @@ describe("AgentWorkspace", () => {
               createdAt: "2026-05-08T12:00:00Z",
             },
           ]);
-        case "execute_method":
-          return Promise.resolve(42);
+        case "execute_current_method_draft":
+          return Promise.resolve({
+            method: {
+              id: "method-hash",
+              title: "Edge method",
+              contentHash: "hash",
+              folderPath: "/tmp/methods/method-hash",
+              createdAt: "2026-05-08T12:00:00Z",
+            },
+            executionId: 42,
+          });
         case "list_method_executions":
           return Promise.resolve([
             {
               id: 42,
-              methodId: "edge-method",
+              methodId: "method-hash",
               methodContentHash: "hash",
               status: "running",
               createdAt: "2026-05-08T12:00:00Z",
@@ -565,11 +728,11 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findAllByText("Edge method");
-    fireEvent.click(screen.getByRole("button", { name: "Execute" }));
+    await screen.findByText("Generate");
+    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
 
     await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("execute_method", { id: "edge-method" });
+      expect(mockInvoke).toHaveBeenCalledWith("execute_current_method_draft");
       expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
       expect(screen.queryByText("Execution 42")).not.toBeInTheDocument();
       expect(screen.queryByText("Started Method execution 42.")).not.toBeInTheDocument();
@@ -578,7 +741,7 @@ describe("AgentWorkspace", () => {
     expect(mockInvoke).not.toHaveBeenCalledWith("get_method_execution_events", { executionId: 42 });
   });
 
-  it("blocks execution when the visible draft differs from the selected saved Method", async () => {
+  it("blocks execution when the current draft is not ready", async () => {
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
         case "start_design_session":
@@ -588,7 +751,7 @@ describe("AgentWorkspace", () => {
             schema_version: 1,
             id: "draft-1",
             title: "Edge Model 50% Flash-Card Accuracy Benchmark",
-            objective: "Measure accuracy",
+            objective: "",
             workflow: {
               nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
             },
@@ -618,16 +781,13 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findByRole("option", { name: "Edge Model 98% Flash-Card Accuracy Benchmark" });
-    fireEvent.click(screen.getByRole("button", { name: "Execute" }));
-
     await waitFor(() => {
-      expect(screen.getByRole("status")).toHaveTextContent(/visible draft is 'Edge Model 50%/);
-      expect(mockInvoke).not.toHaveBeenCalledWith("execute_method", expect.anything());
+      expect(screen.getByRole("button", { name: "Execute Draft" })).toBeDisabled();
+      expect(mockInvoke).not.toHaveBeenCalledWith("execute_current_method_draft");
     });
   });
 
-  it("saves a ready draft as a Method and selects it for execution", async () => {
+  it("executes a ready draft through the combined save-and-execute command", async () => {
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
         case "start_design_session":
@@ -648,13 +808,16 @@ describe("AgentWorkspace", () => {
           });
         case "list_methods":
           return Promise.resolve([]);
-        case "save_current_method_draft":
+        case "execute_current_method_draft":
           return Promise.resolve({
-            id: "edge-method",
-            title: "Edge method",
-            contentHash: "hash",
-            folderPath: "/tmp/methods/edge-method",
-            createdAt: "2026-05-08T12:00:00Z",
+            method: {
+              id: "method-hash",
+              title: "Edge method",
+              contentHash: "hash",
+              folderPath: "/tmp/methods/method-hash",
+              createdAt: "2026-05-08T12:00:00Z",
+            },
+            executionId: 77,
           });
         default:
           return Promise.resolve(null);
@@ -664,19 +827,17 @@ describe("AgentWorkspace", () => {
     render(<AgentWorkspace />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Save Method" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Execute Draft" })).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save Method" }));
+    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
 
     await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("save_current_method_draft");
-      expect(screen.getByRole("combobox", { name: "Saved Method" })).toHaveValue("edge-method");
-      expect(screen.queryByText("Saved Method 'Edge method'.")).not.toBeInTheDocument();
+      expect(mockInvoke).toHaveBeenCalledWith("execute_current_method_draft");
       expect(screen.queryByRole("status")).not.toBeInTheDocument();
     });
   });
 
-  it("shows inline feedback when saving a ready draft fails", async () => {
+  it("shows inline feedback when executing a ready draft fails", async () => {
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
         case "start_design_session":
@@ -697,7 +858,7 @@ describe("AgentWorkspace", () => {
           });
         case "list_methods":
           return Promise.resolve([]);
-        case "save_current_method_draft":
+        case "execute_current_method_draft":
           return Promise.reject("Inference needs a model name.");
         default:
           return Promise.resolve(null);
@@ -707,12 +868,12 @@ describe("AgentWorkspace", () => {
     render(<AgentWorkspace />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Save Method" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "Execute Draft" })).toBeEnabled();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Save Method" }));
+    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
 
     await waitFor(() => {
-      expect(screen.getAllByText(/I could not save the current Method draft: Inference needs a model name\./)[0])
+      expect(screen.getAllByText(/I could not execute the current Method draft: Inference needs a model name\./)[0])
         .toBeInTheDocument();
     });
     expect(screen.getByRole("status")).toHaveTextContent(/Inference needs a model name/);
@@ -748,13 +909,22 @@ describe("AgentWorkspace", () => {
               createdAt: "2026-05-08T12:00:00Z",
             },
           ]);
-        case "execute_method":
-          return Promise.resolve(42);
+        case "execute_current_method_draft":
+          return Promise.resolve({
+            method: {
+              id: "method-hash",
+              title: "Edge method",
+              contentHash: "hash",
+              folderPath: "/tmp/methods/method-hash",
+              createdAt: "2026-05-08T12:00:00Z",
+            },
+            executionId: 42,
+          });
         case "list_method_executions":
           return Promise.resolve([
             {
               id: 42,
-              methodId: "edge-method",
+              methodId: "method-hash",
               methodContentHash: "hash",
               status: nodeStatus,
               createdAt: "2026-05-08T12:00:00Z",
@@ -788,8 +958,8 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findAllByText("Edge method");
-    fireEvent.click(screen.getByRole("button", { name: "Execute" }));
+    await screen.findByText("Generate");
+    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
 
     await waitFor(() => {
       expect(screen.getAllByText("Queued").length).toBeGreaterThan(0);
@@ -842,13 +1012,22 @@ describe("AgentWorkspace", () => {
               createdAt: "2026-05-08T12:00:00Z",
             },
           ]);
-        case "execute_method":
-          return Promise.resolve(42);
+        case "execute_current_method_draft":
+          return Promise.resolve({
+            method: {
+              id: "method-hash",
+              title: "Edge method",
+              contentHash: "hash",
+              folderPath: "/tmp/methods/method-hash",
+              createdAt: "2026-05-08T12:00:00Z",
+            },
+            executionId: 42,
+          });
         case "list_method_executions":
           return Promise.resolve([
             {
               id: 42,
-              methodId: "edge-method",
+              methodId: "method-hash",
               methodContentHash: "hash",
               status: "failed",
               errorMessage: "Inference job failed",
@@ -884,8 +1063,8 @@ describe("AgentWorkspace", () => {
 
     render(<AgentWorkspace />);
 
-    await screen.findAllByText("Edge method");
-    fireEvent.click(screen.getByRole("button", { name: "Execute" }));
+    await screen.findByText("Generate");
+    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
 
     await waitFor(() => {
       expect(screen.getAllByText("Failed").length).toBeGreaterThan(0);
@@ -909,7 +1088,9 @@ describe("AgentWorkspace", () => {
 
     await waitFor(() => {
       expect(screen.getAllByText("hello").length).toBeGreaterThan(0);
-      expect(screen.getByText(/I could not reach the design agent/i)).toBeInTheDocument();
+      const errorMessage = screen.getByText(/I could not reach the design agent/i);
+      expect(errorMessage).toBeInTheDocument();
+      expect(errorMessage.closest(".agent-message.system")).toHaveClass("failed");
       expect(screen.queryByText("Failed")).not.toBeInTheDocument();
     });
   });

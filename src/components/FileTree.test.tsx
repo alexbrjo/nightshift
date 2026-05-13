@@ -30,7 +30,7 @@ describe("FileTree", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText(folderData.name)).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
   };
 
@@ -54,10 +54,24 @@ describe("FileTree", () => {
     });
   });
 
-  it("renders tree header with root name", async () => {
-    await setupWithFolder({ name: "my-project", children: [] });
+  it("reports the root name to the parent project component", async () => {
+    const onRootNameChange = vi.fn();
+    mockInvoke.mockResolvedValueOnce(null);
+    mockInvoke.mockResolvedValueOnce({ name: "my-project", children: [] });
+    mockInvoke.mockResolvedValueOnce(undefined);
+    mockInvoke.mockResolvedValueOnce([]);
 
-    expect(screen.getByText("my-project")).toBeDefined();
+    render(
+      <ToastProvider>
+        <FileTree {...defaultProps} onRootNameChange={onRootNameChange} />
+      </ToastProvider>
+    );
+    fireEvent.click(screen.getByText("Open Folder"));
+
+    await waitFor(() => {
+      expect(onRootNameChange).toHaveBeenCalledWith("my-project");
+    });
+    expect(screen.queryByText("my-project")).not.toBeInTheDocument();
   });
 
   it("renders file nodes correctly", async () => {
@@ -116,7 +130,7 @@ describe("FileTree", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(screen.getByText("file.txt")).toBeDefined();
     });
 
     fireEvent.click(screen.getByText("file.txt"));
@@ -150,7 +164,7 @@ describe("FileTree", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(screen.getByText("file.txt")).toBeDefined();
     });
 
     fireEvent.click(screen.getByText("file.txt"));
@@ -294,7 +308,7 @@ describe("FileTree", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(screen.getByText("file.txt")).toBeDefined();
     });
 
     fireEvent.contextMenu(screen.getByText("file.txt"));
@@ -333,7 +347,7 @@ describe("FileTree", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("last-project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
   });
 
@@ -371,7 +385,7 @@ describe("FileTree", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(screen.getByText("file.txt")).toBeDefined();
     });
 
     fireEvent.click(screen.getByText("file.txt"));
@@ -410,7 +424,7 @@ describe("FileTree", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(screen.getByText("src")).toBeDefined();
     });
 
     fireEvent.click(screen.getByText("src"));
@@ -445,7 +459,7 @@ describe("FileTree", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(screen.getByText("src")).toBeDefined();
     });
 
     fireEvent.click(screen.getByText("src"));
@@ -458,7 +472,7 @@ describe("FileTree", () => {
   it("handles empty folder", async () => {
     await setupWithFolder({ name: "empty-project", children: [] });
 
-    expect(screen.getByText("empty-project")).toBeDefined();
+    expect(document.querySelector(".tree-content")).toBeInTheDocument();
   });
 
   it("handles folder open cancellation", async () => {

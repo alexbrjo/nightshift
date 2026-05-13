@@ -171,7 +171,7 @@ describe("JobListSidebar", () => {
       />
     );
 
-    const newJobButton = screen.getByRole("button", { name: /\+ New/i });
+    const newJobButton = await screen.findByRole("button", { name: /\+ New/i });
     fireEvent.click(newJobButton);
 
     expect(mockOnNewJob).toHaveBeenCalledTimes(1);
@@ -187,8 +187,8 @@ describe("JobListSidebar", () => {
       />
     );
 
-    expect(await screen.findByText(/No jobs yet/i)).toBeInTheDocument();
-    expect(screen.getByText(/Create your first job/i)).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Create a new job" })).toBeInTheDocument();
+    expect(screen.queryByText(/No jobs yet/i)).not.toBeInTheDocument();
   });
 
   it("places status on the first line and job type/date on the second line", async () => {

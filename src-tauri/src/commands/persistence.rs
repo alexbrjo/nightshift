@@ -1,6 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, State};
+
+use crate::state::AppState;
+use crate::utils::secrets::{is_sensitive_key, looks_like_secret_value};
 
 /// Save the last opened folder path to app data directory
 #[tauri::command]
@@ -70,6 +73,92 @@ pub fn load_expanded_state(root_path: String) -> Result<Vec<String>, String> {
     Ok(paths)
 }
 
+fn current_nightshift_dir(state: &AppState) -> Result<PathBuf, String> {
+    let root = state.root_path.lock().unwrap();
+    let root = root.as_ref().ok_or("No folder opened".to_string())?;
+    Ok(root.join(".nightshift"))
+}
+
+fn load_project_json(
+    state: &AppState,
+    file_name: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    let path = current_nightshift_dir(state)?.join(file_name);
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read .nightshift/{}: {}", file_name, e))?;
+    serde_json::from_str(&content)
+        .map(Some)
+        .map_err(|e| format!("Failed to parse .nightshift/{}: {}", file_name, e))
+}
+
+fn save_project_json(
+    state: &AppState,
+    file_name: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let dir = current_nightshift_dir(state)?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create .nightshift dir: {}", e))?;
+    let path = dir.join(file_name);
+    let content = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("Failed to serialize .nightshift/{}: {}", file_name, e))?;
+    fs::write(&path, content.as_bytes())
+        .map_err(|e| format!("Failed to save .nightshift/{}: {}", file_name, e))
+}
+
+fn redact_project_json(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => serde_json::Value::Object(
+            map.into_iter()
+                .map(|(key, child)| {
+                    if is_sensitive_key(&key) {
+                        (key, serde_json::Value::String("[redacted]".into()))
+                    } else {
+                        (key, redact_project_json(child))
+                    }
+                })
+                .collect(),
+        ),
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(redact_project_json).collect())
+        }
+        serde_json::Value::String(text) if looks_like_secret_value(&text) => {
+            serde_json::Value::String("[redacted]".into())
+        }
+        other => other,
+    }
+}
+
+#[tauri::command]
+pub fn load_project_layout(state: State<AppState>) -> Result<Option<serde_json::Value>, String> {
+    load_project_json(&state, "layout.json")
+}
+
+#[tauri::command]
+pub fn save_project_layout(
+    state: State<AppState>,
+    layout: serde_json::Value,
+) -> Result<(), String> {
+    save_project_json(&state, "layout.json", layout)
+}
+
+#[tauri::command]
+pub fn load_project_conversations(
+    state: State<AppState>,
+) -> Result<Option<serde_json::Value>, String> {
+    load_project_json(&state, "conversations.json")
+}
+
+#[tauri::command]
+pub fn save_project_conversations(
+    state: State<AppState>,
+    conversations: serde_json::Value,
+) -> Result<(), String> {
+    save_project_json(&state, "conversations.json", redact_project_json(conversations))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,5 +214,43 @@ mod tests {
     fn save_expanded_state_rejects_invalid_path() {
         let result = save_expanded_state("/nonexistent/path".to_string(), vec![]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn save_and_load_project_json_state() {
+        let temp_dir = env::temp_dir();
+        let unique_id = Uuid::new_v4().to_string();
+        let test_project_dir =
+            temp_dir.join(format!("nightshift_project_state_test_{}", unique_id));
+        fs::create_dir_all(test_project_dir.join(".nightshift")).unwrap();
+        let state = AppState { root_path: std::sync::Mutex::new(Some(test_project_dir.clone())) };
+        let value = serde_json::json!({ "schemaVersion": 1, "panels": [] });
+
+        save_project_json(&state, "layout.json", value.clone()).unwrap();
+        let loaded = load_project_json(&state, "layout.json").unwrap();
+
+        assert_eq!(loaded, Some(value));
+        fs::remove_dir_all(&test_project_dir).ok();
+    }
+
+    #[test]
+    fn redacts_secret_like_values_before_project_conversation_save() {
+        let value = serde_json::json!([
+            {
+                "title": "secret chat",
+                "messages": [
+                    { "text": "sk-test-secret-value" },
+                    { "text": "0123456789abcdef0123456789abcdef01234567" },
+                    { "text": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.TJVA95OrM7E2cBab30RMHrHDcEfxjoYZgeFONFh7HgQ" },
+                    { "toolArguments": { "api_key": "plain-value" } }
+                ]
+            }
+        ]);
+        let redacted = redact_project_json(value);
+
+        assert_eq!(redacted[0]["messages"][0]["text"], "[redacted]");
+        assert_eq!(redacted[0]["messages"][1]["text"], "0123456789abcdef0123456789abcdef01234567");
+        assert_eq!(redacted[0]["messages"][2]["text"], "[redacted]");
+        assert_eq!(redacted[0]["messages"][3]["toolArguments"]["api_key"], "[redacted]");
     }
 }
