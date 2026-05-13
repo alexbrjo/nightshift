@@ -104,6 +104,55 @@ describe("AgentWorkspace", () => {
     });
   });
 
+  it("renders assistant Markdown for readable chat output", async () => {
+    render(<AgentWorkspace />);
+
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
+      handler({
+        payload: {
+          eventType: "item/completed",
+          threadId: "thr_123",
+          turnId: "turn_456",
+          itemId: "item_1",
+          messageText: "Updated the draft:\n\n- Added `prompt.jinja2`\n- Set **model** options",
+          raw: {},
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("list")).toBeInTheDocument();
+      expect(screen.getByText("prompt.jinja2")).toBeInTheDocument();
+      expect(screen.getByText("model")).toBeInTheDocument();
+      expect(screen.queryByText(/- Added `prompt\.jinja2`/)).not.toBeInTheDocument();
+    });
+  });
+
+  it("ignores unsafe HTML in assistant Markdown", async () => {
+    render(<AgentWorkspace />);
+
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
+      handler({
+        payload: {
+          eventType: "item/completed",
+          threadId: "thr_123",
+          turnId: "turn_456",
+          itemId: "item_1",
+          messageText: "Safe summary.<script>alert('bad')</script><img src=x onerror=alert(1)> [bad](javascript:alert(1))",
+          raw: {},
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Safe summary.")).toBeInTheDocument();
+      expect(document.querySelector("script")).not.toBeInTheDocument();
+      expect(document.querySelector("img")).not.toBeInTheDocument();
+      expect(screen.getByText("bad").closest("a")).toBeNull();
+      expect(screen.queryByText(/alert\('bad'\)/)).not.toBeInTheDocument();
+    });
+  });
+
   it("renders planning trace summaries and tool call status", async () => {
     render(<AgentWorkspace />);
 

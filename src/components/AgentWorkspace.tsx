@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import ReactMarkdown from "react-markdown";
+import type { Components } from "react-markdown";
+import rehypeSanitize from "rehype-sanitize";
+import remarkGfm from "remark-gfm";
 import type {
   CodexAppServerEvent,
   CodexAppServerSession,
@@ -33,6 +37,42 @@ interface ToolTraceGroup {
 }
 
 type ChatItem = ChatMessage | ToolTraceGroup;
+
+const ALLOWED_MARKDOWN_ELEMENTS = [
+  "a",
+  "blockquote",
+  "br",
+  "code",
+  "del",
+  "em",
+  "li",
+  "ol",
+  "p",
+  "pre",
+  "strong",
+  "table",
+  "tbody",
+  "td",
+  "th",
+  "thead",
+  "tr",
+  "ul",
+];
+
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ href, children }) => {
+    const safeHref = safeMarkdownHref(href);
+    return safeHref ? (
+      <a href={safeHref} target="_blank" rel="noreferrer">
+        {children}
+      </a>
+    ) : (
+      <span>{children}</span>
+    );
+  },
+};
+
+const RAW_SCRIPT_OR_STYLE_BLOCK = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
 
 interface MethodExecutionEventPayload {
   executionId: number;
@@ -100,6 +140,39 @@ function prettyJson(value: unknown): string {
   if (value === undefined || value === null) return "";
   const text = JSON.stringify(value, null, 2);
   return text.length > 5000 ? `${text.slice(0, 5000)}\n... truncated` : text;
+}
+
+function safeMarkdownHref(href?: string) {
+  if (!href) return undefined;
+  const trimmed = href.trim();
+  if (trimmed.startsWith("/") || trimmed.startsWith("#")) return trimmed;
+  try {
+    const url = new URL(trimmed);
+    return ["http:", "https:", "mailto:"].includes(url.protocol) ? trimmed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function markdownSource(text: string) {
+  return text.replace(RAW_SCRIPT_OR_STYLE_BLOCK, "");
+}
+
+function AgentMessageBody({ message }: { message: ChatMessage }) {
+  if (message.role === "user") return <>{message.text}</>;
+  return (
+    <div className="agent-message-rendered">
+      <ReactMarkdown
+        allowedElements={ALLOWED_MARKDOWN_ELEMENTS}
+        components={MARKDOWN_COMPONENTS}
+        rehypePlugins={[rehypeSanitize]}
+        remarkPlugins={[remarkGfm]}
+        skipHtml
+      >
+        {markdownSource(message.text)}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 function groupToolTraceMessages(messages: ChatMessage[]): ChatItem[] {
@@ -571,7 +644,7 @@ export default function AgentWorkspace() {
               }
               return (
                 <div key={item.id} className={`agent-message ${item.role} ${item.traceKind ?? ""} ${item.status ?? ""}`}>
-                  {item.text}
+                  <AgentMessageBody message={item} />
                 </div>
               );
             })}

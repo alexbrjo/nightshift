@@ -2208,6 +2208,78 @@ legend {
   font-size: 14px;
 }
 
+.agent-message-rendered {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.agent-message-rendered p,
+.agent-message-rendered ul,
+.agent-message-rendered ol,
+.agent-message-rendered blockquote,
+.agent-message-rendered pre,
+.agent-message-rendered table {
+  margin: 0;
+}
+
+.agent-message-rendered ul,
+.agent-message-rendered ol {
+  padding-left: 20px;
+}
+
+.agent-message-rendered li + li {
+  margin-top: 4px;
+}
+
+.agent-message-rendered code {
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-deepest);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 0.92em;
+}
+
+.agent-message-rendered pre {
+  max-width: 100%;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-deepest);
+}
+
+.agent-message-rendered pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.agent-message-rendered blockquote {
+  padding-left: 10px;
+  border-left: 3px solid var(--border-color);
+  color: var(--text-secondary);
+}
+
+.agent-message-rendered table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.agent-message-rendered th,
+.agent-message-rendered td {
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+}
+
+.agent-message-rendered a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
 .agent-message.user {
   align-self: flex-end;
   background: var(--action-primary-bg);
