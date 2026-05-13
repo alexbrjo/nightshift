@@ -155,7 +155,7 @@ function derivedDraftReadiness(draft: MethodDocument | null) {
   if (!draft.title.trim() || draft.title === "Untitled Method") blockers.push("title");
   if (!draft.objective.trim()) blockers.push("objective");
   if (draft.workflow.nodes.length === 0) blockers.push("nodes");
-  for (const resource of draft.resources) {
+  for (const resource of draft.workflow.nodes.filter((node) => node.type === "resource")) {
     if (!resource.path && !resource.reference) blockers.push(resource.id);
   }
   return { status: blockers.length ? "drafting" : "ready", blockers };

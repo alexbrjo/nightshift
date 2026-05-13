@@ -46,7 +46,7 @@ describe("App", () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
     fireEvent.click(buttons[3]);
-    expect(screen.getByText("Methods")).toBeDefined();
+    expect(screen.getByText(/Describe the Method you want to design/)).toBeDefined();
   });
 
   it("highlights active section button", () => {

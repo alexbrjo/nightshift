@@ -9,7 +9,6 @@ function methodDraft(overrides: Partial<MethodDocument> = {}): MethodDocument {
     id: "draft-graph",
     title: "Graph draft",
     objective: "Render a Method graph",
-    resources: [],
     workflow: { nodes: [] },
     parameters: {},
     provider: {},
@@ -22,34 +21,33 @@ function methodDraft(overrides: Partial<MethodDocument> = {}): MethodDocument {
 describe("buildMethodGraphElements", () => {
   it("maps Method draft nodes and edges into React Flow elements", () => {
     const draft = methodDraft({
-      resources: [
-        {
-          id: "prompt",
-          kind: "prompt",
-          label: "Prompt",
-          consumed_by: ["generate"],
-        },
-        {
-          id: "schema",
-          kind: "json_schema",
-          label: "Output schema",
-          path: "schemas/out.json",
-          consumed_by: ["score"],
-        },
-      ],
       workflow: {
         nodes: [
+          {
+            id: "prompt",
+            label: "Prompt",
+            type: "resource",
+            kind: "prompt",
+          },
+          {
+            id: "schema",
+            label: "Output schema",
+            type: "resource",
+            kind: "json_schema",
+            path: "schemas/out.json",
+          },
           {
             id: "generate",
             label: "Generate answers",
             type: "inference",
+            depends_on: ["prompt"],
             config: { model: "gpt-test", samples: 4 },
           },
           {
             id: "score",
             label: "Score answers",
             type: "eval",
-            depends_on: ["generate"],
+            depends_on: ["generate", "schema"],
             config: {},
           },
         ],
@@ -63,28 +61,28 @@ describe("buildMethodGraphElements", () => {
     expect(methodNodes).toHaveLength(2);
     expect(resourceNodes).toEqual([
       expect.objectContaining({
-        id: "resource:prompt",
+        id: "prompt",
         type: "resource",
         position: { x: -340, y: 0 },
-        data: { resources: [expect.objectContaining({ id: "prompt" })] },
+        data: { resource: expect.objectContaining({ id: "prompt" }) },
       }),
       expect.objectContaining({
-        id: "resource:schema",
+        id: "schema",
         type: "resource",
-        data: { resources: [expect.objectContaining({ id: "schema", path: "schemas/out.json" })] },
+        data: { resource: expect.objectContaining({ id: "schema", path: "schemas/out.json" }) },
       }),
     ]);
     expect(graph.edges).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        id: "resource:prompt-generate",
-        source: "resource:prompt",
+        id: "prompt-generate",
+        source: "prompt",
         target: "generate",
         sourceHandle: "right",
         targetHandle: "left",
       }),
       expect.objectContaining({
-        id: "resource:schema-score",
-        source: "resource:schema",
+        id: "schema-score",
+        source: "schema",
         target: "score",
         sourceHandle: "right",
         targetHandle: "left",
@@ -118,18 +116,16 @@ describe("buildMethodGraphElements", () => {
     expect(methodNodes[1].data.issues).toEqual([]);
   });
 
-  it("groups resources with identical consumers into one input bundle", () => {
+  it("renders shared resource nodes as first-class inputs", () => {
     const draft = methodDraft({
-      resources: [
-        { id: "data", kind: "data", label: "Dataset", path: "data.jsonl", consumed_by: ["a", "b"] },
-        { id: "prompt", kind: "prompt", label: "Prompt", path: "prompt.md", consumed_by: ["b", "a"] },
-        { id: "script", kind: "eval_script", label: "Script", path: "eval.js", consumed_by: ["eval"] },
-      ],
       workflow: {
         nodes: [
-          { id: "a", label: "Model A", type: "inference", config: {} },
-          { id: "b", label: "Model B", type: "inference", config: {} },
-          { id: "eval", label: "Evaluate", type: "eval", depends_on: ["a", "b"], config: {} },
+          { id: "data", label: "Dataset", type: "resource", kind: "data", path: "data.jsonl" },
+          { id: "prompt", label: "Prompt", type: "resource", kind: "prompt", path: "prompt.md" },
+          { id: "script", label: "Script", type: "resource", kind: "eval_script", path: "eval.js" },
+          { id: "a", label: "Model A", type: "inference", depends_on: ["data", "prompt"], config: {} },
+          { id: "b", label: "Model B", type: "inference", depends_on: ["data", "prompt"], config: {} },
+          { id: "eval", label: "Evaluate", type: "eval", depends_on: ["a", "b", "script"], config: {} },
         ],
       },
     });
@@ -137,23 +133,16 @@ describe("buildMethodGraphElements", () => {
     const graph = buildMethodGraphElements(draft);
     const resourceNodes = graph.nodes.filter((node) => node.type === "resource");
 
-    expect(resourceNodes).toHaveLength(2);
+    expect(resourceNodes).toHaveLength(3);
     expect(resourceNodes).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: "resource:data+prompt",
-        data: { resources: [
-          expect.objectContaining({ id: "data" }),
-          expect.objectContaining({ id: "prompt" }),
-        ] },
-      }),
-      expect.objectContaining({
-        id: "resource:script",
-      }),
+      expect.objectContaining({ id: "data" }),
+      expect.objectContaining({ id: "prompt" }),
+      expect.objectContaining({ id: "script" }),
     ]));
     expect(graph.edges).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "resource:data+prompt-a", source: "resource:data+prompt", target: "a" }),
-      expect.objectContaining({ id: "resource:data+prompt-b", source: "resource:data+prompt", target: "b" }),
-      expect.objectContaining({ id: "resource:script-eval", source: "resource:script", target: "eval" }),
+      expect.objectContaining({ id: "data-a", source: "data", target: "a" }),
+      expect.objectContaining({ id: "prompt-b", source: "prompt", target: "b" }),
+      expect.objectContaining({ id: "script-eval", source: "script", target: "eval" }),
     ]));
   });
 
@@ -223,14 +212,12 @@ describe("buildMethodGraphElements", () => {
 
   it("fits graph bounds inside narrow panes without clipping the right edge", () => {
     const draft = methodDraft({
-      resources: [
-        { id: "data", kind: "data", label: "Dataset", path: "data.jsonl", consumed_by: ["sample"] },
-        { id: "prompt", kind: "prompt", label: "Prompt", path: "prompt.md", consumed_by: ["generate"] },
-      ],
       workflow: {
         nodes: [
-          { id: "sample", label: "Sample records", type: "sample", config: {} },
-          { id: "generate", label: "Generate cards", type: "inference", depends_on: ["sample"], config: {} },
+          { id: "data", kind: "data", label: "Dataset", type: "resource", path: "data.jsonl" },
+          { id: "prompt", kind: "prompt", label: "Prompt", type: "resource", path: "prompt.md" },
+          { id: "sample", label: "Sample records", type: "sample", depends_on: ["data"], config: {} },
+          { id: "generate", label: "Generate cards", type: "inference", depends_on: ["sample", "prompt"], config: {} },
           { id: "judge", label: "Judge cards", type: "inference", depends_on: ["generate"], config: {} },
         ],
       },

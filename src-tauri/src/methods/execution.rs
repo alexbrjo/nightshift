@@ -17,7 +17,7 @@ use crate::state::{MethodExecutionControl, MethodExecutionManager};
 
 use super::config::{
     config_f64, config_i32, config_string, method_file_by_kind, model_values,
-    resolve_configured_file, yaml_lookup, yaml_string,
+    resolve_configured_file, runnable_dependency_ids, runnable_nodes, yaml_lookup, yaml_string,
 };
 use super::model::{
     MethodArtifactSummary, MethodDocument, MethodExecutionEventSummary, MethodExecutionNodeSummary,
@@ -60,7 +60,7 @@ pub(crate) async fn insert_execution(
         model_values = ?model_values(method),
         "Created Method execution"
     );
-    for node in &method.workflow.nodes {
+    for node in runnable_nodes(method) {
         sqlx::query(
             r#"
             INSERT INTO method_execution_nodes (execution_id, node_id, node_type, status)
@@ -241,15 +241,22 @@ pub(crate) async fn read_method_artifact_from_db(
 pub(crate) fn topological_nodes(
     nodes: &[MethodWorkflowNode],
 ) -> Result<Vec<MethodWorkflowNode>, String> {
-    let mut remaining: HashMap<&str, &MethodWorkflowNode> =
+    let all_nodes: HashMap<&str, &MethodWorkflowNode> =
         nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+    let mut remaining: HashMap<&str, &MethodWorkflowNode> =
+        nodes.iter().filter(|n| n.is_runnable()).map(|n| (n.id.as_str(), n)).collect();
     let mut done = HashSet::new();
     let mut ordered = Vec::new();
 
     while !remaining.is_empty() {
         let ready_id = remaining
             .values()
-            .find(|node| node.depends_on.iter().all(|dep| done.contains(dep.as_str())))
+            .find(|node| {
+                node.depends_on.iter().all(|dep| {
+                    all_nodes.get(dep.as_str()).is_some_and(|dep_node| dep_node.is_resource())
+                        || done.contains(dep.as_str())
+                })
+            })
             .map(|node| node.id.clone());
         let Some(id) = ready_id else {
             return Err("method.workflow could not be ordered".into());
@@ -526,10 +533,11 @@ pub(crate) fn parse_job_ids(output_ref: &str) -> Result<Vec<i64>, String> {
 
 pub(crate) async fn upstream_collection_source(
     db: &DatabaseState,
+    method: &MethodDocument,
     node: &MethodWorkflowNode,
     node_outputs: &HashMap<String, String>,
 ) -> Result<Option<String>, String> {
-    let Some(dep) = node.depends_on.first() else {
+    let Some(dep) = runnable_dependency_ids(method, node).next() else {
         return Ok(None);
     };
     let Some(output_ref) = node_outputs.get(dep) else {
@@ -544,10 +552,11 @@ pub(crate) async fn upstream_collection_source(
 
 pub(crate) async fn upstream_job_sources(
     db: &DatabaseState,
+    method: &MethodDocument,
     node: &MethodWorkflowNode,
     node_outputs: &HashMap<String, String>,
 ) -> Result<Vec<(i64, String)>, String> {
-    let Some(dep) = node.depends_on.first() else {
+    let Some(dep) = runnable_dependency_ids(method, node).next() else {
         return Ok(vec![]);
     };
     let Some(output_ref) = node_outputs.get(dep) else {
@@ -649,7 +658,7 @@ pub(crate) async fn run_inference_agent(
         model = ?config_string(node, method, "model", None),
         "Running Method inference node"
     );
-    let upstream_source = upstream_collection_source(db, node, node_outputs).await?;
+    let upstream_source = upstream_collection_source(db, method, node, node_outputs).await?;
     if models.len() <= 1 {
         let model_name = models
             .first()
@@ -732,7 +741,7 @@ pub(crate) async fn run_sample_agent(
     execution_id: i64,
     node_outputs: &HashMap<String, String>,
 ) -> Result<String, String> {
-    let upstream_source = upstream_collection_source(db, node, node_outputs).await?;
+    let upstream_source = upstream_collection_source(db, method, node, node_outputs).await?;
     let job_id =
         create_sample_job_for_node(db, method, node, execution_id, upstream_source).await?;
     insert_event(
@@ -768,9 +777,9 @@ pub(crate) async fn run_transform_agent(
     execution_id: i64,
     node_outputs: &HashMap<String, String>,
 ) -> Result<String, String> {
-    let upstream_sources = upstream_job_sources(db, node, node_outputs).await?;
+    let upstream_sources = upstream_job_sources(db, method, node, node_outputs).await?;
     if upstream_sources.is_empty() {
-        let upstream_source = upstream_collection_source(db, node, node_outputs).await?;
+        let upstream_source = upstream_collection_source(db, method, node, node_outputs).await?;
         let job_id =
             create_transform_job_for_node(db, method, node, execution_id, upstream_source, None)
                 .await?;
@@ -969,18 +978,18 @@ fn analysis_tools() -> Vec<serde_json::Value> {
 
 async fn analysis_context(
     db: &DatabaseState,
+    method: &MethodDocument,
     execution_id: i64,
     node: &MethodWorkflowNode,
     node_outputs: &HashMap<String, String>,
 ) -> Result<serde_json::Value, String> {
-    let upstream_outputs = node
-        .depends_on
-        .iter()
+    let upstream_outputs = runnable_dependency_ids(method, node)
+        .map(|dep| dep.to_string())
         .map(|dep| {
             serde_json::json!({
                 "node_id": dep,
-                "output_ref": node_outputs.get(dep),
-                "job_ids": node_outputs.get(dep).map(|output| parse_job_ids(output).unwrap_or_default()).unwrap_or_default(),
+                "output_ref": node_outputs.get(&dep),
+                "job_ids": node_outputs.get(&dep).map(|output| parse_job_ids(output).unwrap_or_default()).unwrap_or_default(),
             })
         })
         .collect::<Vec<_>>();
@@ -1029,6 +1038,7 @@ async fn analysis_context(
 
 async fn dispatch_analysis_tool(
     db: &DatabaseState,
+    method: &MethodDocument,
     execution_id: i64,
     node: &MethodWorkflowNode,
     node_outputs: &HashMap<String, String>,
@@ -1036,7 +1046,9 @@ async fn dispatch_analysis_tool(
     arguments: serde_json::Value,
 ) -> serde_json::Value {
     let result = match name {
-        ANALYSIS_TOOL_LIST_CONTEXT => analysis_context(db, execution_id, node, node_outputs).await,
+        ANALYSIS_TOOL_LIST_CONTEXT => {
+            analysis_context(db, method, execution_id, node, node_outputs).await
+        }
         ANALYSIS_TOOL_RUN_SQL => {
             let sql = arguments.get("sql").and_then(serde_json::Value::as_str).unwrap_or("");
             run_analysis_sql_query(db, sql, ANALYSIS_SQL_ROW_LIMIT).await
@@ -1208,19 +1220,21 @@ pub(crate) fn analysis_report_relative_path(
     execution_id: i64,
     node: &MethodWorkflowNode,
 ) -> Result<PathBuf, String> {
-    let file_name = yaml_string(yaml_lookup(&node.config, "output_file"))
-        .or_else(|| yaml_string(yaml_lookup(&node.config, "output_path")))
-        .unwrap_or_else(|| format!("{}.md", node.id));
+    let file_name = if node.node_type == "output_file" {
+        node.path.clone().unwrap_or_else(|| format!("{}.md", node.id))
+    } else {
+        format!("{}.md", node.id)
+    };
     let file_name = file_name.trim();
     if file_name.is_empty() {
-        return Err("analysis output_file must not be empty".into());
+        return Err("output_file path must not be empty".into());
     }
     let configured = Path::new(file_name);
     if configured.is_absolute() {
-        return Err("analysis output_file must be relative".into());
+        return Err("output_file path must be relative".into());
     }
     if file_name.contains("..") {
-        return Err("analysis output_file must stay inside the execution folder".into());
+        return Err("output_file path must stay inside the execution folder".into());
     }
     let mut relative = PathBuf::from(".nightshift")
         .join("executions")
@@ -1273,7 +1287,7 @@ pub(crate) async fn run_analysis_agent(
         .unwrap_or_else(|_| "gpt-5.5".into());
     let client = Client::new();
     let tools = analysis_tools();
-    let context = analysis_context(db, execution_id, node, node_outputs).await?;
+    let context = analysis_context(db, method, execution_id, node, node_outputs).await?;
     let mut body = serde_json::json!({
         "model": model,
         "instructions": analysis_agent_instructions(),
@@ -1333,6 +1347,7 @@ pub(crate) async fn run_analysis_agent(
                 Ok(arguments) => {
                     dispatch_analysis_tool(
                         db,
+                        method,
                         execution_id,
                         node,
                         node_outputs,
@@ -1462,7 +1477,9 @@ async fn run_method_node(
             .await?;
             run_analysis_agent(db, method, execution_id, node, node_outputs).await
         }
-        "analysis" => run_analysis_agent(db, method, execution_id, node, node_outputs).await,
+        "analysis" | "output_file" => {
+            run_analysis_agent(db, method, execution_id, node, node_outputs).await
+        }
         "eval" => {
             *had_not_implemented = true;
             let artifact = run_not_implemented_agent(db, execution_id, node).await?;

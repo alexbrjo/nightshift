@@ -32,8 +32,11 @@ pub(crate) fn freeze_files(
 ) -> Result<(), String> {
     fs::create_dir_all(dest.join("files"))
         .map_err(|e| format!("Failed to create method files directory: {}", e))?;
-    for resource in &mut method.resources {
-        if !matches!(resource.kind.as_str(), "prompt" | "data" | "json_schema" | "eval_script") {
+    for resource in method.workflow.nodes.iter_mut().filter(|node| node.is_resource()) {
+        if !matches!(
+            resource.kind.as_deref(),
+            Some("prompt" | "data" | "json_schema" | "eval_script")
+        ) {
             continue;
         }
         let Some(path) = resource.path.as_mut() else {
@@ -143,7 +146,7 @@ pub(crate) async fn save_method_to_project(
     method_input: MethodDocument,
 ) -> Result<MethodSummary, String> {
     validate_method(&method_input)?;
-    for resource in &method_input.resources {
+    for resource in method_input.workflow.nodes.iter().filter(|node| node.is_resource()) {
         if resource.path.as_deref().is_some_and(|path| path.starts_with("files/")) {
             return Err(format!(
                 "Method resource '{}' must reference a project file before save",

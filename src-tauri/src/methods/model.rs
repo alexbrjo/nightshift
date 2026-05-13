@@ -102,8 +102,6 @@ pub struct MethodDocument {
     #[serde(default)]
     pub objective: String,
     #[serde(default)]
-    pub resources: Vec<MethodResource>,
-    #[serde(default)]
     pub workflow: MethodWorkflow,
     #[serde(default)]
     pub parameters: serde_json::Value,
@@ -113,20 +111,6 @@ pub struct MethodDocument {
     pub outputs: Vec<String>,
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub metadata: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct MethodResource {
-    pub id: String,
-    pub kind: String,
-    #[serde(default)]
-    pub label: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference: Option<String>,
-    #[serde(default)]
-    pub consumed_by: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -175,47 +159,6 @@ pub struct UpdateMethodDraftExecutionConfigInput {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReplaceMethodDraftGraphInput {
     pub workflow: MethodWorkflow,
-    #[serde(default)]
-    pub resources: Option<Vec<MethodResource>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AttachMethodResourceInput {
-    pub id: String,
-    pub kind: String,
-    pub label: Option<String>,
-    #[serde(default)]
-    pub path: Option<String>,
-    #[serde(default)]
-    pub reference: Option<String>,
-    #[serde(default)]
-    pub consumed_by: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DetachMethodResourceInput {
-    pub id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResolveCollectionResourceInput {
-    pub id: String,
-    pub collection_id: String,
-    pub label: Option<String>,
-    #[serde(default)]
-    pub consumed_by: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ResolveApiKeyResourceInput {
-    pub id: String,
-    pub api_key_id: String,
-    pub label: Option<String>,
-    #[serde(default)]
-    pub consumed_by: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -264,10 +207,34 @@ pub struct MethodWorkflowNode {
     pub label: String,
     #[serde(rename = "type")]
     pub node_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
     #[serde(default)]
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub config: serde_json::Value,
+}
+
+impl MethodWorkflowNode {
+    pub fn is_resource(&self) -> bool {
+        self.node_type == "resource"
+    }
+
+    pub fn is_runnable(&self) -> bool {
+        !self.is_resource()
+    }
+
+    pub fn label_or_id(&self) -> &str {
+        if self.label.trim().is_empty() {
+            &self.id
+        } else {
+            &self.label
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,9 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use super::model::{
-    MethodDocument, MethodResource, MethodWorkflowNode, NightshiftConfig, ProviderProfile,
-};
+use super::model::{MethodDocument, MethodWorkflowNode, NightshiftConfig, ProviderProfile};
 
 pub(crate) fn config_path(project_root: &Path) -> std::path::PathBuf {
     project_root.join(".nightshift").join("config.json")
@@ -118,30 +116,56 @@ pub(crate) fn config_f64(
         .or_else(|| yaml_f64(yaml_lookup(&method.parameters, key)))
 }
 
+pub(crate) fn normalized_resource_kind(kind: &str) -> &str {
+    match kind {
+        "schema" | "json_schema_file" => "json_schema",
+        "script" => "eval_script",
+        "prompt_file" => "prompt",
+        "data_file" => "data",
+        other => other,
+    }
+}
+
+pub(crate) fn resource_nodes(method: &MethodDocument) -> impl Iterator<Item = &MethodWorkflowNode> {
+    method.workflow.nodes.iter().filter(|node| node.is_resource())
+}
+
+pub(crate) fn runnable_nodes(method: &MethodDocument) -> impl Iterator<Item = &MethodWorkflowNode> {
+    method.workflow.nodes.iter().filter(|node| node.is_runnable())
+}
+
 pub(crate) fn method_file_by_kind<'a>(
     method: &'a MethodDocument,
     kind: &str,
-) -> Option<&'a MethodResource> {
-    let normalized = match kind {
-        "schema" => "json_schema",
-        "script" => "eval_script",
-        other => other,
-    };
-    method.resources.iter().find(|resource| resource.kind == normalized)
+) -> Option<&'a MethodWorkflowNode> {
+    let normalized = normalized_resource_kind(kind);
+    resource_nodes(method).find(|resource| resource.kind.as_deref() == Some(normalized))
 }
 
 pub(crate) fn method_file_for_node_by_kind<'a>(
     method: &'a MethodDocument,
     node_id: &str,
     kind: &str,
-) -> Option<&'a MethodResource> {
-    let normalized = match kind {
-        "schema" => "json_schema",
-        "script" => "eval_script",
-        other => other,
-    };
-    method.resources.iter().find(|resource| {
-        resource.kind == normalized && resource.consumed_by.iter().any(|id| id == node_id)
+) -> Option<&'a MethodWorkflowNode> {
+    let normalized = normalized_resource_kind(kind);
+    let node = method.workflow.nodes.iter().find(|node| node.id == node_id)?;
+    node.depends_on.iter().find_map(|dep| {
+        resource_nodes(method)
+            .find(|resource| resource.id == *dep && resource.kind.as_deref() == Some(normalized))
+    })
+}
+
+pub(crate) fn runnable_dependency_ids<'a>(
+    method: &'a MethodDocument,
+    node: &'a MethodWorkflowNode,
+) -> impl Iterator<Item = &'a str> {
+    node.depends_on.iter().filter_map(|dep| {
+        method
+            .workflow
+            .nodes
+            .iter()
+            .find(|candidate| candidate.id == *dep && candidate.is_runnable())
+            .map(|candidate| candidate.id.as_str())
     })
 }
 
@@ -155,9 +179,7 @@ pub(crate) fn resolve_configured_file(
     let file = configured
         .as_deref()
         .and_then(|id| {
-            method
-                .resources
-                .iter()
+            resource_nodes(method)
                 .find(|resource| resource.id == id || resource.path.as_deref() == Some(id))
         })
         .or_else(|| method_file_for_node_by_kind(method, node_id, fallback_kind))

@@ -149,7 +149,6 @@ describe("AgentWorkspace", () => {
           outputSummary: "Draft 'Edge method' - 2 nodes - 1 resource",
           toolArguments: {
             workflow: { nodes: [{ id: "generate" }] },
-            resources: [],
           },
           toolOutput: {
             ok: true,
@@ -166,7 +165,7 @@ describe("AgentWorkspace", () => {
           threadId: "thr_123",
           turnId: "turn_456",
           itemId: "tool_2",
-          toolName: "attach_method_resource",
+          toolName: "replace_method_draft_graph",
           traceKind: "tool",
           status: "completed",
           durationMs: 7,
@@ -179,8 +178,7 @@ describe("AgentWorkspace", () => {
     await waitFor(() => {
       expect(screen.getByText("Checked the draft graph and missing resources.")).toBeInTheDocument();
       expect(screen.getByText("2 tool calls")).toBeInTheDocument();
-      expect(screen.getByText("replace_method_draft_graph")).toBeInTheDocument();
-      expect(screen.getByText("attach_method_resource")).toBeInTheDocument();
+      expect(screen.getAllByText("replace_method_draft_graph").length).toBeGreaterThan(0);
       expect(screen.getByText("42 ms")).toBeInTheDocument();
       expect(screen.getByText("Draft 'Edge method' - 2 nodes - 1 resource")).toBeInTheDocument();
       expect(screen.getByText("Parameters")).toBeInTheDocument();
@@ -231,21 +229,14 @@ describe("AgentWorkspace", () => {
     eventBus.handlers.get("method-draft-updated")?.forEach((handler) =>
       handler({
         payload: {
-          schema_version: 1,
+          schema_version: 2,
           id: "draft-1",
           title: "Rubric benchmark",
           objective: "Compare model answers against a rubric",
-          resources: [
-            {
-              id: "prompt",
-              kind: "prompt",
-              label: "Main prompt",
-              consumed_by: ["generate"],
-            },
-          ],
           workflow: {
             nodes: [
-              { id: "generate", label: "Generate answers", type: "inference", config: {} },
+              { id: "prompt", label: "Main prompt", type: "resource", kind: "prompt" },
+              { id: "generate", label: "Generate answers", type: "inference", depends_on: ["prompt"], config: {} },
             ],
           },
           parameters: {},
@@ -271,11 +262,10 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ threadId: "thr_123" });
         case "get_current_method_draft":
           return Promise.resolve({
-            schema_version: 1,
+            schema_version: 2,
             id: "edge-method",
             title: "Edge method",
             objective: "Measure accuracy",
-            resources: [],
             workflow: {
               nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
             },
@@ -358,7 +348,6 @@ describe("AgentWorkspace", () => {
             id: "draft-1",
             title: "Edge Model 50% Flash-Card Accuracy Benchmark",
             objective: "Measure accuracy",
-            resources: [],
             workflow: {
               nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
             },
@@ -408,7 +397,6 @@ describe("AgentWorkspace", () => {
             id: "draft-1",
             title: "Edge method",
             objective: "Measure accuracy",
-            resources: [],
             workflow: {
               nodes: [{ id: "generate", label: "Generate", type: "eval", config: {} }],
             },
@@ -458,7 +446,6 @@ describe("AgentWorkspace", () => {
             id: "draft-1",
             title: "Edge method",
             objective: "Measure accuracy",
-            resources: [],
             workflow: {
               nodes: [{ id: "generate", label: "Generate", type: "eval", config: {} }],
             },
@@ -502,7 +489,6 @@ describe("AgentWorkspace", () => {
             id: "edge-method",
             title: "Edge method",
             objective: "Measure accuracy",
-            resources: [],
             workflow: {
               nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
             },
@@ -597,7 +583,6 @@ describe("AgentWorkspace", () => {
             id: "edge-method",
             title: "Edge method",
             objective: "Measure accuracy",
-            resources: [],
             workflow: {
               nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
             },

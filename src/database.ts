@@ -49,17 +49,11 @@ export interface MethodWorkflowNode {
   id: string;
   label?: string;
   type: string;
-  depends_on?: string[];
-  config?: Record<string, unknown>;
-}
-
-export interface MethodResource {
-  id: string;
-  kind: string;
-  label?: string;
+  kind?: string;
   path?: string;
   reference?: string;
-  consumed_by?: string[];
+  depends_on?: string[];
+  config?: Record<string, unknown>;
 }
 
 export interface MethodDocument {
@@ -67,7 +61,6 @@ export interface MethodDocument {
   id: string;
   title: string;
   objective: string;
-  resources: MethodResource[];
   workflow: {
     nodes: MethodWorkflowNode[];
   };

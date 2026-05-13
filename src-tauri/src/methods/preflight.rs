@@ -1,7 +1,9 @@
-use std::collections::HashSet;
 use std::path::Path;
 
-use super::config::{config_string, method_file_by_kind, model_values, yaml_lookup, yaml_string};
+use super::config::{
+    config_string, method_file_for_node_by_kind, model_values, resource_nodes,
+    runnable_dependency_ids, yaml_lookup, yaml_string,
+};
 use super::model::{
     MethodDocument, MethodPreflightBlocker, MethodPreflightResult, MethodWorkflowNode,
 };
@@ -15,7 +17,7 @@ pub(crate) fn required_file_kind_for_node(
     match node.node_type.as_str() {
         "inference" => {
             let mut kinds = vec![("prompt", "Inference needs a prompt template".to_string())];
-            if node.depends_on.is_empty() {
+            if runnable_dependency_ids(method, node).next().is_none() {
                 kinds.push(("data", "Inference needs a data source".to_string()));
             }
             if config_string(node, method, "output_mode", Some("Unstructured")).as_deref()
@@ -26,7 +28,7 @@ pub(crate) fn required_file_kind_for_node(
             kinds
         }
         "sample" => {
-            if node.depends_on.is_empty() {
+            if runnable_dependency_ids(method, node).next().is_none() {
                 vec![("data", "Sample needs a data source".to_string())]
             } else {
                 vec![]
@@ -34,7 +36,7 @@ pub(crate) fn required_file_kind_for_node(
         }
         "transform" | "eval" => {
             let mut kinds = vec![("script", "Transform/eval needs a script file".to_string())];
-            if node.depends_on.is_empty() {
+            if runnable_dependency_ids(method, node).next().is_none() {
                 kinds.push(("data", "Standalone transform needs a data source".to_string()));
             }
             kinds
@@ -58,13 +60,12 @@ pub(crate) fn preflight_method_for_root(
         });
     }
 
-    let mut seen_required = HashSet::new();
     for node in &method.workflow.nodes {
+        if node.is_resource() {
+            continue;
+        }
         for (kind, message) in required_file_kind_for_node(method, node) {
-            if !seen_required.insert(kind) {
-                continue;
-            }
-            if method_file_by_kind(method, kind).is_none() {
+            if method_file_for_node_by_kind(method, &node.id, kind).is_none() {
                 blockers.push(MethodPreflightBlocker {
                     code: "missing_file".into(),
                     message,
@@ -76,8 +77,9 @@ pub(crate) fn preflight_method_for_root(
         }
     }
 
-    for file in method.resources.iter().filter(|resource| resource.path.is_some()) {
+    for file in resource_nodes(method).filter(|resource| resource.path.is_some()) {
         let path = file.path.as_deref().unwrap_or_default();
+        let kind = file.kind.clone().unwrap_or_else(|| "resource".into());
         if path.starts_with("files/") {
             continue;
         }
@@ -86,7 +88,7 @@ pub(crate) fn preflight_method_for_root(
                 code: "invalid_file_path".into(),
                 message: error,
                 file_id: Some(file.id.clone()),
-                file_kind: Some(file.kind.clone()),
+                file_kind: Some(kind.clone()),
                 path: Some(path.to_string()),
             });
             continue;
@@ -94,9 +96,9 @@ pub(crate) fn preflight_method_for_root(
         if !project_root.join(path).is_file() {
             blockers.push(MethodPreflightBlocker {
                 code: "missing_file".into(),
-                message: format!("I couldn't find {} file '{}'.", file.kind, path),
+                message: format!("I couldn't find {} file '{}'.", kind, path),
                 file_id: Some(file.id.clone()),
-                file_kind: Some(file.kind.clone()),
+                file_kind: Some(kind),
                 path: Some(path.to_string()),
             });
         }

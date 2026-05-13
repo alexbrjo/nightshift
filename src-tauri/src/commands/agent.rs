@@ -194,7 +194,7 @@ async fn run_method_agent_turn(
 }
 
 fn method_agent_instructions() -> &'static str {
-    "You are Nightshift's Method design agent. Use the provided function tools whenever the user describes, creates, or changes a Method. Nightshift owns durable Method draft state; do not pretend a Method is executable while blockers remain. Use App Server native file tools to discover/read candidate project files, then use Nightshift Method tools for durable resource attachment decisions. Use the execution-config tool when the user provides model names, provider settings, temperature, token limits, sample counts, strategy, or model sweep values. Prefer creating a concise draft with a DAG of inference, eval, and analysis nodes, plus missing prompt, data, JSON schema, eval script, collection, or api_key resources when details are not yet known. Treat prompt, data, JSON schema, and api_key resources as direct inputs to inference nodes unless the user says otherwise; eval_script resources feed eval nodes. Do not create separate analysis nodes merely to sample or stage an input dataset. Analysis nodes should consume upstream node outputs through graph edges, not raw file resources, and produce experiment reports from execution results. API key values may live in .nightshift/config.json, but Method drafts and bundles should reference API key ids rather than copying values. After tool calls, briefly summarize what changed and what is still missing."
+    "You are Nightshift's Method design agent. Use the provided function tools whenever the user describes, creates, or changes a Method. Nightshift owns durable Method draft state; do not pretend a Method is executable while blockers remain. Use App Server native file tools to discover/read candidate project files, then represent prompt, data, JSON schema, eval script, collection, and api_key inputs as type: resource workflow nodes. Use the execution-config tool when the user provides model names, provider settings, temperature, token limits, sample counts, strategy, or model sweep values. Prefer creating a concise draft with a DAG of resource, inference, eval, and analysis nodes when details are not yet known. Treat prompt, data, JSON schema, and api_key resource nodes as direct dependencies of inference nodes unless the user says otherwise; eval_script resource nodes feed eval nodes. Do not create separate analysis nodes merely to sample or stage an input dataset. Analysis nodes should consume upstream node outputs through graph edges, not raw file resources, and produce experiment reports from execution results. Use a type: output_file node only when the user asks to control the report filename/path; put the relative Markdown path in that node's path field. API key values may live in .nightshift/config.json, but Method drafts and bundles should reference API key ids rather than copying values. After tool calls, briefly summarize what changed and what is still missing."
 }
 
 fn method_agent_reasoning_config(model: &str) -> Option<Value> {
@@ -349,7 +349,17 @@ fn summarize_tool_output(tool_name: &str, output: &Value) -> Option<String> {
             .and_then(|workflow| workflow.get("nodes"))
             .and_then(Value::as_array)
             .map_or(0, Vec::len);
-        let resource_count = draft.get("resources").and_then(Value::as_array).map_or(0, Vec::len);
+        let resource_count = draft
+            .get("workflow")
+            .and_then(|workflow| workflow.get("nodes"))
+            .and_then(Value::as_array)
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter(|node| node.get("type").and_then(Value::as_str) == Some("resource"))
+                    .count()
+            })
+            .unwrap_or_default();
         return Some(format!(
             "Draft '{}' - {} node{} - {} resource{}",
             truncate_text(title, 80),
@@ -654,8 +664,11 @@ mod tests {
             "result": {
                 "draft": {
                     "title": "Edge method",
-                    "workflow": { "nodes": [{ "id": "generate" }, { "id": "judge" }] },
-                    "resources": [{ "id": "prompt" }]
+                    "workflow": { "nodes": [
+                        { "id": "prompt", "type": "resource" },
+                        { "id": "generate", "type": "inference" },
+                        { "id": "judge", "type": "eval" }
+                    ] }
                 }
             }
         });
@@ -669,7 +682,7 @@ mod tests {
 
         assert_eq!(
             summarize_tool_output("replace_method_draft_graph", &output).unwrap(),
-            "Draft 'Edge method' - 2 nodes - 1 resource"
+            "Draft 'Edge method' - 3 nodes - 1 resource"
         );
         let sanitized = sanitize_tool_value(&arguments);
         assert_eq!(sanitized["api_key"], "[redacted]");

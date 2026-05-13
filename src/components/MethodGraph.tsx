@@ -16,7 +16,6 @@ import type {
   MethodDraftIssue,
   MethodWorkflowNode,
   MethodDraftReadiness,
-  MethodResource,
   MethodExecutionNodeSummary,
 } from "../database";
 
@@ -28,7 +27,6 @@ const METHOD_NODE_X = 0;
 const RESOURCE_NODE_X = -340;
 const RESOURCE_NODE_HEIGHT = 118;
 const RESOURCE_NODE_GAP = 14;
-const MAX_BUNDLE_RESOURCES = 4;
 const METHOD_NODE_WIDTH = 300;
 const RESOURCE_NODE_WIDTH = 260;
 const GRAPH_FIT_PADDING = 24;
@@ -46,7 +44,7 @@ type MethodGraphNodeData = {
 };
 
 type MethodGraphResourceData = {
-  resources: MethodResource[];
+  resource: MethodWorkflowNode;
 };
 
 type MethodFlowNode = Node<MethodGraphNodeData, "method">;
@@ -111,7 +109,15 @@ function effectiveConfigHints(draft: MethodDocument, node: MethodWorkflowNode) {
   return hints;
 }
 
-function resourceKindLabel(kind: string) {
+function isResourceNode(node: MethodWorkflowNode) {
+  return node.type === "resource";
+}
+
+function isRunnableNode(node: MethodWorkflowNode) {
+  return !isResourceNode(node);
+}
+
+function resourceKindLabel(kind: string | undefined) {
   switch (kind) {
     case "prompt":
     case "prompt_file":
@@ -129,21 +135,20 @@ function resourceKindLabel(kind: string) {
     case "api_key":
       return "API key";
     default:
-      return kind.replace(/_/g, " ");
+      return (kind || "resource").replace(/_/g, " ");
   }
 }
 
-function resourceLocation(resource: MethodResource) {
+function resourceLocation(resource: MethodWorkflowNode) {
   return resource.path || resource.reference || resourceStatus(resource);
 }
 
-function resourceBundleId(resources: MethodResource[]) {
-  return `resource:${resources.map((resource) => resource.id).join("+")}`;
-}
-
 function buildNodeOrder(draft: MethodDocument) {
-  const methodNodes = draft.workflow.nodes;
-  const graphEdges = methodEdges(draft);
+  const methodNodes = draft.workflow.nodes.filter(isRunnableNode);
+  const graphEdges = methodEdges(draft).filter((edge) => {
+    const source = draft.workflow.nodes.find((node) => node.id === edge.from);
+    return !source || isRunnableNode(source);
+  });
   const nodeIds = new Set(methodNodes.map((node) => node.id));
   const originalIndex = new Map(methodNodes.map((node, index) => [node.id, index]));
   const incomingCount = new Map(methodNodes.map((node) => [node.id, 0]));
@@ -182,7 +187,7 @@ function buildNodeOrder(draft: MethodDocument) {
 function issueAppliesToNode(
   issue: MethodDraftIssue,
   nodeId: string,
-  resources: MethodResource[],
+  resources: MethodWorkflowNode[],
 ) {
   return (
     issue.nodeId === nodeId ||
@@ -193,7 +198,7 @@ function issueAppliesToNode(
 function issuesForNode(
   issues: MethodDraftIssue[],
   nodeId: string,
-  resources: MethodResource[],
+  resources: MethodWorkflowNode[],
 ) {
   return issues.filter((issue) => issueAppliesToNode(issue, nodeId, resources));
 }
@@ -213,12 +218,20 @@ function methodEdges(draft: MethodDocument) {
   );
 }
 
-function resourceConsumers(resource: MethodResource) {
-  return resource.consumed_by ?? [];
+function resourceStatus(resource: MethodWorkflowNode) {
+  return resource.path || resource.reference ? "attached" : "missing";
 }
 
-function resourceStatus(resource: MethodResource) {
-  return resource.path || resource.reference ? "attached" : "missing";
+function dependentResources(node: MethodWorkflowNode, nodeById: Map<string, MethodWorkflowNode>) {
+  return (node.depends_on ?? [])
+    .map((dep) => nodeById.get(dep))
+    .filter((dep): dep is MethodWorkflowNode => Boolean(dep && isResourceNode(dep)));
+}
+
+function firstResourceConsumer(draft: MethodDocument, resourceId: string) {
+  return draft.workflow.nodes.find((node) =>
+    isRunnableNode(node) && (node.depends_on ?? []).includes(resourceId),
+  );
 }
 
 function deriveMethodReadiness(draft: MethodDocument): MethodDraftReadiness {
@@ -233,16 +246,18 @@ function deriveMethodReadiness(draft: MethodDocument): MethodDraftReadiness {
   if (draft.workflow.nodes.length === 0) {
     blockers.push({ code: "missing_nodes", message: "Add at least one Method node before validation or execution." });
   }
-  if (draft.resources.length === 0) {
-    warnings.push({ code: "missing_resources", message: "No resources are attached yet." });
+  const resources = draft.workflow.nodes.filter(isResourceNode);
+  if (resources.length === 0) {
+    warnings.push({ code: "missing_resources", message: "No resource nodes are attached yet." });
   }
-  for (const resource of draft.resources) {
+  for (const resource of resources) {
     if (resourceStatus(resource) === "missing") {
+      const consumer = firstResourceConsumer(draft, resource.id);
       blockers.push({
         code: "missing_resource",
         message: `Attach ${resourceKindLabel(resource.kind).toLowerCase()} for '${resource.label || resource.id}'.`,
         resourceId: resource.id,
-        nodeId: resourceConsumers(resource)[0],
+        nodeId: consumer?.id,
       });
     }
   }
@@ -277,19 +292,21 @@ export function buildMethodGraphElements(
   draft: MethodDocument,
   executionNodes: MethodExecutionNodeSummary[] = [],
 ): MethodGraphElements {
-  const methodNodes = draft.workflow.nodes;
+  const allNodes = draft.workflow.nodes;
+  const methodNodes = allNodes.filter(isRunnableNode);
+  const resourceDraftNodes = allNodes.filter(isResourceNode);
   const graphEdges = methodEdges(draft);
   const readiness = deriveMethodReadiness(draft);
-  const nodeById = new Map(methodNodes.map((node) => [node.id, node]));
+  const nodeById = new Map(allNodes.map((node) => [node.id, node]));
   const order = buildNodeOrder(draft);
 
   const nodes: MethodFlowNode[] = methodNodes.map((node) => {
     const displayNode = nodeWithExecutionStatus(node, executionNodes);
     const row = order.get(node.id) ?? 0;
     const incomingLabels = graphEdges
-      .filter((edge) => edge.to === node.id)
+      .filter((edge) => edge.to === node.id && !isResourceNode(nodeById.get(edge.from) ?? node))
       .map((edge) => nodeById.get(edge.from)?.label || edge.from);
-    const resources = draft.resources.filter((resource) => resourceConsumers(resource).includes(node.id));
+    const resources = dependentResources(node, nodeById);
     const blockers = issuesForNode(readiness.blockers, node.id, resources);
     const warnings = issuesForNode(readiness.warnings, node.id, resources);
 
@@ -314,45 +331,38 @@ export function buildMethodGraphElements(
   });
 
   const nodeDataById = new Map(nodes.map((node) => [node.id, node.data]));
-  const resourceGroups = new Map<string, MethodResource[]>();
-  draft.resources.forEach((resource) => {
-    const validConsumers = resourceConsumers(resource).filter((nodeId) => nodeById.has(nodeId)).sort();
-    const key = validConsumers.length ? validConsumers.join("|") : `unused:${resource.id}`;
-    resourceGroups.set(key, [...(resourceGroups.get(key) ?? []), resource]);
-  });
-  const groupedResources = [...resourceGroups.entries()].map(([key, resources]) => ({
-    key,
-    resources,
-    consumers: key.startsWith("unused:") ? [] : key.split("|"),
-  }));
-
-  const resourceNodes: MethodResourceNode[] = groupedResources.map((group, index) => {
-    const consumerRows = group.consumers
+  const resourceNodes: MethodResourceNode[] = resourceDraftNodes.map((resource, index) => {
+    const consumers = methodNodes
+      .filter((node) => (node.depends_on ?? []).includes(resource.id))
+      .map((node) => node.id);
+    const consumerRows = consumers
       .map((nodeId) => order.get(nodeId))
       .filter((row): row is number => typeof row === "number");
     const firstRow = consumerRows.length ? Math.min(...consumerRows) : index;
-    const siblingIndex = groupedResources
+    const siblingIndex = resourceDraftNodes
       .slice(0, index)
       .filter((other) => {
-        const otherRows = other.consumers
-          .map((nodeId) => order.get(nodeId))
+        const otherConsumerRows = methodNodes
+          .filter((node) => (node.depends_on ?? []).includes(other.id))
+          .map((node) => order.get(node.id))
           .filter((row): row is number => typeof row === "number");
-        const otherFirstRow = otherRows.length ? Math.min(...otherRows) : 0;
+        const otherFirstRow = otherConsumerRows.length ? Math.min(...otherConsumerRows) : 0;
         return otherFirstRow === firstRow;
       }).length;
 
-    const id = resourceBundleId(group.resources);
     return {
-      id,
+      id: resource.id,
       type: "resource",
       position: {
         x: RESOURCE_NODE_X,
         y: firstRow * ROW_GAP + siblingIndex * (RESOURCE_NODE_HEIGHT + RESOURCE_NODE_GAP),
       },
-      data: { resources: group.resources },
+      data: { resource },
     };
   });
   const edges: Edge[] = graphEdges.map((edge) => {
+    const source = nodeById.get(edge.from);
+    const isResourceEdge = Boolean(source && isResourceNode(source));
     const targetData = nodeDataById.get(edge.to);
     const issueCount = (targetData?.blockerCount ?? 0) + (targetData?.warningCount ?? 0);
     return {
@@ -360,29 +370,16 @@ export function buildMethodGraphElements(
       source: edge.from,
       target: edge.to,
       type: "smoothstep",
-      sourceHandle: "bottom",
-      targetHandle: "top",
+      sourceHandle: isResourceEdge ? "right" : "bottom",
+      targetHandle: isResourceEdge ? "left" : "top",
       markerEnd: { type: MarkerType.ArrowClosed },
-      label: issueCount ? `${issueCount} issues` : undefined,
-      className: "method-flow-edge",
+      label: !isResourceEdge && issueCount ? `${issueCount} issues` : undefined,
+      className: `method-flow-edge${isResourceEdge ? " method-flow-resource-edge" : ""}`,
       labelClassName: "method-flow-edge-label",
     };
   });
-  const resourceEdges: Edge[] = groupedResources.flatMap((group) =>
-    group.consumers
-      .map((nodeId) => ({
-        id: `${resourceBundleId(group.resources)}-${nodeId}`,
-        source: resourceBundleId(group.resources),
-        target: nodeId,
-        type: "smoothstep",
-        sourceHandle: "right",
-        targetHandle: "left",
-        markerEnd: { type: MarkerType.ArrowClosed },
-        className: "method-flow-edge method-flow-resource-edge",
-      })),
-  );
 
-  return { nodes: [...resourceNodes, ...nodes], edges: [...resourceEdges, ...edges] };
+  return { nodes: [...resourceNodes, ...nodes], edges };
 }
 
 function MethodGraphNode({ data }: NodeProps<MethodFlowNode>) {
@@ -437,26 +434,20 @@ function MethodGraphNode({ data }: NodeProps<MethodFlowNode>) {
 }
 
 function MethodGraphResourceNode({ data }: NodeProps<MethodResourceNode>) {
-  const { resources } = data;
-  const shownResources = resources.slice(0, MAX_BUNDLE_RESOURCES);
-  const hasMissing = resources.some((resource) => resourceStatus(resource) === "missing");
+  const { resource } = data;
+  const hasMissing = resourceStatus(resource) === "missing";
 
   return (
     <article className={`method-flow-resource-node ${hasMissing ? "status-missing" : ""}`}>
       <div className="method-flow-resource-node-title">
-        <span>{resources.length === 1 ? "Input" : "Inputs"}</span>
-        <strong>{resources.length === 1 ? resources[0].label || resources[0].id : `${resources.length} shared inputs`}</strong>
+        <span>Input</span>
+        <strong>{resource.label || resource.id}</strong>
       </div>
       <div className="method-flow-resource-node-list">
-        {shownResources.map((resource) => (
-          <div key={resource.id}>
-            <span>{resourceKindLabel(resource.kind)}</span>
-            <code>{resourceLocation(resource)}</code>
-          </div>
-        ))}
-        {resources.length > shownResources.length && (
-          <span className="method-flow-more">+{resources.length - shownResources.length} more inputs</span>
-        )}
+        <div>
+          <span>{resourceKindLabel(resource.kind)}</span>
+          <code>{resourceLocation(resource)}</code>
+        </div>
       </div>
       <Handle id="right" type="source" position={Position.Right} isConnectable={false} />
     </article>
