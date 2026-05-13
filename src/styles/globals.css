@@ -2,30 +2,30 @@
    Theme tokens
 
    Switch themes by setting `data-theme="dark"` on the <html> root
-   (defaults to the "lab" theme below — lab-coat white workspaces
-   with a warm dark nav sidebar). All component CSS uses these
+   (defaults to the "dumpster" theme below — blue painted-metal chrome,
+   pale label surfaces, and caution-label actions). All component CSS uses these
    semantic variables exclusively; hardcoded color values should be
    added here instead of inline.
    ============================================================ */
 
 :root {
   /* ----- Layout surfaces ----- */
-  --bg-deepest: #f5f4ef;        /* outer page bg (lab-coat white, warm tint) */
-  --bg-dark: #ecebe6;           /* file-tree pane / secondary tone */
-  --bg-surface: #f8f7f3;        /* secondary sidebars (jobs list, collections list) */
+  --bg-deepest: #e4e9ec;        /* outer page bg / pale dumpster label stock */
+  --bg-dark: #d6dcdf;           /* expanded rows / secondary metal tone */
+  --bg-surface: #f2f5f6;        /* secondary sidebars (jobs list, collections list) */
   --bg-elevated: #ffffff;       /* cards, table containers */
-  --bg-hover: #ebeae5;          /* hover row/item */
-  --editor-bg: #fafaf7;         /* code editor */
+  --bg-hover: #dee1ec;          /* hover row/item, mixed from lavender-grey */
+  --editor-bg: #f8fafb;         /* code editor */
 
   /* The vertical icon nav (left rail) and the window topbar. Always contrasts
      with the workspace; the topbar uses the same color so they form an L. */
-  --nav-bg: #d36f05;
-  --nav-fg: #ffffff;
-  --nav-fg-muted: rgba(255, 255, 255, 0.7);
+  --nav-bg: #404778;
+  --nav-fg: #e4e9ec;
+  --nav-fg-muted: rgba(228, 233, 236, 0.7);
   --nav-fg-active: #ffffff;
-  --nav-active-bg: rgba(255, 255, 255, 0.2);
-  --nav-hover-bg: rgba(255, 255, 255, 0.12);
-  --nav-border: rgba(211, 111, 5, 0.24);
+  --nav-active-bg: rgba(228, 233, 236, 0.18);
+  --nav-hover-bg: rgba(228, 233, 236, 0.12);
+  --nav-border: rgba(63, 63, 65, 0.22);
 
   /* Topbar (window chrome). On macOS the traffic-light buttons overlay this. */
   --topbar-bg: var(--nav-bg);
@@ -33,18 +33,36 @@
   --topbar-height: 32px;
 
   /* ----- Text ----- */
-  --text-primary: #191118;
-  --text-secondary: #483a43;
-  --text-muted: #d36f05;
-  --text-on-accent: #ffffff;    /* readable text over --accent */
+  --text-primary: #252529;
+  --text-secondary: #3f3f41;
+  --text-muted: #6d6f6e;
+  --text-on-accent: #342e06;    /* readable text over --accent */
 
   /* ----- Accent ----- */
-  --accent: #ef9333;
-  --accent-dim: #d36f05;        /* button hover */
+  --accent: #edd926;
+  --accent-dim: #d6c31b;        /* button hover */
   /* Translucent accent variants for borders / glows / soft fills. */
-  --accent-soft: rgba(239, 147, 51, 0.12);
-  --accent-medium: rgba(239, 147, 51, 0.28);
-  --accent-strong: rgba(239, 147, 51, 0.45);
+  --accent-soft: rgba(237, 217, 38, 0.18);
+  --accent-medium: rgba(237, 217, 38, 0.36);
+  --accent-strong: rgba(237, 217, 38, 0.54);
+
+  /* ----- Label actions ----- */
+  --label-yellow: #edd926;
+  --label-yellow-hover: #d6c31b;
+  --label-white: #e4e9ec;
+  --label-red: #e0291f;
+  --label-ink: #342e06;
+  --action-primary-bg: var(--label-yellow);
+  --action-primary-hover-bg: var(--label-yellow-hover);
+  --action-primary-fg: var(--label-ink);
+  --action-secondary-bg: #ffffff;
+  --action-secondary-hover-bg: var(--label-white);
+  --action-secondary-fg: var(--label-ink);
+  --action-secondary-border: rgba(64, 71, 120, 0.34);
+  --action-danger-bg: var(--label-yellow);
+  --action-danger-hover-bg: var(--label-yellow-hover);
+  --action-danger-fg: var(--label-red);
+  --action-danger-border: rgba(224, 41, 31, 0.56);
 
   /* Legacy aliases — these names are referenced widely in the codebase. */
   --moon-glow: var(--accent);
@@ -53,30 +71,30 @@
   --moon-glow-strong: var(--accent-strong);
 
   /* ----- Borders ----- */
-  --border-color: rgba(211, 111, 5, 0.2);
-  --border-subtle: rgba(249, 186, 68, 0.16);
+  --border-color: rgba(109, 111, 110, 0.24);
+  --border-subtle: rgba(102, 107, 145, 0.17);
 
   /* ----- Status ----- */
   --status-completed: #15803d;
-  --status-running: #d36f05;
-  --status-warning: #b45309;
-  --status-failed: #b91c1c;
-  --status-pending: #525964;
+  --status-running: #edd926;
+  --status-warning: #342e06;
+  --status-failed: #e0291f;
+  --status-pending: #6d6f6e;
   --status-completed-bg: rgba(21, 128, 61, 0.1);
-  --status-running-bg: rgba(241, 176, 50, 0.16);
-  --status-warning-bg: rgba(180, 83, 9, 0.12);
-  --status-failed-bg: rgba(185, 28, 28, 0.1);
+  --status-running-bg: rgba(237, 217, 38, 0.2);
+  --status-warning-bg: rgba(237, 217, 38, 0.18);
+  --status-failed-bg: rgba(224, 41, 31, 0.1);
 
   /* ----- Inputs ----- */
   --input-bg: #ffffff;
-  --input-bg-readonly: #f3f3ee;
+  --input-bg-readonly: #edf1f3;
 
   /* ----- Scrollbar / shadows / overlays ----- */
-  --scrollbar-thumb: rgba(211, 111, 5, 0.24);
+  --scrollbar-thumb: rgba(64, 71, 120, 0.3);
   --scrollbar-track: transparent;
-  --shadow-sm: 0 4px 12px rgba(0, 0, 0, 0.06);
-  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.08);
-  --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.12);
+  --shadow-sm: 0 4px 12px rgba(63, 63, 65, 0.08);
+  --shadow-md: 0 8px 24px rgba(63, 63, 65, 0.1);
+  --shadow-lg: 0 12px 48px rgba(63, 63, 65, 0.14);
   --backdrop-bg: rgba(0, 0, 0, 0.4);
 
   /* ----- Type ----- */
@@ -114,6 +132,23 @@
   --accent-soft: rgba(237, 229, 196, 0.1);
   --accent-medium: rgba(237, 229, 196, 0.25);
   --accent-strong: rgba(237, 229, 196, 0.4);
+
+  --label-yellow: var(--accent);
+  --label-yellow-hover: var(--accent-dim);
+  --label-white: #161620;
+  --label-red: #e06b6b;
+  --label-ink: #050508;
+  --action-primary-bg: var(--accent);
+  --action-primary-hover-bg: var(--accent-dim);
+  --action-primary-fg: var(--text-on-accent);
+  --action-secondary-bg: var(--bg-elevated);
+  --action-secondary-hover-bg: var(--bg-hover);
+  --action-secondary-fg: var(--text-primary);
+  --action-secondary-border: var(--border-color);
+  --action-danger-bg: var(--status-failed-bg);
+  --action-danger-hover-bg: color-mix(in srgb, var(--status-failed) 20%, transparent);
+  --action-danger-fg: var(--status-failed);
+  --action-danger-border: color-mix(in srgb, var(--status-failed) 30%, transparent);
 
   --border-color: rgba(237, 229, 196, 0.07);
   --border-subtle: rgba(255, 255, 255, 0.03);
@@ -270,7 +305,7 @@ body {
    workspace on the right. The card's body extends past the rail's right
    border so the white meets the workspace edge-to-edge with no seam. */
 .sidebar-btn.active {
-  color: var(--accent);
+  color: var(--nav-bg);
   background: var(--bg-deepest);
   border-radius: 8px 0 0 8px;
   width: calc(100% + 9px);   /* 8px sidebar-nav padding + 1px nav border */
@@ -377,7 +412,7 @@ body {
 .file-dirty-marker {
   margin-left: auto;
   padding-right: 4px;
-  color: #eab308; /* amber-500: a clear unsaved-edit yellow */
+  color: var(--label-yellow);
   font-size: 10px;
   line-height: 1;
   flex-shrink: 0;
@@ -1551,36 +1586,37 @@ legend {
 }
 
 .btn-primary {
-  background: var(--moon-glow);
-  color: var(--bg-deepest);
+  background: var(--action-primary-bg);
+  color: var(--action-primary-fg);
+  border: 1px solid color-mix(in srgb, var(--action-primary-bg) 72%, var(--label-ink));
 }
 
 .btn-primary:hover:not(:disabled) {
-  background: var(--accent-dim);
+  background: var(--action-primary-hover-bg);
   transform: translateY(-1px);
 }
 
 .btn-secondary {
-  background: transparent;
-  border: 1px solid var(--border-color);
-  color: var(--text-secondary);
+  background: var(--action-secondary-bg);
+  border: 1px solid var(--action-secondary-border);
+  color: var(--action-secondary-fg);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  color: var(--text-primary);
-  border-color: var(--moon-glow-medium);
-  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  color: var(--action-secondary-fg);
+  border-color: color-mix(in srgb, var(--nav-bg) 48%, transparent);
+  background: var(--action-secondary-hover-bg);
 }
 
 .btn-danger {
-  background: color-mix(in srgb, var(--status-failed) 20%, transparent);
-  color: var(--status-failed);
-  border: 1px solid color-mix(in srgb, var(--status-failed) 30%, transparent);
+  background: var(--action-danger-bg);
+  color: var(--action-danger-fg);
+  border: 1px solid var(--action-danger-border);
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--status-failed) 30%, transparent);
-  border-color: color-mix(in srgb, var(--status-failed) 50%, transparent);
+  background: var(--action-danger-hover-bg);
+  border-color: var(--label-red);
 }
 
 .btn-primary:disabled,
@@ -1589,6 +1625,20 @@ legend {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none !important;
+}
+
+.job-runner-page .empty-state,
+.job-runner-page .progress-section,
+.job-runner-page .status-error,
+.job-runner-page .code-block,
+.job-runner-page .collections-section,
+.job-runner-page .loading-prompts,
+.job-runner-page .form-error,
+.job-runner-page fieldset,
+.job-runner-page .number-input button,
+.job-runner-page .number-input button:first-child,
+.job-runner-page .number-input button:last-child {
+  border-radius: 0;
 }
 
 /* ========================================
@@ -1740,17 +1790,17 @@ legend {
 }
 
 .collection-viewer .data-table .btn-danger {
-  background: transparent;
-  border: none;
+  background: var(--action-danger-bg);
+  border: 1px solid var(--action-danger-border);
   color: var(--status-failed);
   padding: 4px 8px;
   font-weight: 500;
 }
 
 .collection-viewer .data-table .btn-danger:hover:not(:disabled) {
-  background: transparent;
-  color: color-mix(in srgb, var(--status-failed) 80%, white);
-  text-decoration: underline;
+  background: var(--action-danger-hover-bg);
+  color: var(--status-failed);
+  text-decoration: none;
 }
 
 .collection-viewer .data-row {
@@ -1897,9 +1947,9 @@ legend {
 }
 
 .agent-workspace button {
-  border: 1px solid var(--border-color);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
+  border: 1px solid var(--action-secondary-border);
+  background: var(--action-secondary-bg);
+  color: var(--action-secondary-fg);
   padding: 8px 12px;
   border-radius: 6px;
   font: inherit;
@@ -1907,9 +1957,9 @@ legend {
 }
 
 .agent-workspace button.primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: white;
+  background: var(--action-primary-bg);
+  border-color: color-mix(in srgb, var(--action-primary-bg) 72%, var(--label-ink));
+  color: var(--action-primary-fg);
 }
 
 .agent-workspace button:disabled {
@@ -2081,9 +2131,9 @@ legend {
 
 .agent-command-row button,
 .agent-chat-input button {
-  border: 1px solid var(--border-color);
-  background: var(--bg-elevated);
-  color: var(--text-primary);
+  border: 1px solid var(--action-secondary-border);
+  background: var(--action-secondary-bg);
+  color: var(--action-secondary-fg);
   border-radius: 6px;
   font: inherit;
   cursor: pointer;
@@ -2130,11 +2180,11 @@ legend {
 .agent-pane-resizer:hover::before,
 .agent-pane-resizer:focus-visible::before {
   width: 2px;
-  background: var(--accent);
+  background: var(--nav-bg);
 }
 
 .agent-pane-resizer:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--nav-bg);
   outline-offset: -2px;
 }
 
@@ -2160,8 +2210,8 @@ legend {
 
 .agent-message.user {
   align-self: flex-end;
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--action-primary-bg);
+  border-color: color-mix(in srgb, var(--action-primary-bg) 72%, var(--label-ink));
   color: var(--text-on-accent);
 }
 
@@ -2337,9 +2387,9 @@ legend {
 }
 
 .agent-chat-input button {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--text-on-accent);
+  background: var(--action-primary-bg);
+  border-color: color-mix(in srgb, var(--action-primary-bg) 72%, var(--label-ink));
+  color: var(--action-primary-fg);
 }
 
 .agent-visual-panel {
@@ -2384,10 +2434,10 @@ legend {
 .method-execution-controls button {
   min-width: 0;
   height: 30px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--action-secondary-border);
   border-radius: 6px;
-  background: var(--bg-elevated);
-  color: var(--text-primary);
+  background: var(--action-secondary-bg);
+  color: var(--action-secondary-fg);
   font-size: 12px;
 }
 
@@ -2397,6 +2447,13 @@ legend {
 
 .method-execution-controls button {
   padding: 0 10px;
+}
+
+.method-execution-controls button:nth-of-type(2),
+.method-execution-controls button:nth-of-type(3) {
+  background: var(--action-primary-bg);
+  border-color: color-mix(in srgb, var(--action-primary-bg) 72%, var(--label-ink));
+  color: var(--action-primary-fg);
 }
 
 .method-execution-controls button:disabled,
@@ -2446,12 +2503,12 @@ legend {
 }
 
 .method-flow .react-flow__edge-path {
-  stroke: var(--accent);
+  stroke: var(--nav-bg);
   stroke-width: 1.8;
 }
 
 .method-flow .method-flow-resource-edge .react-flow__edge-path {
-  stroke: var(--text-secondary);
+  stroke: var(--text-muted);
   stroke-dasharray: 4 4;
   stroke-width: 1.5;
 }
@@ -2466,13 +2523,13 @@ legend {
   width: 8px;
   height: 8px;
   border: 2px solid var(--bg-elevated);
-  background: var(--accent);
+  background: var(--nav-bg);
 }
 
 .method-flow-node {
   width: 300px;
   min-height: 180px;
-  border: 2px solid var(--border-color);
+  border: 2px solid color-mix(in srgb, var(--nav-bg) 30%, var(--border-color));
   border-radius: 8px;
   padding: 11px;
   display: grid;
@@ -2482,7 +2539,8 @@ legend {
 }
 
 .method-flow-node.status-running {
-  border-color: var(--status-running);
+  border-color: var(--label-yellow);
+  box-shadow: 0 0 0 1px var(--accent-soft), var(--shadow-sm);
 }
 
 .method-flow-node.status-queued,
@@ -2646,14 +2704,15 @@ legend {
 }
 
 .method-flow-resource-node {
-  width: 260px;
-  min-height: 118px;
+  width: 300px;
+  min-height: 90px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-  padding: 9px 10px;
+  padding: 12px;
   display: grid;
-  gap: 7px;
-  background: var(--bg-surface);
+  align-content: start;
+  gap: 14px;
+  background: var(--bg-elevated);
   box-shadow: var(--shadow-sm);
 }
 
@@ -2667,6 +2726,7 @@ legend {
   display: flex;
   align-items: baseline;
   gap: 7px;
+  flex-wrap: wrap;
 }
 
 .method-flow-resource-node-list {
@@ -2680,9 +2740,6 @@ legend {
 .method-flow-resource-node code,
 .method-flow-node-issues span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: 11px;
 }
 
@@ -2694,11 +2751,18 @@ legend {
 .method-flow-resource-node strong {
   color: var(--text-primary);
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .method-flow-resource-node code {
   color: var(--text-secondary);
   font-family: var(--font-mono);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.method-flow-node-issues span {
+  white-space: nowrap;
 }
 
 .method-flow-node-issues span {
@@ -2715,4 +2779,19 @@ legend {
 .agent-empty-visual {
   margin-top: 18px;
   color: var(--text-secondary);
+}
+
+.agent-workspace button,
+.agent-command-row button,
+.agent-chat-input button,
+.agent-chat-input input,
+.agent-message,
+.agent-tool-trace-detail pre,
+.workflow-node,
+.method-execution-controls select,
+.method-execution-controls button,
+.method-action-feedback,
+.method-flow-node,
+.method-flow-resource-node {
+  border-radius: 0;
 }

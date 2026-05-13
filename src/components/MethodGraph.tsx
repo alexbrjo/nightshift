@@ -24,11 +24,11 @@ const ROW_GAP = NODE_HEIGHT + 64;
 const MAX_CONFIG_HINTS = 3;
 const MAX_NODE_ISSUES = 3;
 const METHOD_NODE_X = 0;
-const RESOURCE_NODE_X = -340;
-const RESOURCE_NODE_HEIGHT = 118;
+const RESOURCE_NODE_GAP_X = 116;
+const RESOURCE_NODE_HEIGHT = NODE_HEIGHT / 2;
 const RESOURCE_NODE_GAP = 14;
 const METHOD_NODE_WIDTH = 300;
-const RESOURCE_NODE_WIDTH = 260;
+const RESOURCE_NODE_WIDTH = METHOD_NODE_WIDTH;
 const GRAPH_FIT_PADDING = 24;
 const MIN_GRAPH_ZOOM = 0.18;
 const MAX_GRAPH_ZOOM = 1.08;
@@ -339,7 +339,7 @@ export function buildMethodGraphElements(
       .map((nodeId) => order.get(nodeId))
       .filter((row): row is number => typeof row === "number");
     const firstRow = consumerRows.length ? Math.min(...consumerRows) : index;
-    const siblingIndex = resourceDraftNodes
+    const siblingOffset = resourceDraftNodes
       .slice(0, index)
       .filter((other) => {
         const otherConsumerRows = methodNodes
@@ -348,14 +348,15 @@ export function buildMethodGraphElements(
           .filter((row): row is number => typeof row === "number");
         const otherFirstRow = otherConsumerRows.length ? Math.min(...otherConsumerRows) : 0;
         return otherFirstRow === firstRow;
-      }).length;
+      })
+      .length * (RESOURCE_NODE_HEIGHT + RESOURCE_NODE_GAP);
 
     return {
       id: resource.id,
       type: "resource",
       position: {
-        x: RESOURCE_NODE_X,
-        y: firstRow * ROW_GAP + siblingIndex * (RESOURCE_NODE_HEIGHT + RESOURCE_NODE_GAP),
+        x: -(RESOURCE_NODE_WIDTH + RESOURCE_NODE_GAP_X),
+        y: firstRow * ROW_GAP + siblingOffset,
       },
       data: { resource },
     };

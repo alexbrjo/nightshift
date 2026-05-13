@@ -63,7 +63,7 @@ describe("buildMethodGraphElements", () => {
       expect.objectContaining({
         id: "prompt",
         type: "resource",
-        position: { x: -340, y: 0 },
+        position: { x: -416, y: 0 },
         data: { resource: expect.objectContaining({ id: "prompt" }) },
       }),
       expect.objectContaining({
@@ -114,6 +114,36 @@ describe("buildMethodGraphElements", () => {
     expect(methodNodes[1].data.incomingLabels).toEqual(["Generate answers"]);
     expect(methodNodes[1].data.warningCount).toBe(0);
     expect(methodNodes[1].data.issues).toEqual([]);
+  });
+
+  it("uses uniform resource nodes at method width and half method height", () => {
+    const draft = methodDraft({
+      workflow: {
+        nodes: [
+          {
+            id: "long_prompt",
+            label: "Flash-card generation prompt template",
+            type: "resource",
+            kind: "prompt",
+            path: "flash_cards/flash_card_prompt_template.jinja2",
+          },
+          {
+            id: "generate",
+            label: "Generate cards",
+            type: "inference",
+            depends_on: ["long_prompt"],
+            config: {},
+          },
+        ],
+      },
+    });
+
+    const graph = buildMethodGraphElements(draft);
+    const resource = graph.nodes.find((node) => node.id === "long_prompt");
+
+    expect(resource?.type).toBe("resource");
+    expect(resource?.style).toBeUndefined();
+    expect(resource?.position.x).toBe(-416);
   });
 
   it("renders shared resource nodes as first-class inputs", () => {
@@ -227,7 +257,12 @@ describe("buildMethodGraphElements", () => {
     const viewport = fitMethodGraphViewport(graph.nodes, { width: 360, height: 640 });
 
     const rightEdge = Math.max(
-      ...graph.nodes.map((node) => node.position.x + (node.type === "resource" ? 260 : 300)),
+      ...graph.nodes.map((node) => {
+        const width = node.type === "resource"
+          ? 300
+          : 300;
+        return node.position.x + width;
+      }),
     );
     const leftEdge = Math.min(...graph.nodes.map((node) => node.position.x));
 
