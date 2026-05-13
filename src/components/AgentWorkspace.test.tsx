@@ -1,7 +1,12 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../setupTests";
-import AgentWorkspace, { shouldPersistProjectConversations } from "./AgentWorkspace";
+import AgentWorkspace, {
+  ChatPanel,
+  MethodExecutionGraphPanel,
+  MethodWorkspaceProvider,
+  shouldPersistProjectConversations,
+} from "./AgentWorkspace";
 
 const eventBus = vi.hoisted(() => ({
   handlers: new Map<string, Array<(event: { payload: Record<string, unknown> | null }) => void>>(),
@@ -103,6 +108,69 @@ describe("AgentWorkspace", () => {
     expect(screen.getByRole("button", { name: "Execute Draft" })).toBeInTheDocument();
   });
 
+  it("refreshes execution graph panels from execution events without polling", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    let executionStatus = "running";
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_conversations":
+          return Promise.resolve(null);
+        case "save_project_conversations":
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "list_method_executions":
+          return Promise.resolve([{ id: 42, methodId: "method-hash", status: executionStatus, createdAt: "2026-05-13T00:00:00Z" }]);
+        case "get_method":
+          return Promise.resolve({
+            schema_version: 2,
+            id: "method-hash",
+            title: "Evented Method",
+            objective: "Verify execution refresh",
+            workflow: { nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }] },
+            parameters: {},
+            provider: {},
+            outputs: [],
+            metadata: {},
+          });
+        case "get_method_execution_nodes":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(
+      <MethodWorkspaceProvider>
+        <MethodExecutionGraphPanel executionId={42} />
+      </MethodWorkspaceProvider>,
+    );
+
+    expect(await screen.findByText("running")).toBeInTheDocument();
+    expect(setIntervalSpy.mock.calls.some(([, delay]) => delay === 5000)).toBe(false);
+    const initialLoads = mockInvoke.mock.calls.filter(([command]) => command === "list_method_executions").length;
+
+    executionStatus = "completed";
+    await waitFor(() => {
+      expect(eventBus.handlers.get("method-execution-event")?.length ?? 0).toBeGreaterThan(0);
+    });
+    await act(async () => {
+      eventBus.handlers.get("method-execution-event")?.forEach((handler) =>
+        handler({ payload: { executionId: 42 } }),
+      );
+    });
+
+    expect(await screen.findByText("completed")).toBeInTheDocument();
+    expect(mockInvoke.mock.calls.filter(([command]) => command === "list_method_executions").length)
+      .toBeGreaterThan(initialLoads);
+    setIntervalSpy.mockRestore();
+  });
+
   it("sends chat through the design bridge", async () => {
     render(<AgentWorkspace />);
 
@@ -117,6 +185,31 @@ describe("AgentWorkspace", () => {
       expect(screen.getAllByText("Help me design a benchmark Method").length).toBeGreaterThan(0);
       expect(screen.queryByText(/Turn turn_456/i)).not.toBeInTheDocument();
     });
+  });
+
+  it("keeps separate mounted ChatPanel instances independent before they become saved chats", async () => {
+    render(
+      <MethodWorkspaceProvider>
+        <ChatPanel />
+        <ChatPanel />
+      </MethodWorkspaceProvider>,
+    );
+
+    const inputs = await screen.findAllByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(inputs[0], { target: { value: "Independent first draft" } });
+    fireEvent.change(inputs[1], { target: { value: "Independent second draft" } });
+
+    expect(inputs[0]).toHaveValue("Independent first draft");
+    expect(inputs[1]).toHaveValue("Independent second draft");
+
+    fireEvent.submit(inputs[0].closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("send_design_chat_message", {
+        input: { message: "Independent first draft" },
+      });
+    });
+    expect(inputs[1]).toHaveValue("Independent second draft");
   });
 
   it("renders user messages and thinking state as passive chat history", async () => {

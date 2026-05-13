@@ -281,6 +281,7 @@ function ChatComposer({
   onSubmit,
   isSending,
   activeTurn,
+  isSendDisabled,
   isConnecting,
   contextTokenEstimate,
   modelConfigLabel,
@@ -291,6 +292,7 @@ function ChatComposer({
   onSubmit: () => void;
   isSending: boolean;
   activeTurn: CodexTurnSummary | null;
+  isSendDisabled?: boolean;
   isConnecting: boolean;
   contextTokenEstimate: number;
   modelConfigLabel: string;
@@ -322,7 +324,7 @@ function ChatComposer({
           <span>{formatTokenCount(contextTokenEstimate)} context tokens</span>
           <span>{modelConfigLabel}</span>
         </div>
-        <button type="submit" disabled={isSending || isConnecting}>
+        <button type="submit" disabled={(isSendDisabled ?? isSending) || isConnecting}>
           {isSending ? "Sending" : "Send"}
         </button>
       </div>
@@ -337,6 +339,7 @@ function ChatPanelView({
   onSubmit,
   isSending,
   activeTurn,
+  isSendDisabled,
   isConnecting,
   modelConfigLabel,
   inputRef,
@@ -347,6 +350,7 @@ function ChatPanelView({
   onSubmit: () => void;
   isSending: boolean;
   activeTurn: CodexTurnSummary | null;
+  isSendDisabled?: boolean;
   isConnecting: boolean;
   modelConfigLabel: string;
   inputRef?: RefObject<HTMLTextAreaElement | null>;
@@ -368,6 +372,7 @@ function ChatPanelView({
           onSubmit={onSubmit}
           isSending={isSending}
           activeTurn={activeTurn}
+          isSendDisabled={isSendDisabled}
           isConnecting={isConnecting}
           contextTokenEstimate={contextTokenEstimate}
           modelConfigLabel={modelConfigLabel}
@@ -581,7 +586,11 @@ function useMethodWorkspace() {
 }
 
 export function ChatPanel({ chatId }: { chatId?: string | null }) {
-  return <>{useMethodWorkspace().renderChatPanel(chatId)}</>;
+  const generatedChatIdRef = useRef<string | null>(null);
+  if (!chatId && !generatedChatIdRef.current) {
+    generatedChatIdRef.current = createChatSession().id;
+  }
+  return <>{useMethodWorkspace().renderChatPanel(chatId ?? generatedChatIdRef.current)}</>;
 }
 
 export function DraftMethodGraphPanel() {
@@ -626,11 +635,11 @@ export function MethodWorkspaceProvider({
   const [agentConfig, setAgentConfig] = useState<DesignAgentConfig | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>(() => (
+  const [sendingChatId, setSendingChatId] = useState<string | null>(null);
+  const activeMessages = useMemo(() => (
     chatSessions.find((chat) => chat.id === activeChatId)?.messages
-      ?? chatSessions[0]?.messages
       ?? []
-  ));
+  ), [activeChatId, chatSessions]);
   const activeDraftKey = activeChatId ?? NEW_CHAT_DRAFT_KEY;
   const activeInput = composerDrafts[activeDraftKey] ?? "";
 
@@ -665,7 +674,6 @@ export function MethodWorkspaceProvider({
     activeChatIdRef.current = nextActiveChat?.id ?? null;
     setChatSessions(nextSessions);
     setActiveChatId(nextActiveChat?.id ?? null);
-    setMessages(nextActiveChat?.messages ?? []);
   }, [initialChatId]);
 
   const loadProjectChatSessions = useCallback(async () => {
@@ -729,21 +737,6 @@ export function MethodWorkspaceProvider({
   }, [chatPersistenceReady, chatSessions]);
 
   useEffect(() => {
-    if (!activeChatId) return;
-    setChatSessions((current) => {
-      let changed = false;
-      const next = current.map((chat) => {
-        if (chat.id !== activeChatId) return chat;
-        const title = fallbackChatTitle(messages);
-        const updated = { ...chat, title, updatedAt: new Date().toISOString(), messages };
-        changed = true;
-        return updated;
-      });
-      return changed ? next : current;
-    });
-  }, [activeChatId, messages]);
-
-  useEffect(() => {
     let cancelled = false;
     invoke<DesignAgentConfig | null>("get_design_agent_config")
       .then((config) => {
@@ -763,9 +756,6 @@ export function MethodWorkspaceProvider({
     chatId: string,
     updater: (current: ChatMessage[]) => ChatMessage[],
   ) => {
-    if (activeChatIdRef.current === chatId) {
-      setMessages(updater);
-    }
     setChatSessions((current) => {
       let found = false;
       const next = current.map((chat) => {
@@ -801,7 +791,6 @@ export function MethodWorkspaceProvider({
     const chat = chatSessions.find((candidate) => candidate.id === chatId);
     if (!chat || chat.id === activeChatIdRef.current) return;
     activeChatIdRef.current = chat.id;
-    setMessages(chat.messages);
     setActiveChatId(chat.id);
   }, [chatSessions]);
 
@@ -809,7 +798,6 @@ export function MethodWorkspaceProvider({
     const chat = createChatSession();
     activeChatIdRef.current = chat.id;
     setChatSessions((current) => [chat, ...current]);
-    setMessages(chat.messages);
     setActiveChatId(chat.id);
   }, []);
 
@@ -963,7 +951,6 @@ export function MethodWorkspaceProvider({
       if (!activeChatIdRef.current) {
         activeChatIdRef.current = targetChatId;
         setActiveChatId(targetChatId);
-        setMessages([]);
       }
       if (payload.eventType === "item/agentMessage/delta" && payload.textDelta) {
         updateChatMessages(targetChatId, (current) =>
@@ -1020,6 +1007,7 @@ export function MethodWorkspaceProvider({
       }
       if (payload.eventType === "turn/completed") {
         setIsSending(false);
+        setSendingChatId(null);
         setActiveTurn(null);
         pendingTurnChatIdRef.current = null;
         if (payload.status === "failed") {
@@ -1036,6 +1024,7 @@ export function MethodWorkspaceProvider({
       }
       if (payload.eventType.startsWith("connection/") && payload.errorMessage) {
         setIsSending(false);
+        setSendingChatId(null);
         setActiveTurn(null);
         pendingTurnChatIdRef.current = null;
         updateChatMessages(targetChatId, (current) => [
@@ -1083,9 +1072,9 @@ export function MethodWorkspaceProvider({
     if (activeChatIdRef.current !== submittingChatId) {
       activeChatIdRef.current = submittingChatId;
       setActiveChatId(submittingChatId);
-      setMessages(contextMessages);
     }
     pendingTurnChatIdRef.current = submittingChatId;
+    setSendingChatId(submittingChatId);
     const messageForAgent = agentInputWithContext(contextMessages, text);
     updateChatMessages(submittingChatId, (current) => [
       ...current,
@@ -1099,6 +1088,7 @@ export function MethodWorkspaceProvider({
       updateChatMessages(submittingChatId, (current) => current.filter((message) => message.status !== "pending"));
     } catch (err) {
       setIsSending(false);
+      setSendingChatId(null);
       pendingTurnChatIdRef.current = null;
       updateChatMessages(submittingChatId, (current) => [
         ...current.filter((message) => message.status !== "pending"),
@@ -1111,8 +1101,8 @@ export function MethodWorkspaceProvider({
     const text = activeInput.trim();
     if (!text || isSending) return;
     clearComposerInput(activeChatIdRef.current);
-    await submitChatMessage(activeChatIdRef.current, messages, text);
-  }, [activeInput, clearComposerInput, isSending, messages, submitChatMessage]);
+    await submitChatMessage(activeChatIdRef.current, activeMessages, text);
+  }, [activeInput, activeMessages, clearComposerInput, isSending, submitChatMessage]);
 
   const executeCurrentDraft = useCallback(async () => {
     if (!draft || isExecutingMethod) return;
@@ -1150,24 +1140,27 @@ export function MethodWorkspaceProvider({
 
   const renderActiveChatPanel = useCallback(() => (
     <ChatPanelView
-      messages={messages}
+      messages={activeMessages}
       input={activeInput}
       setInput={(value) => setComposerInput(activeChatIdRef.current, value)}
       onSubmit={() => void handleSubmit()}
-      isSending={isSending}
-      activeTurn={activeTurn}
+      isSending={isSending && sendingChatId === activeChatId}
+      activeTurn={sendingChatId === activeChatId ? activeTurn : null}
+      isSendDisabled={isSending}
       isConnecting={isConnecting}
       modelConfigLabel={modelConfigLabel}
       inputRef={inputRef}
     />
   ), [
+    activeChatId,
     activeInput,
+    activeMessages,
     activeTurn,
     handleSubmit,
     isConnecting,
     isSending,
-    messages,
     modelConfigLabel,
+    sendingChatId,
     setComposerInput,
   ]);
 
@@ -1184,8 +1177,9 @@ export function MethodWorkspaceProvider({
           clearComposerInput(chat.id);
           void submitChatMessage(chat.id, chat.messages, text);
         }}
-        isSending={isSending}
-        activeTurn={activeTurn}
+        isSending={isSending && sendingChatId === chat.id}
+        activeTurn={sendingChatId === chat.id ? activeTurn : null}
+        isSendDisabled={isSending}
         isConnecting={isConnecting}
         modelConfigLabel={modelConfigLabel}
       />
@@ -1197,6 +1191,39 @@ export function MethodWorkspaceProvider({
     isConnecting,
     isSending,
     modelConfigLabel,
+    sendingChatId,
+    setComposerInput,
+    submitChatMessage,
+  ]);
+
+  const renderEmptyChatPanel = useCallback((chatId: string) => {
+    const input = composerDrafts[chatId] ?? "";
+    return (
+      <ChatPanelView
+        messages={[]}
+        input={input}
+        setInput={(value) => setComposerInput(chatId, value)}
+        onSubmit={() => {
+          const text = input.trim();
+          if (!text) return;
+          clearComposerInput(chatId);
+          void submitChatMessage(chatId, [], text);
+        }}
+        isSending={isSending && sendingChatId === chatId}
+        activeTurn={sendingChatId === chatId ? activeTurn : null}
+        isSendDisabled={isSending}
+        isConnecting={isConnecting}
+        modelConfigLabel={modelConfigLabel}
+      />
+    );
+  }, [
+    activeTurn,
+    clearComposerInput,
+    composerDrafts,
+    isConnecting,
+    isSending,
+    modelConfigLabel,
+    sendingChatId,
     setComposerInput,
     submitChatMessage,
   ]);
@@ -1234,10 +1261,10 @@ export function MethodWorkspaceProvider({
     }
     const chat = chatSessions.find((candidate) => candidate.id === chatId);
     if (!chat) {
-      return renderActiveChatPanel();
+      return renderEmptyChatPanel(chatId);
     }
     return renderSavedChatPanel(chat);
-  }, [chatSessions, renderActiveChatPanel, renderSavedChatPanel]);
+  }, [chatSessions, renderActiveChatPanel, renderEmptyChatPanel, renderSavedChatPanel]);
 
   const graphPanel = useMemo(() => (
     <div className="agent-visual-panel agent-graph-sidebar">
@@ -1379,16 +1406,6 @@ function ExecutionGraphPanelView({ executionId }: { executionId?: string | numbe
   useEffect(() => {
     void loadExecution();
   }, [loadExecution]);
-
-  useEffect(() => {
-    if (!Number.isFinite(numericExecutionId) || ["completed", "completed_with_errors", "failed", "cancelled"].includes(status)) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      void loadExecution();
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [loadExecution, numericExecutionId, status]);
 
   useEffect(() => {
     let cancelled = false;
