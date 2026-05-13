@@ -19,6 +19,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 describe("AgentWorkspace", () => {
   beforeEach(() => {
     eventBus.handlers = new Map();
+    localStorage.clear();
     mockInvoke.mockReset();
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
@@ -28,6 +29,8 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ threadId: "thr_123" });
         case "send_design_chat_message":
           return Promise.resolve({ threadId: "thr_123", turnId: "turn_456" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
         case "get_current_method_draft":
           return Promise.resolve(null);
         case "list_methods":
@@ -77,9 +80,198 @@ describe("AgentWorkspace", () => {
       expect(mockInvoke).toHaveBeenCalledWith("send_design_chat_message", {
         input: { message: "Help me design a benchmark Method" },
       });
-      expect(screen.getByText("Help me design a benchmark Method")).toBeInTheDocument();
+      expect(screen.getAllByText("Help me design a benchmark Method").length).toBeGreaterThan(0);
       expect(screen.queryByText(/Turn turn_456/i)).not.toBeInTheDocument();
     });
+  });
+
+  it("renders user messages and thinking state as passive chat history", async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "send_design_chat_message":
+          return new Promise(() => {});
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<AgentWorkspace />);
+
+    const input = await screen.findByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(input, { target: { value: "search the folder" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      const userMessage = screen.getAllByText("search the folder")
+        .find((element) => element.closest(".agent-message.user"));
+      expect(userMessage?.closest(".agent-message.user")).toHaveClass("completed");
+      expect(screen.getByText("Thinking")).toHaveClass("agent-thinking-indicator");
+      expect(screen.getByText("Thinking").closest(".agent-message.system")).toHaveClass("pending");
+    });
+  });
+
+  it("uses a wrapping expandable textarea for long planning prompts", async () => {
+    render(<AgentWorkspace />);
+
+    const input = await screen.findByPlaceholderText(/Describe or refine/i);
+    expect(input.tagName).toBe("TEXTAREA");
+
+    fireEvent.change(input, {
+      target: {
+        value: "Can edge models get to 50% accuracy?\nTest 2 local model sizes and compare failure modes.",
+      },
+    });
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: true });
+    expect(input).toHaveValue(
+      "Can edge models get to 50% accuracy?\nTest 2 local model sizes and compare failure modes.",
+    );
+
+    fireEvent.keyDown(input, { key: "Enter", shiftKey: false });
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("send_design_chat_message", {
+        input: {
+          message: "Can edge models get to 50% accuracy?\nTest 2 local model sizes and compare failure modes.",
+        },
+      });
+    });
+  });
+
+  it("shows composer context and planning agent model metrics below the textarea", async () => {
+    render(<AgentWorkspace />);
+
+    const input = await screen.findByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(input, {
+      target: { value: "Measure accuracy for local models with controlled variables." },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Planning agent metrics")).toHaveTextContent("context tokens");
+      expect(screen.getByLabelText("Planning agent metrics")).toHaveTextContent("gpt-5.5");
+      expect(screen.getByLabelText("Planning agent metrics")).toHaveTextContent("reasoning auto");
+      expect(screen.getByLabelText("Planning agent metrics")).toHaveTextContent("20 tool loops");
+    });
+    expect(screen.getByRole("button", { name: "Send" }).closest(".agent-chat-input-footer")).toBeInTheDocument();
+  });
+
+  it("persists planning chats across remounts", async () => {
+    const { unmount } = render(<AgentWorkspace />);
+
+    const input = await screen.findByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(input, { target: { value: "Persistent benchmark plan" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Persistent benchmark plan").length).toBeGreaterThan(0);
+      expect(
+        screen.getAllByText("Persistent benchmark plan")
+          .some((element) => element.closest(".agent-chat-list-item")),
+      ).toBe(true);
+    });
+
+    unmount();
+    render(<AgentWorkspace />);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Persistent benchmark plan").length).toBeGreaterThan(0);
+    });
+    expect(screen.getByLabelText("Planning chats")).toBeInTheDocument();
+  });
+
+  it("creates and switches between planning chats from the sidebar", async () => {
+    render(<AgentWorkspace />);
+
+    const input = await screen.findByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(input, { target: { value: "First plan" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+    await waitFor(() => {
+      expect(screen.getAllByText("First plan").length).toBeGreaterThan(0);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    expect(document.querySelector(".agent-chat-scroll")).not.toHaveTextContent("First plan");
+    expect(screen.getByText("New planning chat").closest(".agent-chat-list-item")).toHaveClass("selected");
+
+    fireEvent.change(screen.getByPlaceholderText(/Describe or refine/i), { target: { value: "Second plan" } });
+    fireEvent.submit(screen.getByPlaceholderText(/Describe or refine/i).closest("form") as HTMLFormElement);
+    await waitFor(() => {
+      expect(screen.getAllByText("Second plan").length).toBeGreaterThan(0);
+    });
+
+    fireEvent.click(screen.getByText("First plan").closest(".agent-chat-list-item") as HTMLElement);
+    const scroll = document.querySelector(".agent-chat-scroll") as HTMLElement;
+    expect(scroll).toHaveTextContent("First plan");
+    expect(scroll).not.toHaveTextContent("Second plan");
+  });
+
+  it("routes in-flight agent events to the chat that submitted the turn", async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "send_design_chat_message":
+          return new Promise(() => {});
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<AgentWorkspace />);
+
+    const input = await screen.findByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(input, { target: { value: "First active plan" } });
+    fireEvent.submit(input.closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(screen.getAllByText("First active plan").length).toBeGreaterThan(0);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "+ New" }));
+    expect(document.querySelector(".agent-chat-scroll")).not.toHaveTextContent("First active plan");
+
+    eventBus.handlers.get("codex-app-server-event")?.forEach((handler) =>
+      handler({
+        payload: {
+          eventType: "item/completed",
+          threadId: "thr_123",
+          turnId: "turn_456",
+          itemId: "assistant_1",
+          messageText: "Original chat response",
+          raw: {},
+        },
+      }),
+    );
+
+    await waitFor(() => {
+      expect(document.querySelector(".agent-chat-scroll")).not.toHaveTextContent("Original chat response");
+    });
+
+    fireEvent.click(screen.getByText("First active plan").closest(".agent-chat-list-item") as HTMLElement);
+    expect(document.querySelector(".agent-chat-scroll")).toHaveTextContent("Original chat response");
   });
 
   it("renders streamed assistant deltas without event names", async () => {
@@ -121,7 +313,7 @@ describe("AgentWorkspace", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("list")).toBeInTheDocument();
+      expect(screen.getAllByRole("list").length).toBeGreaterThan(0);
       expect(screen.getByText("prompt.jinja2")).toBeInTheDocument();
       expect(screen.getByText("model")).toBeInTheDocument();
       expect(screen.queryByText(/- Added `prompt\.jinja2`/)).not.toBeInTheDocument();
@@ -716,7 +908,7 @@ describe("AgentWorkspace", () => {
     fireEvent.submit(input.closest("form") as HTMLFormElement);
 
     await waitFor(() => {
-      expect(screen.getByText("hello")).toBeInTheDocument();
+      expect(screen.getAllByText("hello").length).toBeGreaterThan(0);
       expect(screen.getByText(/I could not reach the design agent/i)).toBeInTheDocument();
       expect(screen.queryByText("Failed")).not.toBeInTheDocument();
     });

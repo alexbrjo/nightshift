@@ -115,6 +115,12 @@ export interface CodexTurnSummary {
   turnId: string;
 }
 
+export interface DesignAgentConfig {
+  model: string;
+  reasoningSummary: string;
+  maxToolLoops: number;
+}
+
 export interface CodexAppServerEvent {
   eventType: string;
   threadId?: string;

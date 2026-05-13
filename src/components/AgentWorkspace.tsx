@@ -10,6 +10,7 @@ import type {
   CodexAppServerEvent,
   CodexAppServerSession,
   CodexTurnSummary,
+  DesignAgentConfig,
   MethodDocument,
   MethodExecutionNodeSummary,
   MethodExecutionSummary,
@@ -28,6 +29,14 @@ interface ChatMessage {
   toolOutput?: Record<string, unknown>;
   outputSummary?: string;
   durationMs?: number;
+}
+
+interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messages: ChatMessage[];
 }
 
 interface ToolTraceGroup {
@@ -73,6 +82,13 @@ const MARKDOWN_COMPONENTS: Components = {
 };
 
 const RAW_SCRIPT_OR_STYLE_BLOCK = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
+const CHAT_STORAGE_KEY = "nightshift-agent-chats:v1";
+const WELCOME_MESSAGE: ChatMessage = {
+  id: "welcome",
+  role: "assistant",
+  text: "Describe the Method you want to design. I can help shape the workflow and keep the draft state visible beside chat.",
+  status: "completed",
+};
 
 interface MethodExecutionEventPayload {
   executionId: number;
@@ -160,6 +176,13 @@ function markdownSource(text: string) {
 
 function AgentMessageBody({ message }: { message: ChatMessage }) {
   if (message.role === "user") return <>{message.text}</>;
+  if (message.status === "pending" && message.text === "Thinking") {
+    return (
+      <span className="agent-thinking-indicator">
+        Thinking<span className="agent-thinking-dots" aria-hidden="true" />
+      </span>
+    );
+  }
   return (
     <div className="agent-message-rendered">
       <ReactMarkdown
@@ -206,6 +229,111 @@ function userFacingError(err: unknown) {
   return `I could not reach the design agent: ${String(err)}`;
 }
 
+function fallbackChatTitle(messages: ChatMessage[]) {
+  const firstUserMessage = messages.find((message) => message.role === "user" && message.text.trim());
+  if (!firstUserMessage) return "New planning chat";
+  const normalized = firstUserMessage.text.trim().replace(/\s+/g, " ");
+  return normalized.length > 42 ? `${normalized.slice(0, 39)}...` : normalized;
+}
+
+function createChatSession(messages: ChatMessage[] = [{ ...WELCOME_MESSAGE }]): ChatSession {
+  const now = new Date().toISOString();
+  return {
+    id: `chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    title: fallbackChatTitle(messages),
+    createdAt: now,
+    updatedAt: now,
+    messages,
+  };
+}
+
+function isChatMessage(value: unknown): value is ChatMessage {
+  return Boolean(
+    value
+      && typeof value === "object"
+      && !Array.isArray(value)
+      && "id" in value
+      && "role" in value
+      && "text" in value,
+  );
+}
+
+function isDesignAgentConfig(value: unknown): value is DesignAgentConfig {
+  return Boolean(
+    value
+      && typeof value === "object"
+      && !Array.isArray(value)
+      && "model" in value
+      && "reasoningSummary" in value
+      && "maxToolLoops" in value,
+  );
+}
+
+function normalizeChatSessions(value: unknown): ChatSession[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((chat): chat is ChatSession => {
+      if (!chat || typeof chat !== "object" || Array.isArray(chat)) return false;
+      const candidate = chat as Partial<ChatSession>;
+      return Boolean(
+        typeof candidate.id === "string"
+          && typeof candidate.title === "string"
+          && typeof candidate.createdAt === "string"
+          && typeof candidate.updatedAt === "string"
+          && Array.isArray(candidate.messages)
+          && candidate.messages.every(isChatMessage),
+      );
+    })
+    .map((chat) => ({
+      ...chat,
+      messages: chat.messages.length > 0 ? chat.messages : [{ ...WELCOME_MESSAGE }],
+    }));
+}
+
+function loadPersistedChatSessions(): ChatSession[] {
+  if (typeof window === "undefined") return [createChatSession()];
+  try {
+    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
+    const sessions = raw ? normalizeChatSessions(JSON.parse(raw)) : [];
+    return sessions.length > 0 ? sessions : [createChatSession()];
+  } catch {
+    return [createChatSession()];
+  }
+}
+
+function visibleTranscript(messages: ChatMessage[]) {
+  return messages
+    .filter((message) =>
+      message.status !== "pending"
+      && message.role !== "trace"
+      && message.id !== WELCOME_MESSAGE.id
+      && message.text.trim(),
+    )
+    .slice(-12)
+    .map((message) => `${message.role}: ${message.text.trim()}`)
+    .join("\n\n");
+}
+
+function agentInputWithContext(messages: ChatMessage[], nextMessage: string) {
+  const transcript = visibleTranscript(messages);
+  if (!transcript) return nextMessage;
+  return [
+    "Use this existing planning chat context before answering or changing the Method draft:",
+    transcript,
+    "New user message:",
+    nextMessage,
+  ].join("\n\n");
+}
+
+function estimateTokenCount(text: string) {
+  if (!text.trim()) return 0;
+  return Math.max(1, Math.ceil(text.trim().length / 4));
+}
+
+function formatTokenCount(count: number) {
+  return count >= 1000 ? `${(count / 1000).toFixed(count >= 10000 ? 0 : 1)}k` : String(count);
+}
+
 function isMissingProjectError(err: unknown) {
   const message = String(err);
   return message.includes("No project folder is open")
@@ -236,6 +364,11 @@ function derivedDraftReadiness(draft: MethodDocument | null) {
 
 export default function AgentWorkspace() {
   const hasProjectRootRef = useRef(false);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const [chatSessions, setChatSessions] = useState<ChatSession[]>(loadPersistedChatSessions);
+  const [activeChatId, setActiveChatId] = useState(() => chatSessions[0]?.id ?? createChatSession().id);
+  const activeChatIdRef = useRef(activeChatId);
+  const pendingTurnChatIdRef = useRef<string | null>(null);
   const [session, setSession] = useState<CodexAppServerSession | null>(null);
   const [activeTurn, setActiveTurn] = useState<CodexTurnSummary | null>(null);
   const [draft, setDraft] = useState<MethodDocument | null>(null);
@@ -251,22 +384,97 @@ export default function AgentWorkspace() {
     text: string;
   } | null>(null);
   const [input, setInput] = useState("");
+  const [agentConfig, setAgentConfig] = useState<DesignAgentConfig | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSending, setIsSending] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "assistant",
-      text: "Describe the Method you want to design. I can help shape the workflow and keep the draft state visible beside chat.",
-      status: "completed",
-    },
-  ]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => chatSessions[0]?.messages ?? [{ ...WELCOME_MESSAGE }]);
+
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [input]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(chatSessions));
+  }, [chatSessions]);
+
+  useEffect(() => {
+    setChatSessions((current) => {
+      let changed = false;
+      const next = current.map((chat) => {
+        if (chat.id !== activeChatId) return chat;
+        const title = fallbackChatTitle(messages);
+        const updated = { ...chat, title, updatedAt: new Date().toISOString(), messages };
+        changed = true;
+        return updated;
+      });
+      return changed ? next : current;
+    });
+  }, [activeChatId, messages]);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<DesignAgentConfig | null>("get_design_agent_config")
+      .then((config) => {
+        if (!cancelled && isDesignAgentConfig(config)) setAgentConfig(config);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setAgentConfig({ model: "unknown", reasoningSummary: "unknown", maxToolLoops: 0 });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const addSystemMessage = useCallback((text: string, status: ChatMessage["status"] = "completed") => {
     setMessages((current) => [
       ...current,
       { id: `system-${Date.now()}-${current.length}`, role: "system", text, status },
     ]);
+  }, []);
+
+  const updateChatMessages = useCallback((
+    chatId: string,
+    updater: (current: ChatMessage[]) => ChatMessage[],
+  ) => {
+    if (activeChatIdRef.current === chatId) {
+      setMessages(updater);
+    }
+    setChatSessions((current) =>
+      current.map((chat) => {
+        if (chat.id !== chatId) return chat;
+        const nextMessages = updater(chat.messages);
+        return {
+          ...chat,
+          title: fallbackChatTitle(nextMessages),
+          updatedAt: new Date().toISOString(),
+          messages: nextMessages,
+        };
+      }),
+    );
+  }, []);
+
+  const selectChat = useCallback((chatId: string) => {
+    const chat = chatSessions.find((candidate) => candidate.id === chatId);
+    if (!chat || chat.id === activeChatIdRef.current) return;
+    activeChatIdRef.current = chat.id;
+    setInput("");
+    setMessages(chat.messages);
+    setActiveChatId(chat.id);
+  }, [chatSessions]);
+
+  const startNewChat = useCallback(() => {
+    const chat = createChatSession();
+    activeChatIdRef.current = chat.id;
+    setChatSessions((current) => [chat, ...current]);
+    setInput("");
+    setMessages(chat.messages);
+    setActiveChatId(chat.id);
   }, []);
 
   const startSession = useCallback(async (options?: { silentMissingProject?: boolean }) => {
@@ -432,8 +640,9 @@ export default function AgentWorkspace() {
     listen<CodexAppServerEvent>("codex-app-server-event", (event) => {
       if (cancelled) return;
       const payload = event.payload;
+      const targetChatId = pendingTurnChatIdRef.current ?? activeChatIdRef.current;
       if (payload.eventType === "item/agentMessage/delta" && payload.textDelta) {
-        setMessages((current) =>
+        updateChatMessages(targetChatId, (current) =>
           appendDelta(
             current,
             payload.itemId ?? `assistant-${payload.turnId ?? Date.now()}`,
@@ -442,7 +651,7 @@ export default function AgentWorkspace() {
         );
       }
       if (payload.eventType === "item/completed" && payload.messageText) {
-        setMessages((current) =>
+        updateChatMessages(targetChatId, (current) =>
           upsertAssistantMessage(
             current,
             payload.itemId ?? `assistant-${payload.turnId ?? Date.now()}`,
@@ -451,7 +660,7 @@ export default function AgentWorkspace() {
         );
       }
       if (payload.eventType.includes("reasoningSummary") && payload.messageText) {
-        setMessages((current) =>
+        updateChatMessages(targetChatId, (current) =>
           upsertTraceMessage(
             current,
             payload.itemId ?? `reasoning-${payload.turnId ?? Date.now()}`,
@@ -462,7 +671,7 @@ export default function AgentWorkspace() {
         );
       }
       if (payload.eventType.startsWith("item/toolCall/")) {
-        setMessages((current) =>
+        updateChatMessages(targetChatId, (current) =>
           upsertTraceMessage(
             current,
             payload.itemId ?? `tool-${payload.turnId ?? Date.now()}-${payload.toolName ?? "unknown"}`,
@@ -482,14 +691,32 @@ export default function AgentWorkspace() {
       if (payload.eventType === "turn/completed") {
         setIsSending(false);
         setActiveTurn(null);
+        pendingTurnChatIdRef.current = null;
         if (payload.status === "failed") {
-          addSystemMessage(payload.errorMessage ?? "The design turn failed.", "failed");
+          updateChatMessages(targetChatId, (current) => [
+            ...current,
+            {
+              id: `system-${Date.now()}-${current.length}`,
+              role: "system",
+              text: payload.errorMessage ?? "The design turn failed.",
+              status: "failed",
+            },
+          ]);
         }
       }
       if (payload.eventType.startsWith("connection/") && payload.errorMessage) {
         setIsSending(false);
         setActiveTurn(null);
-        addSystemMessage(userFacingError(payload.errorMessage), "failed");
+        pendingTurnChatIdRef.current = null;
+        updateChatMessages(targetChatId, (current) => [
+          ...current,
+          {
+            id: `system-${Date.now()}-${current.length}`,
+            role: "system",
+            text: userFacingError(payload.errorMessage),
+            status: "failed",
+          },
+        ]);
       }
     })
       .then((fn) => {
@@ -503,7 +730,7 @@ export default function AgentWorkspace() {
       cancelled = true;
       unlisten?.();
     };
-  }, [addSystemMessage]);
+  }, [addSystemMessage, updateChatMessages]);
 
   const handleSubmit = async () => {
     const text = input.trim();
@@ -514,19 +741,23 @@ export default function AgentWorkspace() {
     }
     setInput("");
     setIsSending(true);
-    setMessages((current) => [
+    const submittingChatId = activeChatIdRef.current;
+    pendingTurnChatIdRef.current = submittingChatId;
+    const messageForAgent = agentInputWithContext(messages, text);
+    updateChatMessages(submittingChatId, (current) => [
       ...current,
       { id: `user-${Date.now()}`, role: "user", text, status: "completed" },
-      { id: `pending-${Date.now()}`, role: "system", text: "Thinking...", status: "pending" },
+      { id: `pending-${Date.now()}`, role: "system", text: "Thinking", status: "pending" },
     ]);
     try {
-      const turn = await invoke<CodexTurnSummary>("send_design_chat_message", { input: { message: text } });
+      const turn = await invoke<CodexTurnSummary>("send_design_chat_message", { input: { message: messageForAgent } });
       setActiveTurn(turn);
       setSession({ threadId: turn.threadId });
-      setMessages((current) => current.filter((message) => message.status !== "pending"));
+      updateChatMessages(submittingChatId, (current) => current.filter((message) => message.status !== "pending"));
     } catch (err) {
       setIsSending(false);
-      setMessages((current) => [
+      pendingTurnChatIdRef.current = null;
+      updateChatMessages(submittingChatId, (current) => [
         ...current.filter((message) => message.status !== "pending"),
         { id: `send-error-${Date.now()}`, role: "system", text: userFacingError(err), status: "failed" },
       ]);
@@ -583,9 +814,40 @@ export default function AgentWorkspace() {
   };
 
   const chatItems = groupToolTraceMessages(messages);
+  const contextTokenEstimate = estimateTokenCount(agentInputWithContext(messages, input.trim()));
+  const modelConfigLabel = agentConfig
+    ? `${agentConfig.model} · reasoning ${agentConfig.reasoningSummary}${
+      agentConfig.maxToolLoops ? ` · ${agentConfig.maxToolLoops} tool loops` : ""
+    }`
+    : "loading model config";
 
   return (
     <div className="agent-chat-workspace">
+      <aside className="agent-chats-sidebar">
+        <header className="agent-chats-header">
+          <h2>Chats</h2>
+          <button type="button" className="btn-primary btn-small" onClick={startNewChat}>
+            + New
+          </button>
+        </header>
+
+        <ul className="agent-chat-list" aria-label="Planning chats">
+          {chatSessions.map((chat) => (
+            <li
+              key={chat.id}
+              className={`agent-chat-list-item${activeChatId === chat.id ? " selected" : ""}`}
+              onClick={() => selectChat(chat.id)}
+            >
+              <div className="agent-chat-list-title">{chat.title}</div>
+              <div className="agent-chat-list-meta">
+                {chat.messages.filter((message) => message.role === "user").length} message
+                {chat.messages.filter((message) => message.role === "user").length === 1 ? "" : "s"}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </aside>
+
       <PanelGroup
         id="agent-chat-main"
         className="agent-chat-main"
@@ -657,15 +919,28 @@ export default function AgentWorkspace() {
               void handleSubmit();
             }}
           >
-            <input
+            <textarea
+              ref={inputRef}
               value={input}
               onChange={(event) => setInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  void handleSubmit();
+                }
+              }}
               placeholder="Describe or refine a Method"
               disabled={isSending && Boolean(activeTurn)}
             />
-            <button type="submit" disabled={isSending || isConnecting}>
-              {isSending ? "Sending" : "Send"}
-            </button>
+            <div className="agent-chat-input-footer">
+              <div className="agent-chat-input-metrics" aria-label="Planning agent metrics">
+                <span>{formatTokenCount(contextTokenEstimate)} context tokens</span>
+                <span>{modelConfigLabel}</span>
+              </div>
+              <button type="submit" disabled={isSending || isConnecting}>
+                {isSending ? "Sending" : "Send"}
+              </button>
+            </div>
           </form>
         </Panel>
 

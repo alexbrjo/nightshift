@@ -107,6 +107,7 @@ fn main() {
             // Methods
             start_design_session,
             send_design_chat_message,
+            get_design_agent_config,
             get_method_agent_function_tools,
             call_method_agent_function_tool,
             get_current_method_draft,

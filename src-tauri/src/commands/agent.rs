@@ -23,9 +23,29 @@ pub struct CallMethodAgentFunctionToolInput {
     pub arguments: Value,
 }
 
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DesignAgentConfig {
+    pub model: String,
+    pub reasoning_summary: String,
+    pub max_tool_loops: usize,
+}
+
 #[tauri::command]
 pub async fn get_method_agent_function_tools() -> Result<Vec<Value>, String> {
     Ok(method_function_tools())
+}
+
+#[tauri::command]
+pub async fn get_design_agent_config() -> Result<DesignAgentConfig, String> {
+    let model = std::env::var("NIGHTSHIFT_METHOD_AGENT_MODEL").unwrap_or_else(|_| "gpt-5.5".into());
+    let reasoning_summary =
+        if method_agent_reasoning_config(&model).is_some() { "auto" } else { "off" }.to_string();
+    Ok(DesignAgentConfig {
+        model,
+        reasoning_summary,
+        max_tool_loops: METHOD_AGENT_MAX_TOOL_LOOPS,
+    })
 }
 
 #[tauri::command]

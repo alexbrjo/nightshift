@@ -12,7 +12,7 @@ describe("App", () => {
 
   it("renders without crashing", () => {
     render(<App />);
-    expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
+    expect(screen.getByText(/Describe the Method you want to design/)).toBeDefined();
   });
 
   it("renders sidebar with all section buttons", () => {
@@ -20,15 +20,16 @@ describe("App", () => {
     expect(document.querySelectorAll(".sidebar-btn").length).toBe(4);
   });
 
-  it("defaults to code-editor section", () => {
+  it("defaults to experiment-designer section", () => {
     render(<App />);
-    expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
+    expect(screen.getByText(/Describe the Method you want to design/)).toBeDefined();
+    expect(document.querySelectorAll(".sidebar-btn")[0]).toHaveClass("active");
   });
 
   it("switches to collection-viewer section", async () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
-    fireEvent.click(buttons[1]);
+    fireEvent.click(buttons[2]);
     await waitFor(() => expect(screen.getByText("Collections")).toBeDefined());
   });
 
@@ -36,7 +37,7 @@ describe("App", () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
     
-    fireEvent.click(buttons[2]);
+    fireEvent.click(buttons[3]);
     
     const jobText = await screen.findAllByText(/No inference jobs yet|Create Inference Job/i);
     expect(jobText.length).toBeGreaterThan(0);
@@ -45,7 +46,7 @@ describe("App", () => {
   it("switches to experiment-designer section", () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
-    fireEvent.click(buttons[3]);
+    fireEvent.click(buttons[0]);
     expect(screen.getByText(/Describe the Method you want to design/)).toBeDefined();
   });
 
@@ -61,6 +62,7 @@ describe("App", () => {
 
   it("shows editor placeholder when no file is open", () => {
     render(<App />);
+    fireEvent.click(document.querySelectorAll(".sidebar-btn")[1]);
     expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
   });
 
@@ -71,13 +73,12 @@ describe("App", () => {
 
   it("hides FileTree when not in code-editor section", () => {
     render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
-    fireEvent.click(buttons[1]);
     expect(document.querySelector(".file-tree-panel")).toHaveClass("hidden");
   });
 
   it("shows FileTree when in code-editor section", () => {
     render(<App />);
+    fireEvent.click(document.querySelectorAll(".sidebar-btn")[1]);
     expect(document.querySelector(".file-tree-panel")).not.toHaveClass("hidden");
   });
 
@@ -105,20 +106,20 @@ describe("App", () => {
   it("renders section buttons with correct titles", () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
-    expect(buttons[0]).toHaveAttribute("title", "Project");
-    expect(buttons[1]).toHaveAttribute("title", "Collections");
-    expect(buttons[2]).toHaveAttribute("title", "Inference Jobs");
-    expect(buttons[3]).toHaveAttribute("title", "Agent");
+    expect(buttons[0]).toHaveAttribute("title", "Agent");
+    expect(buttons[1]).toHaveAttribute("title", "Project");
+    expect(buttons[2]).toHaveAttribute("title", "Collections");
+    expect(buttons[3]).toHaveAttribute("title", "Inference Jobs");
   });
 
   it("navigates back to code-editor from another section", async () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
 
-    fireEvent.click(buttons[1]);
+    fireEvent.click(buttons[2]);
     await waitFor(() => expect(screen.getByText("Collections")).toBeDefined());
 
-    fireEvent.click(buttons[0]);
+    fireEvent.click(buttons[1]);
     expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
   });
 
@@ -144,30 +145,29 @@ describe("App", () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
 
-    fireEvent.click(buttons[3]);
     const input = await screen.findByPlaceholderText(/Describe or refine/i);
     fireEvent.change(input, { target: { value: "keep this chat around" } });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
 
     await waitFor(() => {
-      expect(screen.getByText("keep this chat around")).toBeDefined();
+      expect(screen.getAllByText("keep this chat around").length).toBeGreaterThan(0);
     });
 
-    fireEvent.click(buttons[0]);
+    fireEvent.click(buttons[1]);
     expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
 
-    fireEvent.click(buttons[3]);
-    expect(screen.getByText("keep this chat around")).toBeDefined();
+    fireEvent.click(buttons[0]);
+    expect(screen.getAllByText("keep this chat around").length).toBeGreaterThan(0);
   });
 
   it("workspace has full-width class for non-editor sections", () => {
     render(<App />);
     const buttons = document.querySelectorAll(".sidebar-btn");
 
-    fireEvent.click(buttons[1]);
+    fireEvent.click(buttons[2]);
     expect(document.querySelector(".collections-page")).toHaveClass("full-width");
 
-    fireEvent.click(buttons[0]);
+    fireEvent.click(buttons[1]);
     expect(document.querySelector("main.workspace:not(.full-width)")).toBeDefined();
   });
 

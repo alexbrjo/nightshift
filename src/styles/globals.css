@@ -829,7 +829,8 @@ body {
 }
 
 .job-list-sidebar,
-.collections-sidebar {
+.collections-sidebar,
+.agent-chats-sidebar {
   flex: 0 0 280px;
   display: flex;
   flex-direction: column;
@@ -840,7 +841,8 @@ body {
 }
 
 .job-list-header,
-.collections-sidebar-header {
+.collections-sidebar-header,
+.agent-chats-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -851,7 +853,8 @@ body {
 }
 
 .job-list-header h2,
-.collections-sidebar-header h2 {
+.collections-sidebar-header h2,
+.agent-chats-header h2 {
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
@@ -859,19 +862,22 @@ body {
 }
 
 .job-list-empty,
-.collections-empty {
+.collections-empty,
+.agent-chats-empty {
   padding: 24px 20px;
   color: var(--text-muted);
   font-size: 13px;
 }
 
 .job-list-empty p,
-.collections-empty p {
+.collections-empty p,
+.agent-chats-empty p {
   margin-bottom: 12px;
 }
 
 .job-list,
-.collection-list {
+.collection-list,
+.agent-chat-list {
   list-style: none;
   flex: 1;
   overflow-y: auto;
@@ -880,19 +886,22 @@ body {
 }
 
 .job-item,
-.collection-item {
+.collection-item,
+.agent-chat-list-item {
   padding: 12px 20px;
   cursor: pointer;
   transition: background-color 0.15s ease;
 }
 
 .job-item:hover,
-.collection-item:hover {
+.collection-item:hover,
+.agent-chat-list-item:hover {
   background: var(--bg-hover);
 }
 
 .job-item.selected,
-.collection-item.selected {
+.collection-item.selected,
+.agent-chat-list-item.selected {
   background: var(--bg-hover);
 }
 
@@ -905,7 +914,8 @@ body {
 }
 
 .job-name,
-.collection-name {
+.collection-name,
+.agent-chat-list-title {
   font-size: 13px;
   font-weight: 500;
   color: var(--text-primary);
@@ -915,6 +925,10 @@ body {
 }
 
 .collection-name {
+  margin-bottom: 6px;
+}
+
+.agent-chat-list-title {
   margin-bottom: 6px;
 }
 
@@ -2123,10 +2137,21 @@ legend {
   height: 100%;
   min-width: 0;
   min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  display: flex;
   background: var(--bg-deepest);
   color: var(--text-primary);
+}
+
+.agent-chats-sidebar {
+  flex-basis: 280px;
+}
+
+.agent-chat-list-meta {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .agent-command-row button,
@@ -2145,6 +2170,7 @@ legend {
 }
 
 .agent-chat-main {
+  flex: 1;
   min-width: 0;
   min-height: 0;
   height: 100%;
@@ -2162,24 +2188,22 @@ legend {
 .agent-pane-resizer {
   position: relative;
   z-index: 2;
-  flex: 0 0 10px;
-  width: 10px;
+  flex: 0 0 1px;
+  width: 1px;
   cursor: col-resize;
-  background: var(--bg-deepest);
+  background: var(--border-color);
   touch-action: none;
 }
 
 .agent-pane-resizer::before {
   content: "";
   position: absolute;
-  inset: 0 auto 0 4px;
-  width: 1px;
-  background: var(--border-color);
+  inset: 0 -5px;
+  background: transparent;
 }
 
-.agent-pane-resizer:hover::before,
-.agent-pane-resizer:focus-visible::before {
-  width: 2px;
+.agent-pane-resizer:hover,
+.agent-pane-resizer:focus-visible {
   background: var(--nav-bg);
 }
 
@@ -2282,9 +2306,9 @@ legend {
 
 .agent-message.user {
   align-self: flex-end;
-  background: var(--action-primary-bg);
-  border-color: color-mix(in srgb, var(--action-primary-bg) 72%, var(--label-ink));
-  color: var(--text-on-accent);
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--nav-bg) 18%, var(--border-color));
+  color: var(--text-primary);
 }
 
 .agent-message.system {
@@ -2409,9 +2433,53 @@ legend {
   line-height: 1.4;
 }
 
-.agent-message.pending,
 .agent-message.streaming:not(.trace) {
   border-color: var(--status-running);
+}
+
+.agent-message.system.pending {
+  align-self: stretch;
+  max-width: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.agent-thinking-indicator {
+  display: inline-flex;
+  align-items: baseline;
+  min-height: 22px;
+}
+
+.agent-thinking-dots {
+  display: inline-block;
+  width: 3ch;
+  text-align: left;
+}
+
+.agent-thinking-dots::after {
+  content: "";
+  animation: agent-thinking-dots 1.2s steps(1, end) infinite;
+}
+
+@keyframes agent-thinking-dots {
+  0%,
+  24% {
+    content: ".";
+  }
+  25%,
+  49% {
+    content: "..";
+  }
+  50%,
+  74% {
+    content: "...";
+  }
+  75%,
+  100% {
+    content: "";
+  }
 }
 
 .agent-message.error {
@@ -2441,21 +2509,49 @@ legend {
 
 .agent-chat-input {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
   padding: 14px 18px 18px;
   border-top: 1px solid var(--border-color);
   background: var(--bg-surface);
 }
 
-.agent-chat-input input {
+.agent-chat-input textarea {
   min-width: 0;
+  max-height: 180px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
   padding: 11px 12px;
   background: var(--input-bg);
   color: var(--text-primary);
   font: inherit;
+  line-height: 1.4;
+  overflow-y: auto;
+  resize: none;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-chat-input-footer {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-chat-input-metrics {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.agent-chat-input-metrics span {
+  min-width: 0;
 }
 
 .agent-chat-input button {
@@ -2856,7 +2952,7 @@ legend {
 .agent-workspace button,
 .agent-command-row button,
 .agent-chat-input button,
-.agent-chat-input input,
+.agent-chat-input textarea,
 .agent-message,
 .agent-tool-trace-detail pre,
 .workflow-node,

@@ -49,7 +49,7 @@ describe("page surface shape rules", () => {
 
   it("keeps the planning agent workspace square", () => {
     expect(css).toContain(".agent-workspace button,");
-    expect(css).toContain(".agent-chat-input input,");
+    expect(css).toContain(".agent-chat-input textarea,");
     expect(css).toContain(".method-flow-resource-node");
     expect(css).toContain("border-radius: 0;");
   });

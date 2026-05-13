@@ -55,7 +55,7 @@ function getLanguage(filename: string): string | undefined {
 }
 
 export default function App() {
-  const [activeSection, setActiveSection] = useState<Section>("code-editor");
+  const [activeSection, setActiveSection] = useState<Section>("experiment-designer");
   const [activeFile, setActiveFile] = useState<{
     path: string;
     name: string;
@@ -90,14 +90,14 @@ export default function App() {
   }, [isDark]);
 
   const sections: { id: Section; icon: ReactNode; label: string }[] = [
-    { id: "code-editor", icon: <DropperIcon />, label: "Project" },
-    { id: "collection-viewer", icon: <CabinetIcon />, label: "Collections" },
-    { id: "job-runner", icon: <TestTubeIcon />, label: "Inference Jobs" },
     {
       id: "experiment-designer",
       icon: <RackIcon />,
       label: "Agent",
     },
+    { id: "code-editor", icon: <DropperIcon />, label: "Project" },
+    { id: "collection-viewer", icon: <CabinetIcon />, label: "Collections" },
+    { id: "job-runner", icon: <TestTubeIcon />, label: "Inference Jobs" },
   ];
 
   const handleFileOpen = useCallback(async (node: FsNode) => {
