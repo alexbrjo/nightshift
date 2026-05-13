@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use crate::database::DatabaseState;
 use crate::job_executor::{JobEvent, JobExecutor, WorkerConfig};
@@ -19,12 +19,16 @@ use super::config::{
     config_f64, config_i32, config_string, method_file_by_kind, model_values,
     resolve_configured_file, runnable_dependency_ids, runnable_nodes, yaml_lookup, yaml_string,
 };
+use super::draft::{get_current_draft_for_root, method_document_for_save};
 use super::model::{
-    MethodArtifactSummary, MethodDocument, MethodExecutionEventSummary, MethodExecutionNodeSummary,
-    MethodExecutionSummary, MethodWorkflowNode,
+    ExecuteCurrentMethodDraftResult, MethodArtifactSummary, MethodDocument,
+    MethodExecutionEventSummary, MethodExecutionNodeSummary, MethodExecutionSummary,
+    MethodWorkflowNode,
 };
 use super::paths::{method_dir, project_root, validate_method_id};
-use super::storage::{hash_directory, hex, read_manifest};
+use super::storage::{
+    hash_directory, hex, read_manifest, save_method_to_project_content_addressed,
+};
 use super::validation::validate_method;
 
 fn method_level_config_string(method: &MethodDocument, key: &str) -> Option<String> {
@@ -1627,24 +1631,16 @@ pub(crate) async fn orchestrate_method_execution(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn execute_method(
+async fn start_method_execution(
     app: AppHandle,
     db: State<'_, DatabaseState>,
     manager: State<'_, MethodExecutionManager>,
-    id: String,
+    method: MethodDocument,
+    content_hash: String,
 ) -> Result<i64, String> {
-    validate_method_id(&id)?;
-    let root = project_root(&db)?;
-    let folder = method_dir(&root, &id);
-    let method = read_manifest(&folder)?;
-    validate_method(&method)?;
-    let content_hash = hash_directory(&folder)?;
     tracing::info!(
-        project_root = %root.display(),
         method_id = %method.id,
         title = %method.title,
-        folder = %folder.display(),
         content_hash = %content_hash,
         provider = ?method_level_config_string(&method, "provider"),
         server_url = ?method_level_config_string(&method, "server_url"),
@@ -1683,6 +1679,53 @@ pub async fn execute_method(
     });
 
     Ok(execution_id)
+}
+
+#[tauri::command]
+pub async fn execute_method(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    manager: State<'_, MethodExecutionManager>,
+    id: String,
+) -> Result<i64, String> {
+    validate_method_id(&id)?;
+    let root = project_root(&db)?;
+    let folder = method_dir(&root, &id);
+    let method = read_manifest(&folder)?;
+    validate_method(&method)?;
+    let content_hash = hash_directory(&folder)?;
+    tracing::info!(
+        project_root = %root.display(),
+        method_id = %method.id,
+        title = %method.title,
+        folder = %folder.display(),
+        content_hash = %content_hash,
+        provider = ?method_level_config_string(&method, "provider"),
+        server_url = ?method_level_config_string(&method, "server_url"),
+        model_values = ?model_values(&method),
+        "Starting Method execution command"
+    );
+    let execution_id = start_method_execution(app, db, manager, method, content_hash).await?;
+
+    Ok(execution_id)
+}
+
+#[tauri::command]
+pub async fn execute_current_method_draft(
+    app: AppHandle,
+    db: State<'_, DatabaseState>,
+    manager: State<'_, MethodExecutionManager>,
+) -> Result<ExecuteCurrentMethodDraftResult, String> {
+    let root = project_root(&db)?;
+    let draft = get_current_draft_for_root(&root)?
+        .ok_or_else(|| "No Method draft exists yet".to_string())?;
+    let method = method_document_for_save(&draft)?;
+    let summary = save_method_to_project_content_addressed(&db, &root, method).await?;
+    let frozen = read_manifest(&method_dir(&root, &summary.id))?;
+    validate_method(&frozen)?;
+    let execution_id =
+        start_method_execution(app, db, manager, frozen, summary.content_hash.clone()).await?;
+    Ok(ExecuteCurrentMethodDraftResult { method: summary, execution_id })
 }
 
 #[tauri::command]

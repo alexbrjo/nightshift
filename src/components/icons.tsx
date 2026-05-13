@@ -12,6 +12,7 @@ import {
   GiFiles,
   GiTestTubes,
   GiFizzingFlask,
+  GiCheckboxTree,
 } from "react-icons/gi";
 import logoLightUrl from "../../src-tauri/icons/nightshift_icon_light.png";
 
@@ -33,6 +34,10 @@ export function TestTubeIcon() {
 
 export function RackIcon() {
   return <GiFizzingFlask size={ICON_SIZE} />;
+}
+
+export function MethodIcon() {
+  return <GiCheckboxTree size={ICON_SIZE} />;
 }
 
 /** Inline pipette icon — used in action buttons. Inherits text color and

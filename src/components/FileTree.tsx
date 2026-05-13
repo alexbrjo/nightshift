@@ -170,12 +170,16 @@ export default function FileTree({
   dirtyPaths,
   getActiveContent,
   className = "",
+  refreshKey = 0,
+  onRootNameChange,
 }: {
   onFileOpen: (node: FsNode) => void;
   onFileSaved?: (path: string) => void;
   dirtyPaths?: Set<string>;
   getActiveContent: (filePath?: string) => string | undefined;
   className?: string;
+  refreshKey?: number;
+  onRootNameChange?: (name: string) => void;
 }) {
   const dirty = dirtyPaths ?? EMPTY_DIRTY;
   const [nodes, setNodes] = useState<FsNode[]>([]);
@@ -228,6 +232,7 @@ export default function FileTree({
 
         const result: ScanFolderResult = await invoke("scan_folder", { path: lastPath });
         setRootName(result.name);
+        onRootNameChange?.(result.name);
         setRootPath(lastPath);
         setNodes(buildPaths(result.children, ""));
         await loadExpandedState(lastPath);
@@ -236,7 +241,7 @@ export default function FileTree({
       }
     }
     tryAutoOpen();
-  }, [loadExpandedState]);
+  }, [loadExpandedState, onRootNameChange]);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -266,6 +271,7 @@ export default function FileTree({
       const result: ScanFolderResult = await invoke("scan_folder", { path });
 
       setRootName(result.name);
+      onRootNameChange?.(result.name);
       setRootPath(path);
       setNodes(buildPaths(result.children, ""));
       setExpandedFolders(new Set());
@@ -274,7 +280,7 @@ export default function FileTree({
     } catch (err) {
       showToast(`Failed to open folder: ${err}`);
     }
-  }, [loadExpandedState]);
+  }, [loadExpandedState, onRootNameChange]);
 
   const handleFileClick = useCallback(
     async (node: FsNode) => {
@@ -308,11 +314,18 @@ export default function FileTree({
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       const result: ScanFolderResult = await invoke("scan_folder", { path: rootPath });
+      setRootName(result.name);
+      onRootNameChange?.(result.name);
       setNodes(buildPaths(result.children, ""));
     } catch (err) {
       showToast(`Failed to refresh tree: ${err}`);
     }
-  }, [rootPath]);
+  }, [rootPath, onRootNameChange]);
+
+  useEffect(() => {
+    if (refreshKey === 0) return;
+    void refreshTree();
+  }, [refreshKey, refreshTree]);
 
   const executeRename = useCallback(
     async (node: FsNode, newName: string) => {
@@ -497,25 +510,16 @@ export default function FileTree({
         ) : (
           <>
             <div
-              className="tree-header"
-              onContextMenu={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const rootNode: FsNode = {
-                  name: rootName,
-                  path: rootPath ?? "",
-                  isDir: true,
-                };
-                handleContextMenu(e, rootNode);
-              }}
-            >
-              {rootName}
-            </div>
-            <div
               className={`tree-content${dragOverPath === "" ? " drop-target-root" : ""}`}
               onContextMenu={(e) => {
                 if (e.target === e.currentTarget) {
                   e.preventDefault();
+                  e.stopPropagation();
+                  handleContextMenu(e, {
+                    name: rootName,
+                    path: rootPath ?? "",
+                    isDir: true,
+                  });
                 }
               }}
               onDragOver={(e) => {

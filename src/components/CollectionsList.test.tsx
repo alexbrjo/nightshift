@@ -119,6 +119,7 @@ describe("CollectionsList", () => {
     await waitFor(() => {
       expect(invoke).toHaveBeenCalledTimes(2);
     });
-    expect(screen.getByText("No collections yet.")).toBeInTheDocument();
+    expect(screen.getByText("Your collections will appear here after you run a job.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh collections" })).not.toBeInTheDocument();
   });
 });

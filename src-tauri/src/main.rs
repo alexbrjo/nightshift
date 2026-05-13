@@ -15,11 +15,11 @@ use tauri::Manager;
 use crate::codex_app_server::CodexAppServerManager;
 use crate::commands::*;
 use crate::database::{
-    add_collection_item, create_collection, create_inference_job, create_transform_job,
-    delete_collection_item, delete_inference_job, export_collection_csv, export_collection_jsonl,
-    get_collection_count, get_collection_items, get_collections_for_job, get_inference_job,
-    get_job_failures, list_all_collections, list_inference_jobs, list_selectable_collections,
-    update_inference_job, DatabaseState,
+    DatabaseState, add_collection_item, create_collection, create_inference_job,
+    create_transform_job, delete_collection_item, delete_inference_job, export_collection_csv,
+    export_collection_jsonl, get_collection_count, get_collection_items, get_collections_for_job,
+    get_inference_job, get_job_failures, list_all_collections, list_inference_jobs,
+    list_selectable_collections, update_inference_job,
 };
 use crate::state::{AppState, JobManager, MethodExecutionManager};
 use std::collections::HashMap;
@@ -76,6 +76,10 @@ fn main() {
             load_last_folder,
             save_expanded_state,
             load_expanded_state,
+            load_project_layout,
+            save_project_layout,
+            load_project_conversations,
+            save_project_conversations,
             // Database commands
             create_inference_job,
             create_transform_job,
@@ -123,6 +127,7 @@ fn main() {
             list_methods,
             get_method,
             read_method_file,
+            execute_current_method_draft,
             execute_method,
             list_method_executions,
             get_method_execution_nodes,

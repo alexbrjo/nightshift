@@ -16,9 +16,9 @@ pub use draft::{
     update_method_draft_execution_config, update_method_draft_metadata,
 };
 pub use execution::{
-    cancel_method_execution, execute_method, get_method_execution_artifacts,
-    get_method_execution_events, get_method_execution_nodes, list_method_executions,
-    pause_method_execution, read_method_artifact, resume_method_execution,
+    cancel_method_execution, execute_current_method_draft, execute_method,
+    get_method_execution_artifacts, get_method_execution_events, get_method_execution_nodes,
+    list_method_executions, pause_method_execution, read_method_artifact, resume_method_execution,
 };
 #[allow(unused_imports)]
 pub use model::*;

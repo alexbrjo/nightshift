@@ -229,11 +229,7 @@ impl MethodWorkflowNode {
     }
 
     pub fn label_or_id(&self) -> &str {
-        if self.label.trim().is_empty() {
-            &self.id
-        } else {
-            &self.label
-        }
+        if self.label.trim().is_empty() { &self.id } else { &self.label }
     }
 }
 
@@ -281,6 +277,13 @@ pub struct MethodExecutionSummary {
     pub created_at: String,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecuteCurrentMethodDraftResult {
+    pub method: MethodSummary,
+    pub execution_id: i64,
 }
 
 #[derive(Debug, Clone, Serialize, FromRow)]

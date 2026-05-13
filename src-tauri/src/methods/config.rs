@@ -14,8 +14,39 @@ pub(crate) fn load_nightshift_config(project_root: &Path) -> Result<NightshiftCo
     }
     let text = fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read .nightshift/config.json: {}", e))?;
-    serde_json::from_str(&text)
-        .map_err(|e| format!("Failed to parse .nightshift/config.json: {}", e))
+    let config: NightshiftConfig = serde_json::from_str(&text)
+        .map_err(|e| format!("Failed to parse .nightshift/config.json: {}", e))?;
+    reject_file_stored_secret_values(&config)?;
+    Ok(config)
+}
+
+fn looks_like_secret_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("sk-")
+        || trimmed.starts_with("pk-")
+        || trimmed.starts_with("Bearer ")
+        || (trimmed.len() >= 32
+            && trimmed.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')))
+}
+
+fn reject_file_stored_secret_values(config: &NightshiftConfig) -> Result<(), String> {
+    for (id, env_name) in &config.api_keys {
+        if looks_like_secret_value(env_name) {
+            return Err(format!(
+                ".nightshift/config.json apiKeys.{} stores a secret-like value; store the environment variable name instead",
+                id
+            ));
+        }
+    }
+    for (id, profile) in &config.provider_profiles {
+        if profile.api_key.as_deref().is_some_and(looks_like_secret_value) {
+            return Err(format!(
+                ".nightshift/config.json providerProfiles.{}.apiKey stores a secret-like value; store the environment variable name instead",
+                id
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn resolve_provider_profile(
@@ -39,17 +70,25 @@ pub(crate) fn resolve_default_provider_profile(
 }
 
 pub(crate) fn resolve_api_key_id(config: &NightshiftConfig, id: &str) -> Result<(), String> {
-    if config.api_keys.contains_key(id)
-        || config
-            .provider_profiles
-            .get(id)
-            .and_then(|profile| profile.api_key.as_deref())
-            .is_some_and(|value| !value.trim().is_empty())
-    {
-        Ok(())
-    } else {
-        Err(format!("API key '{}' is not configured in .nightshift/config.json", id))
+    let env_name = config
+        .api_keys
+        .get(id)
+        .map(String::as_str)
+        .or_else(|| config.provider_profiles.get(id).and_then(|profile| profile.api_key.as_deref()))
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            format!(
+                "API key '{}' is not configured in .nightshift/config.json as an environment variable name",
+                id
+            )
+        })?;
+    if looks_like_secret_value(env_name) {
+        return Err(format!(
+            "API key '{}' is configured as a secret-like value; configure an environment variable name instead",
+            id
+        ));
     }
+    Ok(())
 }
 
 pub(crate) fn yaml_lookup<'a>(

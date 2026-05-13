@@ -72,8 +72,7 @@ export default function CollectionsList({
         <div className="loading-indicator">Loading…</div>
       ) : error ? null : collections.length === 0 ? (
         <div className="collections-empty">
-          <p>No collections yet.</p>
-          <p>Run an inference job to generate one.</p>
+          <p>Your collections will appear here after you run a job.</p>
         </div>
       ) : (
         <ul className="collection-list">

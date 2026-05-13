@@ -1,316 +1,599 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { mockInvoke } from "./setupTests";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { mockInvoke, mockListen } from "./setupTests";
 import App from "./App";
+import { serializeWorkspaceLayout } from "./layout";
 
-describe("App", () => {
+function workspacePanelTitles() {
+  return Array.from(document.querySelectorAll(".workspace-panel-title")).map((element) => element.textContent);
+}
+
+describe("App workspace shell", () => {
+  let projectLayout: unknown | null;
+  let projectConversations: unknown | null;
+
   beforeEach(() => {
+    projectLayout = null;
+    projectConversations = null;
     mockInvoke.mockReset();
-    mockInvoke.mockResolvedValue([]);
-    localStorage.clear();
-  });
-
-  it("renders without crashing", () => {
-    render(<App />);
-    expect(screen.getByText(/Describe the Method you want to design/)).toBeDefined();
-  });
-
-  it("renders sidebar with all section buttons", () => {
-    render(<App />);
-    expect(document.querySelectorAll(".sidebar-btn").length).toBe(4);
-  });
-
-  it("defaults to experiment-designer section", () => {
-    render(<App />);
-    expect(screen.getByText(/Describe the Method you want to design/)).toBeDefined();
-    expect(document.querySelectorAll(".sidebar-btn")[0]).toHaveClass("active");
-  });
-
-  it("switches to collection-viewer section", async () => {
-    render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
-    fireEvent.click(buttons[2]);
-    await waitFor(() => expect(screen.getByText("Collections")).toBeDefined());
-  });
-
-  it("switches to job-runner section", async () => {
-    render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
-    
-    fireEvent.click(buttons[3]);
-    
-    const jobText = await screen.findAllByText(/No inference jobs yet|Create Inference Job/i);
-    expect(jobText.length).toBeGreaterThan(0);
-  });
-
-  it("switches to experiment-designer section", () => {
-    render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
-    fireEvent.click(buttons[0]);
-    expect(screen.getByText(/Describe the Method you want to design/)).toBeDefined();
-  });
-
-  it("highlights active section button", () => {
-    render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
-    expect(buttons[0]).toHaveClass("active");
-
-    fireEvent.click(buttons[1]);
-    expect(buttons[1]).toHaveClass("active");
-    expect(buttons[0]).not.toHaveClass("active");
-  });
-
-  it("shows editor placeholder when no file is open", () => {
-    render(<App />);
-    fireEvent.click(document.querySelectorAll(".sidebar-btn")[1]);
-    expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
-  });
-
-  it("renders FileTree component", () => {
-    render(<App />);
-    expect(document.querySelector(".file-tree-panel")).toBeDefined();
-  });
-
-  it("hides FileTree when not in code-editor section", () => {
-    render(<App />);
-    expect(document.querySelector(".file-tree-panel")).toHaveClass("hidden");
-  });
-
-  it("shows FileTree when in code-editor section", () => {
-    render(<App />);
-    fireEvent.click(document.querySelectorAll(".sidebar-btn")[1]);
-    expect(document.querySelector(".file-tree-panel")).not.toHaveClass("hidden");
-  });
-
-  it("renders sidebar logo", () => {
-    render(<App />);
-    expect(document.querySelector(".sidebar-logo")).toBeDefined();
-  });
-
-  it("renders workspace container", () => {
-    render(<App />);
-    expect(document.querySelector(".workspace")).toBeDefined();
-  });
-
-  it("renders ToastProvider wrapping the app", () => {
-    render(<App />);
-    expect(document.querySelector(".toast-container")).toBeDefined();
-  });
-
-  it("renders section buttons with correct icons", () => {
-    render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
-    expect(buttons.length).toBe(4);
-  });
-
-  it("renders section buttons with correct titles", () => {
-    render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
-    expect(buttons[0]).toHaveAttribute("title", "Agent");
-    expect(buttons[1]).toHaveAttribute("title", "Project");
-    expect(buttons[2]).toHaveAttribute("title", "Collections");
-    expect(buttons[3]).toHaveAttribute("title", "Inference Jobs");
-  });
-
-  it("navigates back to code-editor from another section", async () => {
-    render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
-
-    fireEvent.click(buttons[2]);
-    await waitFor(() => expect(screen.getByText("Collections")).toBeDefined());
-
-    fireEvent.click(buttons[1]);
-    expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
-  });
-
-  it("keeps agent chat state alive when switching sections", async () => {
+    mockListen.mockClear();
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "load_last_folder":
+          return Promise.resolve(null);
+        case "set_root_path":
+          return Promise.resolve(null);
         case "start_design_session":
           return Promise.resolve({ threadId: "thr_123" });
         case "send_design_chat_message":
           return Promise.resolve({ threadId: "thr_123", turnId: "turn_456" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_layout":
+          return Promise.resolve(projectLayout);
+        case "save_project_layout":
+          return Promise.resolve(null);
+        case "load_project_conversations":
+          return Promise.resolve(projectConversations);
+        case "save_project_conversations":
+          return Promise.resolve(null);
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "read_file":
+          return Promise.resolve("restored file content");
+        case "scan_folder":
+          return Promise.resolve({ name: "project", children: [] });
+        case "get_method":
+          return Promise.resolve({
+            schema_version: 2,
+            id: "method-hash",
+            title: "Edge method",
+            objective: "Measure accuracy",
+            workflow: { nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }] },
+            parameters: {},
+            provider: {},
+            outputs: [],
+            metadata: {},
+          });
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+        case "list_inference_jobs":
+        case "list_all_collections":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+    localStorage.clear();
+  });
+
+  it("renders unified resource buttons", () => {
+    render(<App />);
+
+    expect(screen.getByRole("button", { name: "Conversations" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Methods" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Project" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Collections" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Jobs" })).toBeInTheDocument();
+  });
+
+  it("uses an empty getting-started workspace as the default layout without cached state", () => {
+    render(<App />);
+
+    expect(workspacePanelTitles()).toEqual([]);
+    expect(screen.getByText("Let's get started!")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create a new chat" })).toBeInTheDocument();
+    expect(screen.queryByText("Planning Chat")).not.toBeInTheDocument();
+  });
+
+  it("initializes the saved project root when the app opens", async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve(null);
+        case "load_last_folder":
+          return Promise.resolve("/tmp/project");
+        case "set_root_path":
+          return Promise.resolve(null);
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_layout":
+        case "load_project_conversations":
+        case "save_project_layout":
+        case "save_project_conversations":
+          return Promise.resolve(null);
         case "get_current_method_draft":
           return Promise.resolve(null);
         case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
+        case "list_inference_jobs":
+        case "list_all_collections":
           return Promise.resolve([]);
         default:
-          return Promise.resolve([]);
+          return Promise.resolve(null);
       }
     });
 
     render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
 
-    const input = await screen.findByPlaceholderText(/Describe or refine/i);
-    fireEvent.change(input, { target: { value: "keep this chat around" } });
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("set_root_path", { path: "/tmp/project" }));
+  });
+
+  it("does not list welcome-only conversation files as chat resources", async () => {
+    projectConversations = [
+      {
+        id: "chat-welcome",
+        title: "New planning chat",
+        createdAt: "2026-05-13T00:00:00Z",
+        updatedAt: "2026-05-13T00:00:00Z",
+        messages: [{ id: "welcome", role: "assistant", text: "Describe the Method you want to design." }],
+      },
+      {
+        id: "chat-real",
+        title: "Real benchmark plan",
+        createdAt: "2026-05-13T00:00:00Z",
+        updatedAt: "2026-05-13T00:00:00Z",
+        messages: [{ id: "user-1", role: "user", text: "Plan the benchmark." }],
+      },
+    ];
+
+    render(<App />);
+
+    expect(await screen.findByText("Real benchmark plan")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create a new chat" })).toBeInTheDocument();
+    expect(screen.queryByText("New planning chat")).not.toBeInTheDocument();
+  });
+
+  it("mounts one shared Method workspace event controller for Chat and Method Graph panels", async () => {
+    render(<App />);
+
+    await waitFor(() => expect(mockListen).toHaveBeenCalled());
+    expect(mockListen.mock.calls.filter(([eventName]) => eventName === "codex-app-server-event")).toHaveLength(1);
+    expect(mockListen.mock.calls.filter(([eventName]) => eventName === "method-draft-updated")).toHaveLength(1);
+  });
+
+  it("shows only empty copy in empty Method resources", async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Methods" }));
+
+    expect(await screen.findByText("Your Methods will appear here after you create one.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create a new Method" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Current Method Graph")).not.toBeInTheDocument();
+  });
+
+  it("expands and collapses the resource sidebar", () => {
+    render(<App />);
+
+    expect(document.querySelector(".resource-sidebar-panel")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Collapse resource sidebar" }));
+    expect(document.querySelector(".resource-sidebar-panel")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Expand resource sidebar" }));
+    expect(document.querySelector(".resource-sidebar-panel")).toBeInTheDocument();
+  });
+
+  it("collapses the open resource sidebar when clicking the active nav icon", () => {
+    render(<App />);
+
+    expect(screen.getByRole("button", { name: "Conversations" })).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector(".resource-sidebar-panel")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    expect(screen.getByRole("button", { name: "Conversations" })).toHaveAttribute("aria-pressed", "false");
+    expect(document.querySelector(".resource-sidebar-panel")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Conversations" }));
+    expect(screen.getByRole("button", { name: "Conversations" })).toHaveAttribute("aria-pressed", "true");
+    expect(document.querySelector(".resource-sidebar-panel")).toBeInTheDocument();
+  });
+
+  it("keeps the selected resource tab when project initialization has no saved layout", async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Project" }));
+    expect(screen.getByRole("heading", { name: "Project" })).toBeInTheDocument();
+
+    const projectOpenedHandlers = mockListen.mock.calls
+      .filter(([eventName]) => eventName === "project-opened")
+      .map(([, handler]) => handler as (event: { payload: string }) => void);
+    expect(projectOpenedHandlers.length).toBeGreaterThan(0);
+    await act(async () => {
+      projectOpenedHandlers.forEach((handler) => handler({ payload: "/tmp/project" }));
+    });
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Project" })).toBeInTheDocument());
+  });
+
+  it("shows the project folder name right in the Project header", async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "load_last_folder":
+          return Promise.resolve("/tmp/project");
+        case "set_root_path":
+        case "save_project_layout":
+        case "save_project_conversations":
+          return Promise.resolve(null);
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_layout":
+        case "load_project_conversations":
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "scan_folder":
+          return Promise.resolve({ name: "project", children: [] });
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+        case "list_inference_jobs":
+        case "list_all_collections":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Project" }));
+    const folderLabel = await screen.findByLabelText("Project folder: project");
+
+    expect(folderLabel).toHaveClass("resource-sidebar-context");
+    expect(folderLabel).toHaveAttribute("title", "project");
+    expect(screen.getByRole("heading", { name: "Project" })).toBeInTheDocument();
+  });
+
+  it("restores a valid project layout", async () => {
+    projectLayout = JSON.parse(
+      serializeWorkspaceLayout({
+        schemaVersion: 1,
+        sidebarMode: "collapsed",
+        activeResourceKind: "job",
+        panels: [
+          { id: "job-view:7", type: "job-view", title: "Job #7", resourceId: "7" },
+        ],
+        activePanelId: "job-view:7",
+        splitSizes: [100],
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(workspacePanelTitles()).toEqual(["Job #7"]));
+    expect(document.querySelector(".resource-sidebar-panel")).not.toBeInTheDocument();
+  });
+
+  it("hydrates restored project editor panels from their persisted resource id", async () => {
+    projectLayout = JSON.parse(
+      serializeWorkspaceLayout({
+        schemaVersion: 1,
+        sidebarMode: "expanded",
+        activeResourceKind: "project",
+        panels: [
+          { id: "project-editor:notes.md", type: "project-editor", title: "notes.md", resourceId: "notes.md" },
+        ],
+        activePanelId: "project-editor:notes.md",
+        splitSizes: [100],
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("read_file", { relativePath: "notes.md" }));
+    expect(await screen.findByText("restored file content")).toBeInTheDocument();
+  });
+
+  it("opens a Method execution panel when Execute Draft starts an execution", async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_layout":
+          return Promise.resolve({
+            schemaVersion: 1,
+            sidebarMode: "expanded",
+            activeResourceKind: "method",
+            panels: [{ id: "method-graph:default", type: "method-graph", title: "Method Graph" }],
+            activePanelId: "method-graph:default",
+            splitSizes: [100],
+          });
+        case "load_project_conversations":
+          return Promise.resolve(null);
+        case "save_project_layout":
+        case "save_project_conversations":
+          return Promise.resolve(null);
+        case "get_current_method_draft":
+          return Promise.resolve({
+            schema_version: 2,
+            id: "draft-1",
+            title: "Edge method",
+            objective: "Measure accuracy",
+            workflow: { nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }] },
+            parameters: {},
+            provider: {},
+            outputs: [],
+            metadata: {},
+          });
+        case "execute_current_method_draft":
+          return Promise.resolve({
+            method: {
+              id: "method-hash",
+              title: "Edge method",
+              contentHash: "hash",
+              folderPath: "/tmp/project/methods/method-hash",
+              createdAt: "2026-05-13T00:00:00Z",
+            },
+            executionId: 42,
+          });
+        case "list_method_executions":
+          return Promise.resolve([{ id: 42, methodId: "method-hash", methodContentHash: "hash", status: "running", createdAt: "2026-05-13T00:00:00Z" }]);
+        case "get_method":
+          return Promise.resolve({
+            schema_version: 2,
+            id: "method-hash",
+            title: "Edge method",
+            objective: "Measure accuracy",
+            workflow: { nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }] },
+            parameters: {},
+            provider: {},
+            outputs: [],
+            metadata: {},
+          });
+        case "get_method_execution_nodes":
+          return Promise.resolve([{ id: 1, executionId: 42, nodeId: "generate", nodeType: "inference", status: "running" }]);
+        case "list_methods":
+        case "list_inference_jobs":
+        case "list_all_collections":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Execute Draft" }));
+
+    await waitFor(() => expect(workspacePanelTitles()).toContain("Execution: Edge method"));
+    expect(mockInvoke).toHaveBeenCalledWith("execute_current_method_draft");
+  });
+
+  it("discards invalid project layout and falls back to defaults", async () => {
+    projectLayout = { schemaVersion: 99, panels: [] };
+
+    render(<App />);
+
+    await waitFor(() => expect(workspacePanelTitles()).toEqual([]));
+    expect(screen.getByText("Let's get started!")).toBeInTheDocument();
+  });
+
+  it("focuses existing panels instead of duplicating them", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create a new chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "Create a new chat" }));
+
+    expect(workspacePanelTitles().filter((title) => title === "Chat")).toHaveLength(1);
+  });
+
+  it("returns to the getting-started workspace when the last panel closes", () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Create a new chat" }));
+    expect(workspacePanelTitles()).toContain("Chat");
+    fireEvent.click(screen.getByRole("button", { name: "Close Chat" }));
+    expect(workspacePanelTitles()).toEqual([]);
+    expect(screen.getByText("Let's get started!")).toBeInTheDocument();
+  });
+
+  it("opens selected conversations as distinct chat panels", async () => {
+    projectConversations = [
+      {
+        id: "chat-one",
+        title: "First conversation",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messages: [{ id: "m1", role: "user", text: "First conversation text", status: "completed" }],
+      },
+      {
+        id: "chat-two",
+        title: "Second conversation",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messages: [{ id: "m2", role: "user", text: "Second conversation text", status: "completed" }],
+      },
+    ];
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "First conversation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Second conversation" }));
+
+    expect(workspacePanelTitles()).toContain("First conversation");
+    expect(workspacePanelTitles()).toContain("Second conversation");
+    expect((await screen.findAllByText("First conversation text")).length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("Second conversation text")).length).toBeGreaterThan(0);
+  });
+
+  it("lets reopened conversations continue and expands their tool call details", async () => {
+    projectConversations = [
+      {
+        id: "chat-one",
+        title: "First conversation",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messages: [
+          { id: "m1", role: "user", text: "First conversation text", status: "completed" },
+          {
+            id: "tool-1",
+            role: "trace",
+            text: "replace_method_draft_graph completed - 42 ms - Draft updated",
+            status: "completed",
+            traceKind: "tool",
+            toolName: "replace_method_draft_graph",
+            durationMs: 42,
+            outputSummary: "Draft updated",
+            toolArguments: { workflow: { nodes: [{ id: "generate" }] } },
+            toolOutput: { ok: true },
+          },
+        ],
+      },
+    ];
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "First conversation" }));
+    const panel = await screen.findByRole("region", { name: "First conversation" });
+    const scoped = within(panel);
+
+    fireEvent.click(scoped.getByText("1 tool call"));
+    expect(scoped.getByText("replace_method_draft_graph")).toBeInTheDocument();
+    expect(scoped.getByText("Parameters")).toBeInTheDocument();
+    expect(scoped.getByText("Output")).toBeInTheDocument();
+    expect(scoped.getByText("Draft updated")).toBeInTheDocument();
+
+    const input = scoped.getByPlaceholderText(/Describe or refine/i);
+    fireEvent.change(input, { target: { value: "Continue from here" } });
     fireEvent.submit(input.closest("form") as HTMLFormElement);
 
     await waitFor(() => {
-      expect(screen.getAllByText("keep this chat around").length).toBeGreaterThan(0);
+      expect(mockInvoke).toHaveBeenCalledWith("send_design_chat_message", {
+        input: {
+          message: expect.stringContaining("First conversation text"),
+        },
+      });
+      expect(mockInvoke).toHaveBeenCalledWith("send_design_chat_message", {
+        input: {
+          message: expect.stringContaining("Continue from here"),
+        },
+      });
+    });
+  });
+
+  it("opens the Method graph and refreshes project files after agent Method mutations", async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "load_last_folder":
+          return Promise.resolve("/tmp/project");
+        case "set_root_path":
+        case "save_project_layout":
+        case "save_project_conversations":
+          return Promise.resolve(null);
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_layout":
+        case "load_project_conversations":
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "scan_folder":
+          return Promise.resolve({ name: "project", children: [] });
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+        case "list_inference_jobs":
+        case "list_all_collections":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
     });
 
-    fireEvent.click(buttons[1]);
-    expect(screen.getByText("Open a folder and select a file to begin")).toBeDefined();
-
-    fireEvent.click(buttons[0]);
-    expect(screen.getAllByText("keep this chat around").length).toBeGreaterThan(0);
-  });
-
-  it("workspace has full-width class for non-editor sections", () => {
     render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
 
-    fireEvent.click(buttons[2]);
-    expect(document.querySelector(".collections-page")).toHaveClass("full-width");
+    fireEvent.click(screen.getByRole("button", { name: "Project" }));
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("scan_folder", { path: "/tmp/project" }));
+    const scanCallsBefore = mockInvoke.mock.calls.filter(([command]) => command === "scan_folder").length;
 
-    fireEvent.click(buttons[1]);
-    expect(document.querySelector("main.workspace:not(.full-width)")).toBeDefined();
+    act(() => {
+      window.dispatchEvent(new CustomEvent("nightshift-project-files-changed"));
+      window.dispatchEvent(new CustomEvent("nightshift-method-draft-mutated"));
+    });
+
+    await waitFor(() => {
+      expect(workspacePanelTitles()).toContain("Method Graph");
+      expect(mockInvoke.mock.calls.filter(([command]) => command === "scan_folder").length)
+        .toBeGreaterThan(scanCallsBefore);
+    });
   });
 
-  it("renders app container with correct class", () => {
+  it("opens a new job panel from the unified job resources", async () => {
     render(<App />);
-    expect(document.querySelector(".app")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Jobs" }));
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("list_inference_jobs", { page: 1, pageSize: 50 }));
+    fireEvent.click(screen.getByRole("button", { name: "Create a new job" }));
+
+    expect(workspacePanelTitles()).toContain("New Job");
   });
 
-  it("renders sidebar with correct classes", () => {
+  it("replaces the new job panel with the created job panel", async () => {
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_layout":
+          return Promise.resolve(null);
+        case "save_project_layout":
+          return Promise.resolve(null);
+        case "load_project_conversations":
+          return Promise.resolve(null);
+        case "save_project_conversations":
+          return Promise.resolve(null);
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+        case "list_inference_jobs":
+        case "list_all_collections":
+        case "list_prompt_files":
+        case "list_data_files":
+        case "list_schema_files":
+        case "list_transform_scripts":
+        case "list_selectable_collections":
+          return Promise.resolve([]);
+        case "check_transform_runtime":
+          return Promise.resolve(null);
+        case "create_inference_job":
+          return Promise.resolve(77);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
     render(<App />);
-    expect(document.querySelector(".sidebar")).toBeDefined();
-    expect(document.querySelector(".sidebar-nav")).toBeDefined();
-  });
+    fireEvent.click(screen.getByRole("button", { name: "Jobs" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Create a new job" }));
+    fireEvent.change(await screen.findByLabelText(/Job Name/), { target: { value: "Created job" } });
+    fireEvent.change(screen.getByLabelText(/Prompt Spec/), { target: { value: "prompt.txt" } });
+    fireEvent.change(screen.getByLabelText(/Data Source/), { target: { value: "data.jsonl" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Inference Job" }));
 
-  it("handles rapid section switching", () => {
-    render(<App />);
-    const buttons = document.querySelectorAll(".sidebar-btn");
-
-    for (let i = 0; i < 4; i++) {
-      fireEvent.click(buttons[i]);
-    }
-
-    expect(document.querySelector(".sidebar-btn.active")).toBeDefined();
-  });
-});
-
-describe("getLanguage", () => {
-  function getLanguage(filename: string): string | undefined {
-    const ext = filename.split(".").pop()?.toLowerCase();
-    const map: Record<string, string> = {
-      js: "javascript",
-      ts: "typescript",
-      jsx: "jsx",
-      tsx: "tsx",
-      json: "json",
-      jsonl: "json",
-      md: "markdown",
-      markdown: "markdown",
-      yaml: "yaml",
-      yml: "yaml",
-      py: "python",
-      rs: "rust",
-      html: "html",
-      css: "css",
-      sh: "bash",
-    };
-    return ext ? map[ext] : undefined;
-  }
-
-  it("returns javascript for .js files", () => {
-    expect(getLanguage("file.js")).toBe("javascript");
-  });
-
-  it("returns typescript for .ts files", () => {
-    expect(getLanguage("file.ts")).toBe("typescript");
-  });
-
-  it("returns jsx for .jsx files", () => {
-    expect(getLanguage("file.jsx")).toBe("jsx");
-  });
-
-  it("returns tsx for .tsx files", () => {
-    expect(getLanguage("file.tsx")).toBe("tsx");
-  });
-
-  it("returns json for .json files", () => {
-    expect(getLanguage("file.json")).toBe("json");
-  });
-
-  it("returns json for .jsonl files", () => {
-    expect(getLanguage("file.jsonl")).toBe("json");
-  });
-
-  it("returns markdown for .md files", () => {
-    expect(getLanguage("file.md")).toBe("markdown");
-  });
-
-  it("returns markdown for .markdown files", () => {
-    expect(getLanguage("file.markdown")).toBe("markdown");
-  });
-
-  it("returns yaml for .yaml files", () => {
-    expect(getLanguage("file.yaml")).toBe("yaml");
-  });
-
-  it("returns yaml for .yml files", () => {
-    expect(getLanguage("file.yml")).toBe("yaml");
-  });
-
-  it("returns python for .py files", () => {
-    expect(getLanguage("file.py")).toBe("python");
-  });
-
-  it("returns rust for .rs files", () => {
-    expect(getLanguage("file.rs")).toBe("rust");
-  });
-
-  it("returns html for .html files", () => {
-    expect(getLanguage("file.html")).toBe("html");
-  });
-
-  it("returns css for .css files", () => {
-    expect(getLanguage("file.css")).toBe("css");
-  });
-
-  it("returns bash for .sh files", () => {
-    expect(getLanguage("file.sh")).toBe("bash");
-  });
-
-  it("returns undefined for unknown extensions", () => {
-    expect(getLanguage("file.xyz")).toBe(undefined);
-  });
-
-  it("returns undefined for files without extension", () => {
-    expect(getLanguage("README")).toBe(undefined);
-  });
-
-  it("handles uppercase extensions", () => {
-    expect(getLanguage("file.JS")).toBe("javascript");
-    expect(getLanguage("file.PY")).toBe("python");
-  });
-
-  it("handles mixed case extensions", () => {
-    expect(getLanguage("file.Js")).toBe("javascript");
-  });
-
-  it("handles files with multiple dots", () => {
-    expect(getLanguage("file.test.js")).toBe("javascript");
-  });
-
-  it("handles hidden files", () => {
-    expect(getLanguage(".gitignore")).toBe(undefined);
-  });
-
-  it("handles empty filename", () => {
-    expect(getLanguage("")).toBe(undefined);
-  });
-
-  it("handles path with filename", () => {
-    expect(getLanguage("/path/to/file.py")).toBe("python");
-  });
-
-  it("handles Windows-style paths", () => {
-    expect(getLanguage("C:\\path\\to\\file.rs")).toBe("rust");
+    await waitFor(() => expect(workspacePanelTitles()).toContain("Job #77"));
+    expect(workspacePanelTitles()).not.toContain("New Job");
   });
 });

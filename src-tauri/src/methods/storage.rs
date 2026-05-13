@@ -110,6 +110,12 @@ pub(crate) fn write_method_document(path: &Path, method: &MethodDocument) -> Res
         .map_err(|e| format!("Failed to write Method document {}: {}", path.display(), e))
 }
 
+fn method_document_for_content_hash(method: &MethodDocument) -> MethodDocument {
+    let mut canonical = method.clone();
+    canonical.id.clear();
+    canonical
+}
+
 pub(crate) fn read_manifest(folder: &Path) -> Result<MethodDocument, String> {
     read_method_document(&folder.join("method.yaml"))
 }
@@ -208,6 +214,70 @@ pub(crate) async fn save_method_to_project(
 
     upsert_method_metadata(db, &method, &content_hash, &final_dir).await?;
     get_method_summary(db, &method.id).await
+}
+
+pub(crate) async fn save_method_to_project_content_addressed(
+    db: &DatabaseState,
+    root: &Path,
+    method_input: MethodDocument,
+) -> Result<MethodSummary, String> {
+    validate_method(&method_input)?;
+    for resource in method_input.workflow.nodes.iter().filter(|node| node.is_resource()) {
+        if resource.path.as_deref().is_some_and(|path| path.starts_with("files/")) {
+            return Err(format!(
+                "Method resource '{}' must reference a project file before save",
+                resource.id
+            ));
+        }
+    }
+    let preflight = preflight_method_for_root(&method_input, root);
+    if preflight.status != "ready" {
+        return Err(format!(
+            "Method is not ready to execute. {}",
+            format_preflight_blockers(&preflight)
+        ));
+    }
+
+    fs::create_dir_all(methods_dir(&root))
+        .map_err(|e| format!("Failed to create methods directory: {}", e))?;
+    let temp_dir = methods_dir(&root).join(format!(".{}.tmp", Uuid::new_v4()));
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp method: {}", e))?;
+
+    let mut frozen = method_input;
+    if let Err(e) = freeze_files(&mut frozen, &root, &temp_dir).and_then(|_| {
+        write_method_document(
+            &temp_dir.join("method.yaml"),
+            &method_document_for_content_hash(&frozen),
+        )
+    }) {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err(e);
+    }
+
+    let content_hash = match hash_directory(&temp_dir) {
+        Ok(hash) => hash,
+        Err(e) => {
+            let _ = fs::remove_dir_all(&temp_dir);
+            return Err(e);
+        }
+    };
+    frozen.id = format!("method-{}", content_hash);
+    let final_dir = method_dir(root, &frozen.id);
+
+    if let Err(e) = write_method_document(&temp_dir.join("method.yaml"), &frozen) {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err(e);
+    }
+
+    if final_dir.exists() {
+        let _ = fs::remove_dir_all(&temp_dir);
+    } else if let Err(e) = fs::rename(&temp_dir, &final_dir) {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err(format!("Failed to finalize method folder: {}", e));
+    }
+
+    upsert_method_metadata(db, &frozen, &content_hash, &final_dir).await?;
+    get_method_summary(db, &frozen.id).await
 }
 
 pub(crate) async fn get_method_summary(

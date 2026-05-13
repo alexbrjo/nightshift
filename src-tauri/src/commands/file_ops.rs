@@ -259,13 +259,16 @@ pub async fn scan_folder(
     // Validate + reconnect first; only mirror into AppState on success so a
     // rejection (e.g. opening a subfolder of an existing project) leaves the
     // previous root intact and the two states in sync.
+    let previous_root = app_state.root_path.lock().unwrap().clone();
     db_state.reconnect(&path_buf).await?;
     let resolved = db_state.get_project_root();
     {
         let mut root = app_state.root_path.lock().unwrap();
         *root = Some(resolved.clone());
     }
-    emit_project_opened(&app, &resolved);
+    if previous_root.as_ref() != Some(&resolved) {
+        emit_project_opened(&app, &resolved);
+    }
 
     let mut file_count = 0usize;
     let children = scan_directory(&resolved, 0, &mut file_count)?;
@@ -284,13 +287,16 @@ pub async fn set_root_path(
     path: String,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
+    let previous_root = app_state.root_path.lock().unwrap().clone();
     db_state.reconnect(&path_buf).await?;
     let resolved = db_state.get_project_root();
     {
         let mut root = app_state.root_path.lock().unwrap();
         *root = Some(resolved.clone());
     }
-    emit_project_opened(&app, &resolved);
+    if previous_root.as_ref() != Some(&resolved) {
+        emit_project_opened(&app, &resolved);
+    }
     Ok(())
 }
 
