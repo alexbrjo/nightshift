@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use super::model::{MethodDocument, MethodWorkflowNode, NightshiftConfig, ProviderProfile};
+use crate::utils::secrets::looks_like_secret_value;
 
 pub(crate) fn config_path(project_root: &Path) -> std::path::PathBuf {
     project_root.join(".nightshift").join("config.json")
@@ -18,15 +19,6 @@ pub(crate) fn load_nightshift_config(project_root: &Path) -> Result<NightshiftCo
         .map_err(|e| format!("Failed to parse .nightshift/config.json: {}", e))?;
     reject_file_stored_secret_values(&config)?;
     Ok(config)
-}
-
-fn looks_like_secret_value(value: &str) -> bool {
-    let trimmed = value.trim();
-    trimmed.starts_with("sk-")
-        || trimmed.starts_with("pk-")
-        || trimmed.starts_with("Bearer ")
-        || (trimmed.len() >= 32
-            && trimmed.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')))
 }
 
 fn reject_file_stored_secret_values(config: &NightshiftConfig) -> Result<(), String> {

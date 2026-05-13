@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
 
 use crate::state::AppState;
+use crate::utils::secrets::{is_sensitive_key, looks_like_secret_value};
 
 /// Save the last opened folder path to app data directory
 #[tauri::command]
@@ -105,31 +106,6 @@ fn save_project_json(
         .map_err(|e| format!("Failed to serialize .nightshift/{}: {}", file_name, e))?;
     fs::write(&path, content.as_bytes())
         .map_err(|e| format!("Failed to save .nightshift/{}: {}", file_name, e))
-}
-
-const SENSITIVE_KEYS: &[&str] = &[
-    "api_key",
-    "apikey",
-    "password",
-    "secret",
-    "access_token",
-    "refresh_token",
-    "bearer_token",
-    "authorization",
-];
-
-fn is_sensitive_key(key: &str) -> bool {
-    let normalized = key.replace(['-', ' '], "_").to_ascii_lowercase();
-    SENSITIVE_KEYS.iter().any(|sensitive| normalized.contains(sensitive))
-}
-
-fn looks_like_secret_value(value: &str) -> bool {
-    let trimmed = value.trim();
-    trimmed.starts_with("sk-")
-        || trimmed.starts_with("pk-")
-        || trimmed.starts_with("Bearer ")
-        || (trimmed.len() >= 32
-            && trimmed.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-')))
 }
 
 fn redact_project_json(value: serde_json::Value) -> serde_json::Value {
@@ -264,6 +240,8 @@ mod tests {
                 "title": "secret chat",
                 "messages": [
                     { "text": "sk-test-secret-value" },
+                    { "text": "0123456789abcdef0123456789abcdef01234567" },
+                    { "text": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.TJVA95OrM7E2cBab30RMHrHDcEfxjoYZgeFONFh7HgQ" },
                     { "toolArguments": { "api_key": "plain-value" } }
                 ]
             }
@@ -271,6 +249,8 @@ mod tests {
         let redacted = redact_project_json(value);
 
         assert_eq!(redacted[0]["messages"][0]["text"], "[redacted]");
-        assert_eq!(redacted[0]["messages"][1]["toolArguments"]["api_key"], "[redacted]");
+        assert_eq!(redacted[0]["messages"][1]["text"], "0123456789abcdef0123456789abcdef01234567");
+        assert_eq!(redacted[0]["messages"][2]["text"], "[redacted]");
+        assert_eq!(redacted[0]["messages"][3]["toolArguments"]["api_key"], "[redacted]");
     }
 }

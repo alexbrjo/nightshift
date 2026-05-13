@@ -41,7 +41,7 @@ describe("Editor file operations integration", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText("hello.txt"));
@@ -75,7 +75,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText("code.js"));
@@ -108,7 +108,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.contextMenu(screen.getByText("data.json"));
@@ -142,7 +142,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.contextMenu(screen.getByText("old.txt"));
@@ -183,7 +183,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.contextMenu(screen.getByText("src"));
@@ -224,10 +224,10 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
-    fireEvent.contextMenu(screen.getByText("project"));
+    fireEvent.contextMenu(document.querySelector(".tree-content") as HTMLElement);
 
     await waitFor(() => {
       expect(screen.getByText("New Folder...")).toBeDefined();
@@ -266,7 +266,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.contextMenu(screen.getByText("delete_me.txt"));
@@ -304,7 +304,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.contextMenu(screen.getByText("original.txt"));
@@ -337,7 +337,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText("missing.txt"));
@@ -371,7 +371,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.contextMenu(screen.getByText("file.txt"));
@@ -412,7 +412,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText("file.txt"));
@@ -453,7 +453,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText("src"));
@@ -494,7 +494,7 @@ describe("Editor file operations integration", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
   });
 
@@ -513,7 +513,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText("src"));
@@ -539,7 +539,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.contextMenu(screen.getByText("file.txt"));
@@ -582,7 +582,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText("script.py"));
@@ -626,10 +626,10 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
-    fireEvent.contextMenu(screen.getByText("project"));
+    fireEvent.contextMenu(document.querySelector(".tree-content") as HTMLElement);
 
     await waitFor(() => {
       expect(screen.getByText("New File...")).toBeDefined();
@@ -667,7 +667,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.contextMenu(screen.getByText("old_name.txt"));
@@ -710,7 +710,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.contextMenu(screen.getByText("original.txt"));
@@ -749,7 +749,7 @@ describe("Editor file operations integration", () => {
     fireEvent.click(screen.getByText("Open Folder"));
 
     await waitFor(() => {
-      expect(screen.getByText("project")).toBeDefined();
+      expect(document.querySelector(".tree-content")).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByText("to_delete"));

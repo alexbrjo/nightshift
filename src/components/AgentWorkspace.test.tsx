@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mockInvoke } from "../setupTests";
-import AgentWorkspace from "./AgentWorkspace";
+import AgentWorkspace, { shouldPersistProjectConversations } from "./AgentWorkspace";
 
 const eventBus = vi.hoisted(() => ({
   handlers: new Map<string, Array<(event: { payload: Record<string, unknown> | null }) => void>>(),
@@ -84,6 +84,12 @@ describe("AgentWorkspace", () => {
       expect(mockInvoke).toHaveBeenCalledWith("load_project_conversations");
     });
     expect(mockInvoke).not.toHaveBeenCalledWith("save_project_conversations", expect.anything());
+  });
+
+  it("persists an empty conversation list after saved chats are removed", () => {
+    expect(shouldPersistProjectConversations(true, 0, 1)).toBe(true);
+    expect(shouldPersistProjectConversations(true, 0, 0)).toBe(false);
+    expect(shouldPersistProjectConversations(false, 1, 1)).toBe(false);
   });
 
   it("uses an accessible resizable panel group for the Method graph", async () => {

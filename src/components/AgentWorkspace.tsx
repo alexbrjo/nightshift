@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -96,6 +97,7 @@ const MARKDOWN_COMPONENTS: Components = {
 };
 
 const RAW_SCRIPT_OR_STYLE_BLOCK = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
+const NEW_CHAT_DRAFT_KEY = "__nightshift_new_chat__";
 const WELCOME_MESSAGE: ChatMessage = {
   id: "welcome",
   role: "assistant",
@@ -328,43 +330,48 @@ function ChatComposer({
   );
 }
 
-function SavedChatPanel({
-  chat,
+function ChatPanelView({
+  messages,
+  input,
+  setInput,
   onSubmit,
   isSending,
   activeTurn,
   isConnecting,
   modelConfigLabel,
+  inputRef,
 }: {
-  chat: ChatSession;
-  onSubmit: (chatId: string, baseMessages: ChatMessage[], text: string) => void;
+  messages: ChatMessage[];
+  input: string;
+  setInput: (value: string) => void;
+  onSubmit: () => void;
   isSending: boolean;
   activeTurn: CodexTurnSummary | null;
   isConnecting: boolean;
   modelConfigLabel: string;
+  inputRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
-  const [input, setInput] = useState("");
-  const contextTokenEstimate = estimateTokenCount(agentInputWithContext(chat.messages, input.trim()));
+  const items = useMemo(() => groupToolTraceMessages(messages), [messages]);
+  const contextTokenEstimate = useMemo(
+    () => estimateTokenCount(agentInputWithContext(messages, input.trim())),
+    [input, messages],
+  );
   return (
     <div className="agent-chat-workspace panel-embedded">
       <div className="agent-chat-panel">
         <div className="agent-chat-scroll">
-          <ChatItemsView items={groupToolTraceMessages(chat.messages)} />
+          <ChatItemsView items={items} />
         </div>
         <ChatComposer
           input={input}
           setInput={setInput}
-          onSubmit={() => {
-            const text = input.trim();
-            if (!text) return;
-            setInput("");
-            onSubmit(chat.id, chat.messages, text);
-          }}
+          onSubmit={onSubmit}
           isSending={isSending}
           activeTurn={activeTurn}
           isConnecting={isConnecting}
           contextTokenEstimate={contextTokenEstimate}
           modelConfigLabel={modelConfigLabel}
+          inputRef={inputRef}
         />
       </div>
     </div>
@@ -482,6 +489,15 @@ function loadPersistedChatSessions(): ChatSession[] {
   return [];
 }
 
+export function shouldPersistProjectConversations(
+  chatPersistenceReady: boolean,
+  conversationCount: number,
+  persistedConversationCount: number,
+) {
+  if (!chatPersistenceReady) return false;
+  return conversationCount > 0 || persistedConversationCount > 0;
+}
+
 function visibleTranscript(messages: ChatMessage[]) {
   return messages
     .filter((message) =>
@@ -544,14 +560,13 @@ function derivedDraftReadiness(draft: MethodDocument | null) {
 }
 
 interface AgentWorkspaceProps {
-  variant?: "full" | "chat" | "graph";
   initialChatId?: string;
 }
 
 interface MethodWorkspaceContextValue {
   renderChatPanel: (chatId?: string | null) => ReactNode;
-  draftGraphPanel: ReactNode;
-  fullWorkspace: ReactNode;
+  renderDraftGraphPanel: () => ReactNode;
+  renderFullWorkspace: () => ReactNode;
   renderExecutionGraphPanel: (executionId?: string | number | null) => ReactNode;
 }
 
@@ -570,7 +585,7 @@ export function ChatPanel({ chatId }: { chatId?: string | null }) {
 }
 
 export function DraftMethodGraphPanel() {
-  return <>{useMethodWorkspace().draftGraphPanel}</>;
+  return <>{useMethodWorkspace().renderDraftGraphPanel()}</>;
 }
 
 export function MethodExecutionGraphPanel({ executionId }: { executionId?: string | number | null }) {
@@ -581,20 +596,13 @@ export function MethodWorkspaceProvider({
   children,
   initialChatId,
 }: {
-  children: ReactNode;
+  children?: ReactNode;
   initialChatId?: string;
 }) {
-  return (
-    <MethodWorkspaceController initialChatId={initialChatId}>
-      {children}
-    </MethodWorkspaceController>
-  );
-}
-
-function MethodWorkspaceController({ children, initialChatId }: { children?: ReactNode; initialChatId?: string }) {
   const hasProjectRootRef = useRef(false);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [chatSessions, setChatSessions] = useState<ChatSession[]>(loadPersistedChatSessions);
+  const persistedConversationCountRef = useRef(0);
   const [chatPersistenceReady, setChatPersistenceReady] = useState(false);
   const [activeChatId, setActiveChatId] = useState<string | null>(() => (
     chatSessions.find((chat) => chat.id === initialChatId)?.id
@@ -606,18 +614,15 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
   const [session, setSession] = useState<CodexAppServerSession | null>(null);
   const [activeTurn, setActiveTurn] = useState<CodexTurnSummary | null>(null);
   const [draft, setDraft] = useState<MethodDocument | null>(null);
-  const [, setMethods] = useState<MethodSummary[]>([]);
-  const [selectedMethodId, setSelectedMethodId] = useState("");
   const [activeExecutionId, setActiveExecutionId] = useState<number | null>(null);
   const [executionNodes, setExecutionNodes] = useState<MethodExecutionNodeSummary[]>([]);
   const [executionStatus, setExecutionStatus] = useState<string>("idle");
-  const isSavingMethod = false;
   const [isExecutingMethod, setIsExecutingMethod] = useState(false);
   const [methodActionFeedback, setMethodActionFeedback] = useState<{
     tone: "info" | "success" | "error";
     text: string;
   } | null>(null);
-  const [input, setInput] = useState("");
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
   const [agentConfig, setAgentConfig] = useState<DesignAgentConfig | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -626,13 +631,30 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
       ?? chatSessions[0]?.messages
       ?? []
   ));
+  const activeDraftKey = activeChatId ?? NEW_CHAT_DRAFT_KEY;
+  const activeInput = composerDrafts[activeDraftKey] ?? "";
 
   useEffect(() => {
     const textarea = inputRef.current;
     if (!textarea) return;
     textarea.style.height = "auto";
     textarea.style.height = `${textarea.scrollHeight}px`;
-  }, [input]);
+  }, [activeInput]);
+
+  const setComposerInput = useCallback((chatId: string | null | undefined, value: string) => {
+    const key = chatId ?? NEW_CHAT_DRAFT_KEY;
+    setComposerDrafts((current) => current[key] === value ? current : { ...current, [key]: value });
+  }, []);
+
+  const clearComposerInput = useCallback((chatId: string | null | undefined) => {
+    const key = chatId ?? NEW_CHAT_DRAFT_KEY;
+    setComposerDrafts((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, []);
 
   const applyChatSessions = useCallback((sessions: ChatSession[]) => {
     const nextSessions = sessions;
@@ -651,8 +673,10 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
       const value = await invoke<unknown | null>("load_project_conversations");
       if (value !== null && value !== undefined) {
         const sessions = normalizeChatSessions(value);
+        persistedConversationCountRef.current = sessions.filter((chat) => chat.messages.length > 0).length;
         applyChatSessions(sessions);
       } else {
+        persistedConversationCountRef.current = 0;
         applyChatSessions([]);
       }
       setChatPersistenceReady(true);
@@ -691,11 +715,15 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
 
   useEffect(() => {
     if (!chatPersistenceReady) return;
-    if (chatSessions.length === 0) return;
     const conversations = chatSessions.filter((chat) => chat.messages.length > 0);
-    if (conversations.length === 0) return;
+    if (!shouldPersistProjectConversations(
+      chatPersistenceReady,
+      conversations.length,
+      persistedConversationCountRef.current,
+    )) return;
     void invoke("save_project_conversations", { conversations })
       .then(() => {
+        persistedConversationCountRef.current = conversations.length;
         window.dispatchEvent(new CustomEvent("nightshift-conversations-updated"));
       });
   }, [chatPersistenceReady, chatSessions]);
@@ -773,7 +801,6 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
     const chat = chatSessions.find((candidate) => candidate.id === chatId);
     if (!chat || chat.id === activeChatIdRef.current) return;
     activeChatIdRef.current = chat.id;
-    setInput("");
     setMessages(chat.messages);
     setActiveChatId(chat.id);
   }, [chatSessions]);
@@ -782,7 +809,6 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
     const chat = createChatSession();
     activeChatIdRef.current = chat.id;
     setChatSessions((current) => [chat, ...current]);
-    setInput("");
     setMessages(chat.messages);
     setActiveChatId(chat.id);
   }, []);
@@ -814,17 +840,6 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
     }
   }, [addSystemMessage]);
 
-  const loadMethods = useCallback(async () => {
-    try {
-      const result = await invoke<MethodSummary[] | null>("list_methods");
-      const savedMethods = Array.isArray(result) ? result : [];
-      setMethods(savedMethods);
-      setSelectedMethodId((current) => current || savedMethods[0]?.id || "");
-    } catch (err) {
-      addSystemMessage(`I could not load saved Methods: ${String(err)}`, "failed");
-    }
-  }, [addSystemMessage]);
-
   useEffect(() => {
     let cancelled = false;
     const connectIfProjectOpen = async () => {
@@ -834,7 +849,6 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
         hasProjectRootRef.current = true;
         void startSession({ silentMissingProject: true });
         void loadCurrentDraft({ silentMissingProject: true });
-        void loadMethods();
       } catch (err) {
         if (!cancelled && !isMissingProjectError(err)) {
           addSystemMessage(`I could not check the current project folder: ${String(err)}`, "failed");
@@ -845,13 +859,13 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
     return () => {
       cancelled = true;
     };
-  }, [addSystemMessage, loadCurrentDraft, loadMethods, startSession]);
+  }, [addSystemMessage, loadCurrentDraft, startSession]);
 
   const refreshExecution = useCallback(
     async (executionId: number) => {
       try {
         const [executions, nodes] = await Promise.all([
-          invoke<MethodExecutionSummary[]>("list_method_executions", { methodId: selectedMethodId || null }),
+          invoke<MethodExecutionSummary[]>("list_method_executions", { methodId: null }),
           invoke<MethodExecutionNodeSummary[]>("get_method_execution_nodes", { executionId }),
         ]);
         const currentExecution = executions.find((execution) => execution.id === executionId);
@@ -861,12 +875,8 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
         addSystemMessage(`I could not refresh Method execution ${executionId}: ${String(err)}`, "failed");
       }
     },
-    [addSystemMessage, selectedMethodId],
+    [addSystemMessage],
   );
-
-  useEffect(() => {
-    void loadMethods();
-  }, [loadMethods]);
 
   useEffect(() => {
     void loadCurrentDraft({ silentMissingProject: true });
@@ -880,7 +890,6 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
       hasProjectRootRef.current = true;
       void startSession({ silentMissingProject: true });
       void loadCurrentDraft({ silentMissingProject: true });
-      void loadMethods();
     })
       .then((fn) => {
         if (cancelled) fn();
@@ -893,7 +902,7 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
       cancelled = true;
       unlisten?.();
     };
-  }, [addSystemMessage, loadCurrentDraft, loadMethods, startSession]);
+  }, [addSystemMessage, loadCurrentDraft, startSession]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1006,7 +1015,6 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
           dispatchAgentFileChange(payload.toolName);
           if (payload.toolName && METHOD_DRAFT_MUTATION_TOOLS.has(payload.toolName)) {
             void loadCurrentDraft({ silentMissingProject: true });
-            void loadMethods();
           }
         }
       }
@@ -1052,7 +1060,7 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
       cancelled = true;
       unlisten?.();
     };
-  }, [addSystemMessage, loadCurrentDraft, loadMethods, updateChatMessages]);
+  }, [addSystemMessage, loadCurrentDraft, updateChatMessages]);
 
   const submitChatMessage = useCallback(async (
     targetChatId: string | null,
@@ -1099,15 +1107,15 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
     }
   }, [chatSessions, isSending, session, startSession, updateChatMessages]);
 
-  const handleSubmit = async () => {
-    const text = input.trim();
+  const handleSubmit = useCallback(async () => {
+    const text = activeInput.trim();
     if (!text || isSending) return;
-    setInput("");
+    clearComposerInput(activeChatIdRef.current);
     await submitChatMessage(activeChatIdRef.current, messages, text);
-  };
+  }, [activeInput, clearComposerInput, isSending, messages, submitChatMessage]);
 
-  const executeCurrentDraft = async () => {
-    if (!draft || isExecutingMethod || isSavingMethod) return;
+  const executeCurrentDraft = useCallback(async () => {
+    if (!draft || isExecutingMethod) return;
     if (derivedDraftReadiness(draft).blockers.length > 0) return;
     setIsExecutingMethod(true);
     setMethodActionFeedback(null);
@@ -1115,12 +1123,6 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
     setExecutionNodes([]);
     try {
       const result = await invoke<ExecuteCurrentMethodDraftResult>("execute_current_method_draft");
-      setMethods((current) => (
-        current.some((method) => method.id === result.method.id)
-          ? current
-          : [result.method, ...current]
-      ));
-      setSelectedMethodId(result.method.id);
       setActiveExecutionId(result.executionId);
       window.dispatchEvent(new CustomEvent("nightshift-method-execution-started", { detail: result }));
       setExecutionStatus("queued");
@@ -1133,17 +1135,73 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
     } finally {
       setIsExecutingMethod(false);
     }
-  };
+  }, [
+    addSystemMessage,
+    draft,
+    isExecutingMethod,
+    refreshExecution,
+  ]);
 
-  const chatItems = groupToolTraceMessages(messages);
-  const contextTokenEstimate = estimateTokenCount(agentInputWithContext(messages, input.trim()));
   const modelConfigLabel = agentConfig
     ? `${agentConfig.model} · reasoning ${agentConfig.reasoningSummary}${
       agentConfig.maxToolLoops ? ` · ${agentConfig.maxToolLoops} tool loops` : ""
     }`
     : "loading model config";
 
-  const chatSidebar = (
+  const renderActiveChatPanel = useCallback(() => (
+    <ChatPanelView
+      messages={messages}
+      input={activeInput}
+      setInput={(value) => setComposerInput(activeChatIdRef.current, value)}
+      onSubmit={() => void handleSubmit()}
+      isSending={isSending}
+      activeTurn={activeTurn}
+      isConnecting={isConnecting}
+      modelConfigLabel={modelConfigLabel}
+      inputRef={inputRef}
+    />
+  ), [
+    activeInput,
+    activeTurn,
+    handleSubmit,
+    isConnecting,
+    isSending,
+    messages,
+    modelConfigLabel,
+    setComposerInput,
+  ]);
+
+  const renderSavedChatPanel = useCallback((chat: ChatSession) => {
+    const input = composerDrafts[chat.id] ?? "";
+    return (
+      <ChatPanelView
+        messages={chat.messages}
+        input={input}
+        setInput={(value) => setComposerInput(chat.id, value)}
+        onSubmit={() => {
+          const text = input.trim();
+          if (!text) return;
+          clearComposerInput(chat.id);
+          void submitChatMessage(chat.id, chat.messages, text);
+        }}
+        isSending={isSending}
+        activeTurn={activeTurn}
+        isConnecting={isConnecting}
+        modelConfigLabel={modelConfigLabel}
+      />
+    );
+  }, [
+    activeTurn,
+    clearComposerInput,
+    composerDrafts,
+    isConnecting,
+    isSending,
+    modelConfigLabel,
+    setComposerInput,
+    submitChatMessage,
+  ]);
+
+  const chatSidebar = useMemo(() => (
     <aside className="agent-chats-sidebar">
         <header className="agent-chats-header">
           <h2>Chats</h2>
@@ -1168,63 +1226,34 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
           ))}
         </ul>
       </aside>
-  );
+  ), [activeChatId, chatSessions, selectChat, startNewChat]);
 
-  const chatPanel = (
-    <div className="agent-chat-panel">
-      <div className="agent-chat-scroll">
-            <ChatItemsView items={chatItems} />
-          </div>
-
-          <ChatComposer
-            input={input}
-            setInput={setInput}
-            onSubmit={() => void handleSubmit()}
-            isSending={isSending}
-            activeTurn={activeTurn}
-            isConnecting={isConnecting}
-            contextTokenEstimate={contextTokenEstimate}
-            modelConfigLabel={modelConfigLabel}
-            inputRef={inputRef}
-          />
-    </div>
-  );
-
-  const renderChatPanel = (chatId?: string | null) => {
+  const renderChatPanel = useCallback((chatId?: string | null) => {
     if (!chatId) {
-      return <div className="agent-chat-workspace panel-embedded">{chatPanel}</div>;
+      return renderActiveChatPanel();
     }
     const chat = chatSessions.find((candidate) => candidate.id === chatId);
     if (!chat) {
-      return <div className="agent-chat-workspace panel-embedded">{chatPanel}</div>;
+      return renderActiveChatPanel();
     }
-    return (
-      <SavedChatPanel
-        chat={chat}
-        onSubmit={(id, baseMessages, text) => void submitChatMessage(id, baseMessages, text)}
-        isSending={isSending}
-        activeTurn={activeTurn}
-        isConnecting={isConnecting}
-        modelConfigLabel={modelConfigLabel}
-      />
-    );
-  };
+    return renderSavedChatPanel(chat);
+  }, [chatSessions, renderActiveChatPanel, renderSavedChatPanel]);
 
-  const graphPanel = (
+  const graphPanel = useMemo(() => (
     <div className="agent-visual-panel agent-graph-sidebar">
       <section className="method-execution-panel" aria-label="Method execution">
             <div className="method-execution-controls">
               <button
                 type="button"
-                onClick={() => void loadMethods()}
-                disabled={isExecutingMethod || isSavingMethod}
+                onClick={() => void loadCurrentDraft()}
+                disabled={isExecutingMethod}
               >
                 Refresh
               </button>
               <button
                 type="button"
                 onClick={() => void executeCurrentDraft()}
-                disabled={!draft || derivedDraftReadiness(draft).blockers.length > 0 || isExecutingMethod || isSavingMethod}
+                disabled={!draft || derivedDraftReadiness(draft).blockers.length > 0 || isExecutingMethod}
               >
                 {isExecutingMethod ? "Starting" : "Execute Draft"}
               </button>
@@ -1242,9 +1271,20 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
             <div className="agent-empty-visual">No Method draft yet. Start in Chat to create one.</div>
           )}
     </div>
-  );
+  ), [
+    draft,
+    executionNodes,
+    executeCurrentDraft,
+    isExecutingMethod,
+    loadCurrentDraft,
+    methodActionFeedback,
+  ]);
 
-  const fullWorkspace = (
+  const renderDraftGraphPanel = useCallback(() => (
+    <div className="agent-chat-workspace panel-embedded">{graphPanel}</div>
+  ), [graphPanel]);
+
+  const renderFullWorkspace = useCallback(() => (
     <div className="agent-chat-workspace">
       {chatSidebar}
 
@@ -1261,7 +1301,7 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
           minSize={35}
           className="agent-chat-panel"
         >
-          {chatPanel}
+          {renderActiveChatPanel()}
         </Panel>
 
         <PanelResizeHandle
@@ -1281,35 +1321,28 @@ function MethodWorkspaceController({ children, initialChatId }: { children?: Rea
         </Panel>
       </PanelGroup>
     </div>
-  );
+  ), [chatSidebar, graphPanel, renderActiveChatPanel]);
+
+  const renderExecutionGraphPanel = useCallback((executionId?: string | number | null) => (
+    <ExecutionGraphPanelView executionId={executionId} />
+  ), []);
+
+  const contextValue = useMemo<MethodWorkspaceContextValue>(() => ({
+    renderChatPanel,
+    renderDraftGraphPanel,
+    renderFullWorkspace,
+    renderExecutionGraphPanel,
+  }), [renderChatPanel, renderDraftGraphPanel, renderExecutionGraphPanel, renderFullWorkspace]);
 
   return (
-    <MethodWorkspaceContext.Provider
-      value={{
-        renderChatPanel,
-        draftGraphPanel: <div className="agent-chat-workspace panel-embedded">{graphPanel}</div>,
-        fullWorkspace,
-        renderExecutionGraphPanel: (executionId) => <ExecutionGraphPanelView executionId={executionId} />,
-      }}
-    >
-      {children ?? fullWorkspace}
+    <MethodWorkspaceContext.Provider value={contextValue}>
+      {children ?? renderFullWorkspace()}
     </MethodWorkspaceContext.Provider>
   );
 }
 
-export default function AgentWorkspace({ variant = "full", initialChatId }: AgentWorkspaceProps) {
-  return (
-    <MethodWorkspaceProvider initialChatId={initialChatId}>
-      <AgentWorkspaceContent variant={variant} />
-    </MethodWorkspaceProvider>
-  );
-}
-
-function AgentWorkspaceContent({ variant }: { variant: "full" | "chat" | "graph" }) {
-  const workspace = useMethodWorkspace();
-  if (variant === "chat") return <>{workspace.renderChatPanel()}</>;
-  if (variant === "graph") return <>{workspace.draftGraphPanel}</>;
-  return <>{workspace.fullWorkspace}</>;
+export default function AgentWorkspace({ initialChatId }: AgentWorkspaceProps) {
+  return <MethodWorkspaceProvider initialChatId={initialChatId} />;
 }
 
 function ExecutionGraphPanelView({ executionId }: { executionId?: string | number | null }) {

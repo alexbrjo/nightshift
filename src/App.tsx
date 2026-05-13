@@ -38,6 +38,8 @@ import {
   type WorkspacePanel,
 } from "./layout";
 
+const LAYOUT_SAVE_DEBOUNCE_MS = 300;
+
 function getLanguage(filename: string): string | undefined {
   // Multi-extension files like `prompt.spec.jinja2` → use the FINAL extension.
   const ext = filename.split(".").pop()?.toLowerCase();
@@ -69,10 +71,6 @@ function getLanguage(filename: string): string | undefined {
     prompt: "jinja2",
   };
   return ext ? map[ext] : undefined;
-}
-
-function loadInitialLayout(): WorkspaceLayout {
-  return defaultWorkspaceLayout();
 }
 
 function ResourceNavButton({
@@ -196,6 +194,16 @@ function MethodResources({ onOpenMethod }: { onOpenMethod: () => void }) {
     void loadMethods();
   }, [loadMethods]);
 
+  useEffect(() => {
+    const handleMethodsChanged = () => void loadMethods();
+    window.addEventListener("nightshift-method-draft-mutated", handleMethodsChanged);
+    window.addEventListener("nightshift-method-execution-started", handleMethodsChanged);
+    return () => {
+      window.removeEventListener("nightshift-method-draft-mutated", handleMethodsChanged);
+      window.removeEventListener("nightshift-method-execution-started", handleMethodsChanged);
+    };
+  }, [loadMethods]);
+
   return (
     <div className="resource-list">
       {methods.length === 0 && !error && (
@@ -218,7 +226,7 @@ function MethodResources({ onOpenMethod }: { onOpenMethod: () => void }) {
 }
 
 export default function App() {
-  const [layout, setLayout] = useState<WorkspaceLayout>(loadInitialLayout);
+  const [layout, setLayout] = useState<WorkspaceLayout>(defaultWorkspaceLayout);
   const [layoutPersistenceReady, setLayoutPersistenceReady] = useState(false);
   const [fileSnapshots, setFileSnapshots] = useState<Record<string, {
     path: string;
@@ -232,6 +240,7 @@ export default function App() {
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0);
   const [projectFolderName, setProjectFolderName] = useState("");
   const fileContentsRef = useRef(new Map<string, string>());
+  const hydratingFilePathsRef = useRef(new Set<string>());
   // Per-file disk content captured the first time a file is opened (and after
   // each save). A path is "dirty" iff its in-memory content differs from this
   // baseline; the dirty set drives the unsaved-marker in the file tree.
@@ -259,35 +268,34 @@ export default function App() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (!layoutPersistenceReady) return;
-    void invoke("save_project_layout", { layout: JSON.parse(serializeWorkspaceLayout(layout)) });
+    const timeout = window.setTimeout(() => {
+      void invoke("save_project_layout", { layout: JSON.parse(serializeWorkspaceLayout(layout)) });
+    }, LAYOUT_SAVE_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeout);
   }, [layout, layoutPersistenceReady]);
-
-  const defaultLayoutForMissingProject = useCallback((preserveActiveResourceKind = false) => (
-    preserveActiveResourceKind
-      ? (current: WorkspaceLayout) => ({
-          ...defaultWorkspaceLayout(),
-          activeResourceKind: current.activeResourceKind,
-          sidebarMode: current.sidebarMode,
-        })
-      : () => defaultWorkspaceLayout()
-  ), []);
 
   const loadProjectLayout = useCallback(async (
     options: { resetOnMissing?: boolean; preserveActiveResourceKind?: boolean } = {},
   ) => {
     try {
-      const value = await invoke<unknown | null>("load_project_layout");
+      const value = await invoke<unknown>("load_project_layout");
       if (value !== null && value !== undefined) {
         setLayout(parseWorkspaceLayout(JSON.stringify(value)) ?? defaultWorkspaceLayout());
       } else if (options.resetOnMissing) {
-        setLayout(defaultLayoutForMissingProject(options.preserveActiveResourceKind));
+        setLayout(options.preserveActiveResourceKind
+          ? (current: WorkspaceLayout) => ({
+              ...defaultWorkspaceLayout(),
+              activeResourceKind: current.activeResourceKind,
+              sidebarMode: current.sidebarMode,
+            })
+          : defaultWorkspaceLayout);
       }
       setLayoutPersistenceReady(true);
     } catch {
       setLayout(defaultWorkspaceLayout());
       setLayoutPersistenceReady(false);
     }
-  }, [defaultLayoutForMissingProject]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -313,6 +321,7 @@ export default function App() {
         setFileSnapshots({});
         fileContentsRef.current.clear();
         originalContentsRef.current.clear();
+        hydratingFilePathsRef.current.clear();
         setDirtyPaths(new Set());
         setProjectFolderName("");
         void loadProjectLayout({ resetOnMissing: true, preserveActiveResourceKind: true });
@@ -384,50 +393,65 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
+    const pathsToHydrate = Array.from(new Set(layout.panels
+      .filter((panel) => panel.type === "project-editor" && panel.resourceId)
+      .map((panel) => panel.resourceId as string)
+      .filter((path) => !fileContentsRef.current.has(path) && !hydratingFilePathsRef.current.has(path))));
+
+    if (pathsToHydrate.length === 0) return;
+    pathsToHydrate.forEach((path) => hydratingFilePathsRef.current.add(path));
+
     const hydrateRestoredFiles = async () => {
-      for (const panel of layout.panels) {
-        if (panel.type !== "project-editor" || !panel.resourceId || fileSnapshots[panel.resourceId]) {
-          continue;
-        }
-        const path = panel.resourceId;
+      const hydratedFiles = await Promise.all(pathsToHydrate.map(async (path) => {
         try {
           const content = await invoke<string>("read_file", { relativePath: path });
-          if (cancelled) return;
           const name = path.split(/[\\/]/).pop() || path;
-          fileContentsRef.current.set(path, content);
-          originalContentsRef.current.set(path, content);
-          setFileSnapshots((current) => current[path]
-            ? current
-            : {
-                ...current,
-                [path]: {
-                  path,
-                  name,
-                  content,
-                  language: getLanguage(name),
-                },
-              });
+          return {
+            path,
+            snapshot: {
+              path,
+              name,
+              content,
+              language: getLanguage(name),
+            },
+            content,
+          };
         } catch (err) {
-          if (cancelled) return;
-          setFileSnapshots((current) => current[path]
-            ? current
-            : {
-                ...current,
-                [path]: {
-                  path,
-                  name: path.split(/[\\/]/).pop() || path,
-                  content: "",
-                  error: String(err),
-                },
-              });
+          return {
+            path,
+            snapshot: {
+              path,
+              name: path.split(/[\\/]/).pop() || path,
+              content: "",
+              error: String(err),
+            },
+            content: "",
+          };
         }
+      }));
+
+      if (cancelled) return;
+      for (const file of hydratedFiles) {
+        fileContentsRef.current.set(file.path, file.content);
+        originalContentsRef.current.set(file.path, file.content);
       }
+      setFileSnapshots((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const file of hydratedFiles) {
+          if (next[file.path]) continue;
+          next[file.path] = file.snapshot;
+          changed = true;
+        }
+        return changed ? next : current;
+      });
     };
     void hydrateRestoredFiles();
     return () => {
       cancelled = true;
+      pathsToHydrate.forEach((path) => hydratingFilePathsRef.current.delete(path));
     };
-  }, [layout.panels, fileSnapshots]);
+  }, [layout.panels]);
 
   const handleOpenCollection = useCallback((collection: Collection) => {
     setSelectedCollectionId(collection.id);

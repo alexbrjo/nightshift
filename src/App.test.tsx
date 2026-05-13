@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { mockInvoke, mockListen } from "./setupTests";
 import App from "./App";
@@ -11,10 +11,12 @@ function workspacePanelTitles() {
 describe("App workspace shell", () => {
   let projectLayout: unknown | null;
   let projectConversations: unknown | null;
+  let projectMethods: unknown[];
 
   beforeEach(() => {
     projectLayout = null;
     projectConversations = null;
+    projectMethods = [];
     mockInvoke.mockReset();
     mockListen.mockClear();
     mockInvoke.mockImplementation((command: string) => {
@@ -58,6 +60,7 @@ describe("App workspace shell", () => {
             metadata: {},
           });
         case "list_methods":
+          return Promise.resolve(projectMethods);
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
@@ -69,6 +72,10 @@ describe("App workspace shell", () => {
       }
     });
     localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("renders unified resource buttons", () => {
@@ -168,6 +175,29 @@ describe("App workspace shell", () => {
     expect(await screen.findByText("Your Methods will appear here after you create one.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create a new Method" })).not.toBeInTheDocument();
     expect(screen.queryByText("Current Method Graph")).not.toBeInTheDocument();
+  });
+
+  it("refreshes open Method resources after agent-created Methods", async () => {
+    render(<App />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Methods" }));
+    expect(await screen.findByText("Your Methods will appear here after you create one.")).toBeInTheDocument();
+
+    projectMethods = [
+      {
+        id: "method-hash",
+        title: "Generated Method",
+        contentHash: "hash",
+        folderPath: "/tmp/project/methods/method-hash",
+        createdAt: "2026-05-13T00:00:00Z",
+      },
+    ];
+    act(() => {
+      window.dispatchEvent(new CustomEvent("nightshift-method-execution-started"));
+    });
+
+    expect(await screen.findByRole("button", { name: "Generated Method" })).toBeInTheDocument();
+    expect(screen.queryByText("Your Methods will appear here after you create one.")).not.toBeInTheDocument();
   });
 
   it("expands and collapses the resource sidebar", () => {
@@ -273,6 +303,33 @@ describe("App workspace shell", () => {
     expect(document.querySelector(".resource-sidebar-panel")).not.toBeInTheDocument();
   });
 
+  it("debounces project layout saves across rapid layout changes", async () => {
+    vi.useFakeTimers();
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockInvoke).toHaveBeenCalledWith("load_project_layout");
+    mockInvoke.mockClear();
+
+    fireEvent.click(screen.getByRole("button", { name: "Methods" }));
+    fireEvent.click(screen.getByRole("button", { name: "Project" }));
+    fireEvent.click(screen.getByRole("button", { name: "Jobs" }));
+
+    act(() => {
+      vi.advanceTimersByTime(299);
+    });
+    expect(mockInvoke.mock.calls.filter(([command]) => command === "save_project_layout")).toHaveLength(0);
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(mockInvoke.mock.calls.filter(([command]) => command === "save_project_layout")).toHaveLength(1);
+  });
+
   it("hydrates restored project editor panels from their persisted resource id", async () => {
     projectLayout = JSON.parse(
       serializeWorkspaceLayout({
@@ -291,6 +348,65 @@ describe("App workspace shell", () => {
 
     await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("read_file", { relativePath: "notes.md" }));
     expect(await screen.findByText("restored file content")).toBeInTheDocument();
+  });
+
+  it("hydrates restored project editor panels concurrently", async () => {
+    const pendingReads: Array<{ path: string; resolve: (content: string) => void }> = [];
+    projectLayout = JSON.parse(
+      serializeWorkspaceLayout({
+        schemaVersion: 1,
+        sidebarMode: "expanded",
+        activeResourceKind: "project",
+        panels: [
+          { id: "project-editor:first.md", type: "project-editor", title: "first.md", resourceId: "first.md" },
+          { id: "project-editor:second.md", type: "project-editor", title: "second.md", resourceId: "second.md" },
+        ],
+        activePanelId: "project-editor:first.md",
+        splitSizes: [50, 50],
+      }),
+    );
+    mockInvoke.mockImplementation((command: string, payload?: { relativePath?: string }) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "load_project_layout":
+          return Promise.resolve(projectLayout);
+        case "read_file":
+          return new Promise((resolve) => {
+            pendingReads.push({ path: payload?.relativePath ?? "", resolve });
+          });
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_conversations":
+        case "save_project_layout":
+        case "save_project_conversations":
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "scan_folder":
+          return Promise.resolve({ name: "project", children: [] });
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+        case "list_inference_jobs":
+        case "list_all_collections":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<App />);
+
+    await waitFor(() => expect(pendingReads.map((read) => read.path).sort()).toEqual(["first.md", "second.md"]));
+    act(() => {
+      pendingReads.forEach((read) => read.resolve(`${read.path} content`));
+    });
+
+    expect(await screen.findByText("first.md content")).toBeInTheDocument();
+    expect(await screen.findByText("second.md content")).toBeInTheDocument();
   });
 
   it("opens a Method execution panel when Execute Draft starts an execution", async () => {
@@ -427,6 +543,46 @@ describe("App workspace shell", () => {
     expect(workspacePanelTitles()).toContain("Second conversation");
     expect((await screen.findAllByText("First conversation text")).length).toBeGreaterThan(0);
     expect((await screen.findAllByText("Second conversation text")).length).toBeGreaterThan(0);
+  });
+
+  it("preserves saved chat composer drafts when panels remount", async () => {
+    projectConversations = [
+      {
+        id: "chat-one",
+        title: "First conversation",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messages: [{ id: "m1", role: "user", text: "First conversation text", status: "completed" }],
+      },
+      {
+        id: "chat-two",
+        title: "Second conversation",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        messages: [{ id: "m2", role: "user", text: "Second conversation text", status: "completed" }],
+      },
+    ];
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "First conversation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Second conversation" }));
+
+    const firstPanel = await screen.findByRole("region", { name: "First conversation" });
+    const secondPanel = await screen.findByRole("region", { name: "Second conversation" });
+    fireEvent.change(within(firstPanel).getByPlaceholderText(/Describe or refine/i), {
+      target: { value: "Keep this first draft" },
+    });
+    fireEvent.change(within(secondPanel).getByPlaceholderText(/Describe or refine/i), {
+      target: { value: "Different second draft" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Close First conversation" }));
+    fireEvent.click(screen.getByRole("button", { name: "First conversation" }));
+
+    const reopenedFirstPanel = await screen.findByRole("region", { name: "First conversation" });
+    expect(within(reopenedFirstPanel).getByPlaceholderText(/Describe or refine/i)).toHaveValue("Keep this first draft");
+    expect(within(secondPanel).getByPlaceholderText(/Describe or refine/i)).toHaveValue("Different second draft");
   });
 
   it("lets reopened conversations continue and expands their tool call details", async () => {

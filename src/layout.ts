@@ -69,6 +69,7 @@ export function closePanel(layout: WorkspaceLayout, panelIdToClose: string): Wor
   const index = layout.panels.findIndex((panel) => panel.id === panelIdToClose);
   if (index === -1) return layout;
   const panels = layout.panels.filter((panel) => panel.id !== panelIdToClose);
+  const splitSizes = layout.splitSizes.filter((_, sizeIndex) => sizeIndex !== index);
   const activePanelId =
     layout.activePanelId === panelIdToClose
       ? panels[Math.max(0, index - 1)]?.id ?? panels[0]?.id ?? ""
@@ -77,7 +78,7 @@ export function closePanel(layout: WorkspaceLayout, panelIdToClose: string): Wor
     ...layout,
     panels,
     activePanelId,
-    splitSizes: normalizeSplitSizes(layout.splitSizes.slice(0, panels.length), panels.length),
+    splitSizes: normalizeSplitSizes(splitSizes, panels.length),
   };
 }
 

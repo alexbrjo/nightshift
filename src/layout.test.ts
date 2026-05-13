@@ -37,6 +37,23 @@ describe("workspace layout helpers", () => {
     expect(next.activePanelId).toBe("");
   });
 
+  it("keeps split sizes matched to surviving panels when closing a middle panel", () => {
+    const first = createPanel("chat", { resourceId: "first" });
+    const second = createPanel("job-view", { resourceId: 2 });
+    const third = createPanel("collection-view", { resourceId: 3 });
+    const layout = {
+      ...defaultWorkspaceLayout(),
+      panels: [first, second, third],
+      activePanelId: third.id,
+      splitSizes: [20, 30, 50],
+    };
+
+    const next = closePanel(layout, second.id);
+
+    expect(next.panels.map((panel) => panel.id)).toEqual([first.id, third.id]);
+    expect(next.splitSizes).toEqual([100 * (20 / 70), 100 * (50 / 70)]);
+  });
+
   it("validates persisted schema and discards incompatible cache payloads", () => {
     const layout = openOrFocusPanel(defaultWorkspaceLayout(), createPanel("collection-view", { resourceId: 3 }));
     expect(parseWorkspaceLayout(serializeWorkspaceLayout(layout))?.panels).toHaveLength(1);
