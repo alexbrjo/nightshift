@@ -515,7 +515,6 @@ export default function MethodGraph({ draft, executionNodes = [] }: MethodGraphP
     [draft, executionNodes],
   );
   const [flowSize, setFlowSize] = useState<FlowSize>({ width: 0, height: 0 });
-  const [viewport, setViewport] = useState<Viewport | undefined>();
   const graphSignature = [
     nodes.map((node) => `${node.id}:${node.position.x}:${node.position.y}`).join("|"),
     edges.map((edge) => edge.id).join("|"),
@@ -550,19 +549,7 @@ export default function MethodGraph({ draft, executionNodes = [] }: MethodGraphP
     () => fitMethodGraphViewport(nodes, flowSize),
     [flowSize, graphSignature, nodes],
   );
-
-  useEffect(() => {
-    if (flowSize.width > 0 && flowSize.height > 0) {
-      setViewport((current) =>
-        current
-          && current.x === fittedViewport.x
-          && current.y === fittedViewport.y
-          && current.zoom === fittedViewport.zoom
-          ? current
-          : fittedViewport,
-      );
-    }
-  }, [fittedViewport, flowSize.height, flowSize.width]);
+  const flowKey = `${graphSignature}:${flowSize.width}:${flowSize.height}`;
 
   if (nodes.length === 0) {
     return <div className="agent-empty-visual">No nodes yet.</div>;
@@ -571,16 +558,19 @@ export default function MethodGraph({ draft, executionNodes = [] }: MethodGraphP
   return (
     <div ref={containerRef} className="method-flow" aria-label="Draft Method graph">
       <ReactFlow
+        key={flowKey}
         nodes={nodes}
         edges={edges}
         nodeTypes={nodeTypes}
         nodesDraggable={false}
         nodesConnectable={false}
+        nodesFocusable={false}
+        elementsSelectable={false}
         edgesFocusable={false}
-        viewport={viewport}
-        onViewportChange={setViewport}
+        defaultViewport={fittedViewport}
         minZoom={MIN_GRAPH_ZOOM}
         maxZoom={1.8}
+        panOnDrag
         panOnScroll
         proOptions={{ hideAttribution: true }}
         defaultEdgeOptions={{ type: "smoothstep" }}

@@ -10,12 +10,14 @@ export type PanelType =
   | "collection-view"
   | "job-view"
   | "new-job";
+export type EditorViewMode = "code" | "markdown" | "methodGraph";
 
 export interface WorkspacePanel {
   id: string;
   type: PanelType;
   title: string;
   resourceId?: string;
+  viewMode?: EditorViewMode;
 }
 
 export interface WorkspaceLayout {
@@ -89,19 +91,20 @@ export function validateWorkspaceLayout(value: unknown): WorkspaceLayout | null 
   if (candidate.sidebarMode !== "collapsed" && candidate.sidebarMode !== "expanded") return null;
   if (!isResourceKind(candidate.activeResourceKind)) return null;
   if (!Array.isArray(candidate.panels)) return null;
-  const panels = candidate.panels.filter(isWorkspacePanel);
-  if (panels.length !== candidate.panels.length) return null;
+  const panels = candidate.panels.map(sanitizeWorkspacePanel);
+  if (panels.some((panel) => panel === null)) return null;
+  const sanitizedPanels = panels as WorkspacePanel[];
   const requestedActivePanelId = typeof candidate.activePanelId === "string" ? candidate.activePanelId : undefined;
-  const activePanelId = requestedActivePanelId && panels.some((panel) => panel.id === requestedActivePanelId)
+  const activePanelId = requestedActivePanelId && sanitizedPanels.some((panel) => panel.id === requestedActivePanelId)
     ? requestedActivePanelId
-    : panels[0]?.id ?? "";
+    : sanitizedPanels[0]?.id ?? "";
   return {
     schemaVersion: LAYOUT_SCHEMA_VERSION,
     sidebarMode: candidate.sidebarMode,
     activeResourceKind: candidate.activeResourceKind,
-    panels,
+    panels: sanitizedPanels,
     activePanelId,
-    splitSizes: normalizeSplitSizes(candidate.splitSizes, panels.length),
+    splitSizes: normalizeSplitSizes(candidate.splitSizes, sanitizedPanels.length),
   };
 }
 
@@ -137,15 +140,24 @@ function defaultPanelTitle(type: PanelType, resourceId?: string) {
   }
 }
 
-function isWorkspacePanel(value: unknown): value is WorkspacePanel {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+function sanitizeWorkspacePanel(value: unknown): WorkspacePanel | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Partial<WorkspacePanel>;
-  return Boolean(
-    typeof candidate.id === "string"
-      && isPanelType(candidate.type)
-      && typeof candidate.title === "string"
-      && (candidate.resourceId === undefined || typeof candidate.resourceId === "string"),
-  );
+  if (
+    typeof candidate.id !== "string"
+      || !isPanelType(candidate.type)
+      || typeof candidate.title !== "string"
+      || (candidate.resourceId !== undefined && typeof candidate.resourceId !== "string")
+  ) {
+    return null;
+  }
+  return {
+    id: candidate.id,
+    type: candidate.type,
+    title: candidate.title,
+    ...(candidate.resourceId === undefined ? {} : { resourceId: candidate.resourceId }),
+    ...(isEditorViewMode(candidate.viewMode) ? { viewMode: candidate.viewMode } : {}),
+  };
 }
 
 function isPanelType(value: unknown): value is PanelType {
@@ -164,6 +176,10 @@ function isResourceKind(value: unknown): value is ResourceKind {
     || value === "project"
     || value === "job"
     || value === "collection";
+}
+
+function isEditorViewMode(value: unknown): value is EditorViewMode {
+  return value === "code" || value === "markdown" || value === "methodGraph";
 }
 
 function normalizeSplitSizes(value: unknown, panelCount: number): number[] {

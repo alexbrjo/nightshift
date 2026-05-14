@@ -553,11 +553,20 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   flex-shrink: 0;
   height: 38px;
   padding: 0 10px 0 14px;
   border-bottom: 1px solid var(--border-color);
   background: var(--bg-surface);
+}
+
+.workspace-panel-header-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
 }
 
 .workspace-panel-title,
@@ -577,6 +586,34 @@ body {
   font-size: 12px;
   font-weight: 600;
   text-align: left;
+}
+
+.project-file-view-switcher {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: 26px;
+}
+
+.project-file-view-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 20px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.project-file-view-button:hover {
+  color: var(--text-primary);
+}
+
+.project-file-view-button.active {
+  color: var(--accent-blue);
 }
 
 .workspace-panel-title:hover,
@@ -603,6 +640,107 @@ body {
   min-height: 0;
   overflow: hidden;
   display: flex;
+}
+
+.project-file-preview {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 32px;
+  color: var(--text-primary);
+  background: var(--bg-deepest);
+}
+
+.markdown-preview {
+  line-height: 1.58;
+}
+
+.markdown-preview h1,
+.markdown-preview h2,
+.markdown-preview h3 {
+  margin: 0 0 12px;
+  color: var(--text-primary);
+}
+
+.markdown-preview h1 {
+  font-size: 26px;
+}
+
+.markdown-preview h2 {
+  margin-top: 24px;
+  font-size: 20px;
+}
+
+.markdown-preview h3 {
+  margin-top: 20px;
+  font-size: 16px;
+}
+
+.markdown-preview p,
+.markdown-preview ul,
+.markdown-preview ol,
+.markdown-preview pre,
+.markdown-preview table,
+.markdown-preview blockquote {
+  margin: 0 0 16px;
+}
+
+.markdown-preview code {
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+}
+
+.markdown-preview pre {
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--bg-surface);
+}
+
+.markdown-preview pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.markdown-preview table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.markdown-preview th,
+.markdown-preview td {
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  text-align: left;
+}
+
+.project-file-method-graph {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+
+.project-file-preview-error {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--text-secondary);
+  text-align: center;
+}
+
+.project-file-preview-error strong {
+  color: var(--text-primary);
 }
 
 .panel-job-view {
@@ -2960,6 +3098,10 @@ legend {
   color: var(--text-primary);
   background: var(--bg-elevated);
   border-bottom-color: var(--border-color);
+}
+
+.method-flow .react-flow__node {
+  pointer-events: none;
 }
 
 .method-flow .react-flow__edge-path {

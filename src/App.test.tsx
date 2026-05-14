@@ -350,6 +350,236 @@ describe("App workspace shell", () => {
     expect(await screen.findByText("restored file content")).toBeInTheDocument();
   });
 
+  it("shows Markdown view controls and persists the selected editor view", async () => {
+    projectLayout = JSON.parse(
+      serializeWorkspaceLayout({
+        schemaVersion: 1,
+        sidebarMode: "expanded",
+        activeResourceKind: "project",
+        panels: [
+          { id: "project-editor:README.md", type: "project-editor", title: "README.md", resourceId: "README.md" },
+        ],
+        activePanelId: "project-editor:README.md",
+        splitSizes: [100],
+      }),
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole("button", { name: "Show Code for README.md" })).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Show Markdown preview for README.md" }));
+    expect(screen.getByTestId("markdown-preview")).toBeInTheDocument();
+
+    mockInvoke.mockClear();
+
+    await waitFor(() => {
+      expect(mockInvoke).toHaveBeenCalledWith("save_project_layout", {
+        layout: expect.objectContaining({
+          panels: [
+            expect.objectContaining({
+              id: "project-editor:README.md",
+              viewMode: "markdown",
+            }),
+          ],
+        }),
+      });
+    });
+  });
+
+  it("hides view controls for non-previewable project files", async () => {
+    projectLayout = JSON.parse(
+      serializeWorkspaceLayout({
+        schemaVersion: 1,
+        sidebarMode: "expanded",
+        activeResourceKind: "project",
+        panels: [
+          { id: "project-editor:src%2Fcode.js", type: "project-editor", title: "code.js", resourceId: "src/code.js" },
+        ],
+        activePanelId: "project-editor:src%2Fcode.js",
+        splitSizes: [100],
+      }),
+    );
+
+    render(<App />);
+
+    await waitFor(() => expect(mockInvoke).toHaveBeenCalledWith("read_file", { relativePath: "src/code.js" }));
+    expect(screen.queryByRole("group", { name: "View options for code.js" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show Code for code.js" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show Markdown preview for code.js" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show Method graph for code.js" })).not.toBeInTheDocument();
+  });
+
+  it("renders a Method graph from the open YAML buffer", async () => {
+    const methodYaml = [
+      "schema_version: 2",
+      "id: edge-method",
+      "title: Edge Method",
+      "objective: Render graph",
+      "workflow:",
+      "  nodes:",
+      "    - id: generate",
+      "      label: Generate",
+      "      type: inference",
+      "      config: {}",
+      "parameters: {}",
+      "provider: {}",
+      "outputs: []",
+      "metadata: {}",
+    ].join("\n");
+    projectLayout = JSON.parse(
+      serializeWorkspaceLayout({
+        schemaVersion: 1,
+        sidebarMode: "expanded",
+        activeResourceKind: "project",
+        panels: [
+          {
+            id: "project-editor:methods%2Fedge-method%2Fmethod.yaml",
+            type: "project-editor",
+            title: "method.yaml",
+            resourceId: "methods/edge-method/method.yaml",
+          },
+        ],
+        activePanelId: "project-editor:methods%2Fedge-method%2Fmethod.yaml",
+        splitSizes: [100],
+      }),
+    );
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "load_project_layout":
+          return Promise.resolve(projectLayout);
+        case "read_file":
+          return Promise.resolve(methodYaml);
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_conversations":
+        case "save_project_layout":
+        case "save_project_conversations":
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "scan_folder":
+          return Promise.resolve({ name: "project", children: [] });
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+        case "list_inference_jobs":
+        case "list_all_collections":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show Method graph for method.yaml" }));
+
+    expect(await screen.findByTestId("method-graph-preview")).toBeInTheDocument();
+    expect(screen.getByText("Generate")).toBeInTheDocument();
+  });
+
+  it("offers Method graph for YAML files beyond method manifests", async () => {
+    const methodYaml = [
+      "schema_version: 2",
+      "id: loose-method",
+      "title: Loose Method",
+      "objective: Render graph",
+      "workflow:",
+      "  nodes:",
+      "    - id: inspect",
+      "      label: Inspect",
+      "      type: analysis",
+      "      config: {}",
+      "parameters: {}",
+      "provider: {}",
+    ].join("\n");
+    projectLayout = JSON.parse(
+      serializeWorkspaceLayout({
+        schemaVersion: 1,
+        sidebarMode: "expanded",
+        activeResourceKind: "project",
+        panels: [
+          {
+            id: "project-editor:experiments%2Floose.yaml",
+            type: "project-editor",
+            title: "loose.yaml",
+            resourceId: "experiments/loose.yaml",
+          },
+        ],
+        activePanelId: "project-editor:experiments%2Floose.yaml",
+        splitSizes: [100],
+      }),
+    );
+    mockInvoke.mockImplementation((command: string) => {
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "load_project_layout":
+          return Promise.resolve(projectLayout);
+        case "read_file":
+          return Promise.resolve(methodYaml);
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "load_project_conversations":
+        case "save_project_layout":
+        case "save_project_conversations":
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "scan_folder":
+          return Promise.resolve({ name: "project", children: [] });
+        case "list_methods":
+        case "list_method_executions":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+        case "list_inference_jobs":
+        case "list_all_collections":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show Method graph for loose.yaml" }));
+
+    expect(await screen.findByTestId("method-graph-preview")).toBeInTheDocument();
+    expect(screen.getByText("Inspect")).toBeInTheDocument();
+  });
+
+  it("shows an inline Method graph error for invalid Method YAML", async () => {
+    projectLayout = JSON.parse(
+      serializeWorkspaceLayout({
+        schemaVersion: 1,
+        sidebarMode: "expanded",
+        activeResourceKind: "project",
+        panels: [
+          {
+            id: "project-editor:methods%2Fedge-method%2Fmethod.yaml",
+            type: "project-editor",
+            title: "method.yaml",
+            resourceId: "methods/edge-method/method.yaml",
+          },
+        ],
+        activePanelId: "project-editor:methods%2Fedge-method%2Fmethod.yaml",
+        splitSizes: [100],
+      }),
+    );
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Show Method graph for method.yaml" }));
+
+    expect(await screen.findByText("Method graph unavailable")).toBeInTheDocument();
+    expect(screen.getByText("This file is not a valid Method document.")).toBeInTheDocument();
+  });
+
   it("hydrates restored project editor panels concurrently", async () => {
     const pendingReads: Array<{ path: string; resolve: (content: string) => void }> = [];
     projectLayout = JSON.parse(

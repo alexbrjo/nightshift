@@ -15,13 +15,21 @@ import CollectionsList from "./components/CollectionsList";
 import JobListSidebar from "./components/JobListSidebar";
 import JobViewPage from "./components/JobViewPage";
 import InferenceJobForm from "./components/InferenceJobForm";
+import {
+  MarkdownPreview,
+  MethodGraphPreview,
+  projectFileViewOptions,
+} from "./components/ProjectFileViews";
 import { ToastProvider } from "./components/Toast";
 import type { Collection, MethodSummary } from "./database";
 import {
+  CodeViewIcon,
   DropperIcon,
   CabinetIcon,
+  MarkdownViewIcon,
   TestTubeIcon,
   RackIcon,
+  MethodGraphViewIcon,
   MethodIcon,
   MoonIcon,
 } from "./components/icons";
@@ -32,6 +40,7 @@ import {
   openOrFocusPanel,
   parseWorkspaceLayout,
   serializeWorkspaceLayout,
+  type EditorViewMode,
   type PanelType,
   type ResourceKind,
   type WorkspaceLayout,
@@ -96,6 +105,17 @@ function ResourceNavButton({
       <span>{icon}</span>
     </button>
   );
+}
+
+function viewModeIcon(mode: EditorViewMode) {
+  switch (mode) {
+    case "code":
+      return <CodeViewIcon />;
+    case "markdown":
+      return <MarkdownViewIcon />;
+    case "methodGraph":
+      return <MethodGraphViewIcon />;
+  }
 }
 
 function isStoredConversationResource(chat: { messages?: unknown[] }) {
@@ -345,6 +365,13 @@ export default function App() {
     setLayout((current) => openOrFocusPanel(current, createPanel(type, options)));
   }, []);
 
+  const setProjectEditorViewMode = useCallback((panelId: string, viewMode: EditorViewMode) => {
+    setLayout((current) => ({
+      ...current,
+      panels: current.panels.map((panel) => panel.id === panelId ? { ...panel, viewMode } : panel),
+    }));
+  }, []);
+
   const setActiveResourceKind = useCallback((kind: ResourceKind) => {
     setLayout((current) => ({
       ...current,
@@ -539,6 +566,33 @@ export default function App() {
     }
   };
 
+  const renderProjectEditorViewSwitcher = (panel: WorkspacePanel) => {
+    if (panel.type !== "project-editor") return null;
+    const file = fileSnapshots[panel.resourceId ?? ""];
+    if (!file) return null;
+    const options = projectFileViewOptions(file.path, file.name);
+    if (options.length <= 1) return null;
+    const selectedMode = options.some((option) => option.mode === panel.viewMode) ? panel.viewMode ?? "code" : "code";
+
+    return (
+      <div className="project-file-view-switcher" role="group" aria-label={`View options for ${file.name}`}>
+        {options.map((option) => (
+          <button
+            key={option.mode}
+            type="button"
+            className={`project-file-view-button ${selectedMode === option.mode ? "active" : ""}`}
+            onClick={() => setProjectEditorViewMode(panel.id, option.mode)}
+            title={option.label}
+            aria-label={`Show ${option.label} for ${file.name}`}
+            aria-pressed={selectedMode === option.mode}
+          >
+            {viewModeIcon(option.mode)}
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   const renderPanel = (panel: WorkspacePanel) => {
     switch (panel.type) {
       case "chat":
@@ -551,30 +605,38 @@ export default function App() {
         {
           const filePath = panel.resourceId ?? "";
           const file = fileSnapshots[filePath];
+          const viewOptions = file ? projectFileViewOptions(file.path, file.name) : [];
+          const viewMode = viewOptions.some((option) => option.mode === panel.viewMode) ? panel.viewMode ?? "code" : "code";
           return file?.error ? (
             <div className="editor-placeholder">Could not load {file.name}: {file.error}</div>
           ) : file ? (
-          <Editor
-            code={file.content}
-            language={file.language}
-            onChange={(code) => {
-              fileContentsRef.current.set(file.path, code);
-              const original = originalContentsRef.current.get(file.path) ?? "";
-              setDirtyPaths((d) => {
-                const isDirty = code !== original;
-                if (isDirty === d.has(file.path)) return d;
-                const next = new Set(d);
-                if (isDirty) next.add(file.path);
-                else next.delete(file.path);
-                return next;
-              });
-              setFileSnapshots((current) => {
-                const existing = current[file.path];
-                if (!existing) return current;
-                return { ...current, [file.path]: { ...existing, content: code } };
-              });
-            }}
-          />
+            viewMode === "markdown" ? (
+              <MarkdownPreview content={file.content} />
+            ) : viewMode === "methodGraph" ? (
+              <MethodGraphPreview content={file.content} />
+            ) : (
+              <Editor
+                code={file.content}
+                language={file.language}
+                onChange={(code) => {
+                  fileContentsRef.current.set(file.path, code);
+                  const original = originalContentsRef.current.get(file.path) ?? "";
+                  setDirtyPaths((d) => {
+                    const isDirty = code !== original;
+                    if (isDirty === d.has(file.path)) return d;
+                    const next = new Set(d);
+                    if (isDirty) next.add(file.path);
+                    else next.delete(file.path);
+                    return next;
+                  });
+                  setFileSnapshots((current) => {
+                    const existing = current[file.path];
+                    if (!existing) return current;
+                    return { ...current, [file.path]: { ...existing, content: code } };
+                  });
+                }}
+              />
+            )
         ) : (
             <div className="editor-placeholder">Open this file from the Project sidebar to load its content.</div>
           );
@@ -718,14 +780,17 @@ export default function App() {
                   >
                     <section className="workspace-panel-shell" aria-label={panel.title}>
                       <header className="workspace-panel-header">
-                        <button
-                          type="button"
-                          className="workspace-panel-title"
-                          onClick={() => setLayout((current) => ({ ...current, activePanelId: panel.id }))}
-                          title={panel.resourceId ? `${panel.title} · ${panel.resourceId}` : panel.title}
-                        >
-                          {panel.title}
-                        </button>
+                        <div className="workspace-panel-header-main">
+                          <button
+                            type="button"
+                            className="workspace-panel-title"
+                            onClick={() => setLayout((current) => ({ ...current, activePanelId: panel.id }))}
+                            title={panel.resourceId ? `${panel.title} · ${panel.resourceId}` : panel.title}
+                          >
+                            {panel.title}
+                          </button>
+                          {renderProjectEditorViewSwitcher(panel)}
+                        </div>
                         <button
                           type="button"
                           className="workspace-panel-close"

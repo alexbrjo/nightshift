@@ -60,4 +60,37 @@ describe("workspace layout helpers", () => {
     expect(validateWorkspaceLayout({ ...layout, schemaVersion: 2 })).toBeNull();
     expect(parseWorkspaceLayout("{bad json")).toBeNull();
   });
+
+  it("persists project editor view modes without rejecting old layouts", () => {
+    const layout = openOrFocusPanel(defaultWorkspaceLayout(), {
+      ...createPanel("project-editor", { resourceId: "README.md", title: "README.md" }),
+      viewMode: "markdown",
+    });
+
+    const parsed = parseWorkspaceLayout(serializeWorkspaceLayout(layout));
+
+    expect(parsed?.panels[0].viewMode).toBe("markdown");
+  });
+
+  it("ignores invalid persisted project editor view modes", () => {
+    const layout = {
+      ...defaultWorkspaceLayout(),
+      panels: [
+        {
+          id: "project-editor:README.md",
+          type: "project-editor",
+          title: "README.md",
+          resourceId: "README.md",
+          viewMode: "spreadsheet",
+        },
+      ],
+      activePanelId: "project-editor:README.md",
+      splitSizes: [100],
+    };
+
+    const parsed = validateWorkspaceLayout(layout);
+
+    expect(parsed?.panels[0].viewMode).toBeUndefined();
+    expect(parsed?.panels[0].title).toBe("README.md");
+  });
 });

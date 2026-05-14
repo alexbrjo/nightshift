@@ -14,6 +14,7 @@ import {
   GiFizzingFlask,
   GiCheckboxTree,
 } from "react-icons/gi";
+import { FaCode, FaMarkdown, FaProjectDiagram } from "react-icons/fa";
 import logoLightUrl from "../../src-tauri/icons/nightshift_icon_light.png";
 
 const ICON_SIZE = 20;
@@ -38,6 +39,18 @@ export function RackIcon() {
 
 export function MethodIcon() {
   return <GiCheckboxTree size={ICON_SIZE} />;
+}
+
+export function CodeViewIcon({ size = 14 }: { size?: number }) {
+  return <FaCode size={size} />;
+}
+
+export function MarkdownViewIcon({ size = 14 }: { size?: number }) {
+  return <FaMarkdown size={size} />;
+}
+
+export function MethodGraphViewIcon({ size = 14 }: { size?: number }) {
+  return <FaProjectDiagram size={size} />;
 }
 
 /** Inline pipette icon — used in action buttons. Inherits text color and

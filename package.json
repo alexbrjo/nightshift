@@ -33,7 +33,8 @@
     "react-markdown": "^10.1.0",
     "react-resizable-panels": "^3.0.5",
     "rehype-sanitize": "^6.0.0",
-    "remark-gfm": "^4.0.1"
+    "remark-gfm": "^4.0.1",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.4.0",
