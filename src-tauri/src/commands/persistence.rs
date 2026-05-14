@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
+use uuid::Uuid;
 
 use crate::state::AppState;
 use crate::utils::secrets::{is_sensitive_key, looks_like_secret_value};
@@ -98,6 +100,33 @@ fn session_id_from_value(value: &serde_json::Value) -> Result<String, String> {
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
         .ok_or_else(|| "Conversation session is missing a string id".to_string())
+}
+
+fn write_file_atomic(path: &std::path::Path, content: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Path '{}' has no parent directory", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create directory '{}': {}", parent.display(), e))?;
+    let temp_path = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().and_then(|name| name.to_str()).unwrap_or("write"),
+        Uuid::new_v4()
+    ));
+    {
+        let mut file =
+            fs::OpenOptions::new().create_new(true).write(true).open(&temp_path).map_err(|e| {
+                format!("Failed to create temp file '{}': {}", temp_path.display(), e)
+            })?;
+        file.write_all(content)
+            .map_err(|e| format!("Failed to write temp file '{}': {}", temp_path.display(), e))?;
+        file.sync_data()
+            .map_err(|e| format!("Failed to sync temp file '{}': {}", temp_path.display(), e))?;
+    }
+    fs::rename(&temp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!("Failed to replace '{}' with '{}': {}", temp_path.display(), path.display(), e)
+    })
 }
 
 fn load_project_state_file(
@@ -217,7 +246,7 @@ fn save_project_sessions_value(
         let path = sessions_dir.join(&file_name);
         let content = serde_json::to_string_pretty(&redacted)
             .map_err(|e| format!("Failed to serialize conversation session '{}': {}", id, e))?;
-        fs::write(&path, content.as_bytes())
+        write_file_atomic(&path, content.as_bytes())
             .map_err(|e| format!("Failed to save conversation session '{}': {}", id, e))?;
         keep_files.insert(file_name);
     }
@@ -428,6 +457,12 @@ mod tests {
         assert!(!state_json.contains_key("conversations"));
         assert!(test_project_dir.join(".nightshift/sessions/chat-one.json").exists());
         assert!(test_project_dir.join(".nightshift/sessions/chat%2Ftwo.json").exists());
+        let temp_session_files = fs::read_dir(test_project_dir.join(".nightshift/sessions"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().contains(".tmp-"))
+            .count();
+        assert_eq!(temp_session_files, 0);
 
         fs::remove_dir_all(&test_project_dir).ok();
     }

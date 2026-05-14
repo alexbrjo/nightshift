@@ -67,6 +67,57 @@ fn execution_snapshot_ref(execution_id: i64) -> String {
     format!(".nightshift/executions/{}/snapshot", execution_id)
 }
 
+fn write_text_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Path '{}' has no parent directory", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create directory '{}': {}", parent.display(), e))?;
+    let temp_path = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().and_then(|name| name.to_str()).unwrap_or("write"),
+        uuid::Uuid::new_v4()
+    ));
+    {
+        use std::io::Write;
+        let mut file =
+            fs::OpenOptions::new().create_new(true).write(true).open(&temp_path).map_err(|e| {
+                format!("Failed to create temp file '{}': {}", temp_path.display(), e)
+            })?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write temp file '{}': {}", temp_path.display(), e))?;
+        file.sync_data()
+            .map_err(|e| format!("Failed to sync temp file '{}': {}", temp_path.display(), e))?;
+    }
+    fs::rename(&temp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!("Failed to replace '{}' with '{}': {}", temp_path.display(), path.display(), e)
+    })
+}
+
+fn encode_execution_metadata(
+    execution_id: i64,
+    method_id: &str,
+    content_hash: &str,
+    status: &str,
+    error_message: Option<&str>,
+    created_at: Option<&str>,
+    started_at: Option<&str>,
+    completed_at: Option<&str>,
+) -> Result<String, String> {
+    serde_yaml::to_string(&serde_json::json!({
+        "id": execution_id,
+        "methodId": method_id,
+        "methodContentHash": content_hash,
+        "status": status,
+        "errorMessage": error_message,
+        "createdAt": created_at,
+        "startedAt": started_at,
+        "completedAt": completed_at,
+    }))
+    .map_err(|e| format!("Failed to encode execution metadata: {}", e))
+}
+
 fn ensure_execution_folder(
     db: &DatabaseState,
     execution_id: i64,
@@ -81,17 +132,67 @@ fn ensure_execution_folder(
         .map_err(|e| format!("Failed to create execution outputs folder: {}", e))?;
     fs::create_dir_all(dir.join("files"))
         .map_err(|e| format!("Failed to create execution files folder: {}", e))?;
-    fs::write(
-        dir.join("execution.yaml"),
-        serde_yaml::to_string(&serde_json::json!({
-            "id": execution_id,
-            "methodId": method.id,
-            "methodContentHash": content_hash,
-            "status": "queued",
-        }))
-        .map_err(|e| format!("Failed to encode execution metadata: {}", e))?,
+    write_text_atomic(
+        &dir.join("execution.yaml"),
+        &encode_execution_metadata(
+            execution_id,
+            &method.id,
+            content_hash,
+            "queued",
+            None,
+            None,
+            None,
+            None,
+        )?,
+    )?;
+    Ok(())
+}
+
+async fn rewrite_execution_metadata(db: &DatabaseState, execution_id: i64) -> Result<(), String> {
+    let summary = sqlx::query_as::<_, MethodExecutionSummary>(
+        r#"
+        SELECT id, method_id, method_content_hash, status, error_message, created_at, started_at, completed_at
+        FROM method_executions
+        WHERE id = ?1
+        "#,
     )
-    .map_err(|e| format!("Failed to write execution metadata: {}", e))?;
+    .bind(execution_id)
+    .fetch_one(&db.pool())
+    .await
+    .map_err(|e| format!("Failed to read execution metadata: {}", e))?;
+    let root = project_root(db)?;
+    write_text_atomic(
+        &execution_dir(&root, execution_id).join("execution.yaml"),
+        &encode_execution_metadata(
+            summary.id,
+            &summary.method_id,
+            &summary.method_content_hash,
+            &summary.status,
+            summary.error_message.as_deref(),
+            Some(&summary.created_at),
+            summary.started_at.as_deref(),
+            summary.completed_at.as_deref(),
+        )?,
+    )
+}
+
+async fn cleanup_failed_execution_start(
+    db: &DatabaseState,
+    execution_id: i64,
+) -> Result<(), String> {
+    if let Ok(root) = project_root(db) {
+        let dir = execution_dir(&root, execution_id);
+        if dir.exists() {
+            fs::remove_dir_all(&dir).map_err(|e| {
+                format!("Failed to remove incomplete execution folder '{}': {}", dir.display(), e)
+            })?;
+        }
+    }
+    sqlx::query("DELETE FROM method_executions WHERE id = ?1")
+        .bind(execution_id)
+        .execute(&db.pool())
+        .await
+        .map_err(|e| format!("Failed to remove incomplete execution row: {}", e))?;
     Ok(())
 }
 
@@ -159,7 +260,13 @@ pub(crate) async fn insert_execution(
     .map_err(|e| format!("Failed to create method execution: {}", e))?;
 
     let execution_id = result.last_insert_rowid();
-    ensure_execution_folder(db, execution_id, method, content_hash)?;
+    if let Err(error) = ensure_execution_folder(db, execution_id, method, content_hash) {
+        let cleanup_error = cleanup_failed_execution_start(db, execution_id).await.err();
+        return Err(match cleanup_error {
+            Some(cleanup_error) => format!("{}; additionally, {}", error, cleanup_error),
+            None => error,
+        });
+    }
     tracing::info!(
         execution_id,
         method_id = %method.id,
@@ -171,7 +278,7 @@ pub(crate) async fn insert_execution(
         "Created Method execution"
     );
     for node in runnable_nodes(method) {
-        sqlx::query(
+        let node_result = sqlx::query(
             r#"
             INSERT INTO method_execution_nodes (execution_id, node_id, node_type, status)
             VALUES (?1, ?2, ?3, 'queued')
@@ -182,7 +289,14 @@ pub(crate) async fn insert_execution(
         .bind(&node.node_type)
         .execute(&db.pool())
         .await
-        .map_err(|e| format!("Failed to create method execution node: {}", e))?;
+        .map_err(|e| format!("Failed to create method execution node: {}", e));
+        if let Err(error) = node_result {
+            let cleanup_error = cleanup_failed_execution_start(db, execution_id).await.err();
+            return Err(match cleanup_error {
+                Some(cleanup_error) => format!("{}; additionally, {}", error, cleanup_error),
+                None => error,
+            });
+        }
     }
     Ok(execution_id)
 }
@@ -212,7 +326,7 @@ pub(crate) async fn update_execution_status(
     .execute(&db.pool())
     .await
     .map_err(|e| format!("Failed to update method execution: {}", e))?;
-    Ok(())
+    rewrite_execution_metadata(db, execution_id).await
 }
 
 pub(crate) async fn update_node_status(
@@ -1764,7 +1878,16 @@ async fn start_method_execution(
         "Starting Method execution command"
     );
     let execution_id = insert_execution(&db, &method, &content_hash).await?;
-    let method = snapshot_method_for_execution(&db, execution_id, &method)?;
+    let method = match snapshot_method_for_execution(&db, execution_id, &method) {
+        Ok(method) => method,
+        Err(error) => {
+            let cleanup_error = cleanup_failed_execution_start(&db, execution_id).await.err();
+            return Err(match cleanup_error {
+                Some(cleanup_error) => format!("{}; additionally, {}", error, cleanup_error),
+                None => error,
+            });
+        }
+    };
     let control = MethodExecutionControl::new();
     manager.controls.lock().await.insert(execution_id, control.clone());
 

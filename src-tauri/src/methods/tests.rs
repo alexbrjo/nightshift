@@ -18,8 +18,8 @@ use super::execution::{
     analysis_report_relative_path, analysis_report_repair_prompt, append_jsonl,
     create_inference_job_for_node, create_sample_job_for_node, create_transform_job_for_node,
     insert_analysis_report_artifact, insert_artifact, insert_execution,
-    read_method_artifact_from_db, run_analysis_sql_query, topological_nodes, upstream_job_sources,
-    validate_analysis_sql,
+    read_method_artifact_from_db, run_analysis_sql_query, topological_nodes,
+    update_execution_status, upstream_job_sources, validate_analysis_sql,
 };
 use super::model::*;
 use super::preflight::preflight_method_for_root;
@@ -771,6 +771,57 @@ async fn insert_execution_creates_node_rows() {
     assert_eq!(nodes.len(), 2);
     assert_eq!(nodes[0].node_id, "generate");
     assert_eq!(nodes[0].status, "queued");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn insert_execution_cleans_up_when_execution_folder_creation_fails() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-execution-cleanup-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".nightshift")).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    fs::write(temp.join(".nightshift/executions"), "not a directory").unwrap();
+
+    let err = insert_execution(&db, &sample_method(), "hash").await.unwrap_err();
+    let execution_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM method_executions")
+        .fetch_one(&db.pool())
+        .await
+        .unwrap();
+
+    assert!(err.contains("Failed to create execution snapshot folder"), "got: {err}");
+    assert_eq!(execution_count, 0);
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn execution_yaml_tracks_status_transitions() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-execution-yaml-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let execution_id = insert_execution(&db, &sample_method(), "hash").await.unwrap();
+    let metadata_path = temp
+        .join(".nightshift")
+        .join("executions")
+        .join(execution_id.to_string())
+        .join("execution.yaml");
+
+    let queued: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(queued["status"].as_str(), Some("queued"));
+
+    update_execution_status(&db, execution_id, "running", None).await.unwrap();
+    let running: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(running["status"].as_str(), Some("running"));
+    assert!(running["startedAt"].as_str().is_some());
+
+    update_execution_status(&db, execution_id, "failed", Some("boom")).await.unwrap();
+    let failed: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(failed["status"].as_str(), Some("failed"));
+    assert_eq!(failed["errorMessage"].as_str(), Some("boom"));
+    assert!(failed["completedAt"].as_str().is_some());
     fs::remove_dir_all(temp).unwrap();
 }
 
