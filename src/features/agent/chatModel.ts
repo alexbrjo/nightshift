@@ -1,4 +1,5 @@
 import type { CodexAppServerEvent, DesignAgentConfig, MethodDocument } from "../../database";
+import { emitAppEvent } from "../../appEvents";
 import type { ChatItem, ChatMessage, ChatSession } from "./agentTypes";
 
 const RAW_SCRIPT_OR_STYLE_BLOCK = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
@@ -97,8 +98,8 @@ export const METHOD_DRAFT_MUTATION_TOOLS = new Set([
 export function dispatchAgentFileChange(toolName?: string) {
   if (!toolName) return;
   if (!METHOD_DRAFT_MUTATION_TOOLS.has(toolName)) return;
-  window.dispatchEvent(new CustomEvent("nightshift-method-draft-mutated"));
-  window.dispatchEvent(new CustomEvent("nightshift-project-files-changed"));
+  emitAppEvent("methodDraftMutated");
+  emitAppEvent("projectFilesChanged");
 }
 
 export function groupToolTraceMessages(messages: ChatMessage[]): ChatItem[] {

@@ -1,6 +1,4 @@
-import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
-import InferenceJobForm from "./InferenceJobForm";
 
 // Mock Tauri invoke
 vi.mock("@tauri-apps/api/core", () => ({
@@ -8,12 +6,9 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 describe("InferenceJobForm", () => {
-  const mockOnClose = vi.fn();
-  const mockOnSuccess = vi.fn();
-
   // Skip all tests for now - async prompt loading makes mocking difficult
   // The component works correctly in the actual application
-  
+
   it.skip("renders the form when isOpen is true", async () => {
     expect(true).toBe(true);
   });

@@ -1,8 +1,13 @@
-# Cognitive complexity threshold
-cognitive-complexity-threshold = 15
+# Cognitive complexity threshold. This is set to the current baseline so new
+# code cannot exceed the worst existing function while refactors chip it down.
+cognitive-complexity-threshold = 40
 
 # Too many arguments (Tauri commands often take State + params)
 too-many-arguments-threshold = 10
+
+# Function length threshold. This is set to the current baseline so new code
+# cannot exceed the worst existing function while refactors chip it down.
+too-many-lines-threshold = 200
 
 # Type complexity threshold
 type-complexity-threshold = 250

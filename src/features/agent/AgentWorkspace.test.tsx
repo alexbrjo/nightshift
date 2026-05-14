@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { appEventName } from "../../appEvents";
 import { mockInvoke } from "../../setupTests";
 import AgentWorkspace, {
   ChatPanel,
@@ -599,8 +600,8 @@ describe("AgentWorkspace", () => {
 
     await waitFor(() => {
       const eventTypes = dispatchSpy.mock.calls.map(([event]) => event.type);
-      expect(eventTypes).toContain("nightshift-project-files-changed");
-      expect(eventTypes).toContain("nightshift-method-draft-mutated");
+      expect(eventTypes).toContain(appEventName("projectFilesChanged"));
+      expect(eventTypes).toContain(appEventName("methodDraftMutated"));
       expect(mockInvoke).toHaveBeenCalledWith("get_current_method_draft");
     });
 

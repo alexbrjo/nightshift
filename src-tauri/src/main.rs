@@ -1,4 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![warn(clippy::cognitive_complexity)]
+#![warn(clippy::too_many_arguments)]
+#![warn(clippy::too_many_lines)]
+#![warn(clippy::type_complexity)]
 
 mod codex_app_server;
 mod commands;

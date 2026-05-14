@@ -11,6 +11,7 @@ import {
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
+import { emitAppEvent } from "../../appEvents";
 import type {
   CodexAppServerEvent,
   CodexAppServerSession,
@@ -205,7 +206,7 @@ export function MethodWorkspaceProvider({
     void invoke("save_project_conversations", { conversations })
       .then(() => {
         persistedConversationCountRef.current = conversations.length;
-        window.dispatchEvent(new CustomEvent("nightshift-conversations-updated"));
+        emitAppEvent("conversationsUpdated");
       });
   }, [chatPersistenceReady, chatSessions]);
 
@@ -803,4 +804,3 @@ function ExecutionGraphPanelView({ executionId }: { executionId?: string | numbe
     </div>
   );
 }
-
