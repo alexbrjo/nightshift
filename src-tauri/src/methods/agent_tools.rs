@@ -86,7 +86,7 @@ pub fn method_function_tools() -> Vec<Value> {
                             "path": { "type": ["string", "null"], "description": "Project-relative path for file-backed resource nodes, or relative Markdown report path for analysis nodes." },
                             "reference": { "type": ["string", "null"], "description": "API key id for reference-backed resource nodes." },
                             "depends_on": { "type": "array", "items": { "type": "string" } },
-                            "config": object_schema(json!({}), vec![])
+                            "config": node_config_schema()
                         }), vec!["id", "label", "type", "kind", "path", "reference", "depends_on", "config"])
                     }
                 }), vec!["nodes"])
@@ -117,6 +117,43 @@ fn object_schema(properties: Value, required: Vec<&str>) -> Value {
         "required": required,
         "additionalProperties": false
     })
+}
+
+fn node_config_schema() -> Value {
+    let keys = vec![
+        "prompt_file",
+        "data_source",
+        "json_schema_file",
+        "script_file",
+        "provider",
+        "model",
+        "server_url",
+        "output_mode",
+        "temperature",
+        "max_tokens",
+        "thinking_budget",
+        "samples",
+        "strategy",
+        "error_mode",
+        "unwrap_array",
+    ];
+    object_schema(json!({
+        "prompt_file": { "type": ["string", "null"], "description": "Optional resource id or project-relative prompt file path override." },
+        "data_source": { "type": ["string", "null"], "description": "Optional resource id or project-relative data file path override." },
+        "json_schema_file": { "type": ["string", "null"], "description": "Optional resource id or project-relative JSON schema file path override." },
+        "script_file": { "type": ["string", "null"], "description": "Optional resource id or project-relative script file path override for transform/eval nodes." },
+        "provider": { "type": ["string", "null"], "description": "Node-specific provider label override." },
+        "model": { "type": ["string", "null"], "description": "Node-specific model override." },
+        "server_url": { "type": ["string", "null"], "description": "Node-specific local inference server URL override." },
+        "output_mode": { "type": ["string", "null"], "description": "Inference output mode, for example Unstructured or JSON Schema." },
+        "temperature": { "type": ["number", "null"] },
+        "max_tokens": { "type": ["integer", "null"] },
+        "thinking_budget": { "type": ["integer", "null"] },
+        "samples": { "type": ["integer", "null"], "description": "Number of samples for sample/inference nodes." },
+        "strategy": { "type": ["string", "null"], "description": "Sampling strategy, for example single, random, or exhaustive." },
+        "error_mode": { "type": ["string", "null"], "description": "Transform/eval error handling mode, for example stop or skip." },
+        "unwrap_array": { "type": ["boolean", "null"], "description": "Whether transform outputs should unwrap arrays into separate rows." }
+    }), keys)
 }
 
 pub fn dispatch_method_tool(root: &Path, name: &str, arguments: Value) -> Result<Value, String> {
@@ -188,6 +225,32 @@ mod tests {
             let nested = properties.get(key).unwrap();
             assert_eq!(nested.get("type").and_then(Value::as_str), Some("object"));
             assert_eq!(nested.get("additionalProperties").and_then(Value::as_bool), Some(false));
+        }
+    }
+
+    #[test]
+    fn graph_node_config_schema_requires_all_nullable_properties_for_strict_tools() {
+        let tools = method_function_tools();
+        let tool = tools
+            .iter()
+            .find(|tool| {
+                tool.get("name").and_then(Value::as_str)
+                    == Some("replace_method_draft_graph")
+            })
+            .unwrap();
+        let config = &tool["parameters"]["properties"]["workflow"]["properties"]["nodes"]["items"]
+            ["properties"]["config"];
+        let properties = config["properties"].as_object().unwrap();
+        let required = config["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect::<std::collections::HashSet<_>>();
+
+        assert_eq!(required.len(), properties.len());
+        for key in properties.keys() {
+            assert!(required.contains(key.as_str()), "missing required key {key}");
         }
     }
 

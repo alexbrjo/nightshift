@@ -1077,6 +1077,13 @@ fn method_tool_schema_exposes_analysis_without_aggregate() {
         .unwrap()
         .get("output_file")
         .is_none());
+    let config_properties = replace_graph["parameters"]["properties"]["workflow"]["properties"]
+        ["nodes"]["items"]["properties"]["config"]["properties"]
+        .as_object()
+        .unwrap();
+    for key in ["samples", "strategy", "model", "server_url", "prompt_file", "json_schema_file"] {
+        assert!(config_properties.contains_key(key), "missing config key {key}");
+    }
 }
 
 #[test]

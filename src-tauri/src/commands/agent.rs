@@ -215,10 +215,12 @@ fn method_agent_instructions() -> &'static str {
         "You are Nightshift's Method design agent. ",
         "Use the provided function tools whenever the user describes, creates, or changes a Method. ",
         "Nightshift owns durable Method draft state; do not pretend a Method is executable while blockers remain. ",
-        "Use App Server native file tools to discover/read candidate project files, then represent prompt, data, ",
-        "JSON schema, eval script, and api_key inputs as type: resource workflow nodes. ",
+        "You only have Method draft tools in this conversation, so use project-relative file paths the user gives you; ",
+        "do not claim to inspect files unless a tool result provided their contents. ",
+        "Represent prompt, data, JSON schema, eval script, and api_key inputs as type: resource workflow nodes. ",
         "Use the execution-config tool when the user provides model names, provider settings, temperature, ",
-        "token limits, sample counts, strategy, or model sweep values. ",
+        "token limits, default sample counts, default strategy, or model sweep values. ",
+        "Use node config only for settings that must differ by node, such as a judge model, node-specific prompt/data/schema/script resource override, or node-specific sampling behavior. ",
         "Prefer creating a concise draft with a DAG of resource, inference, eval, and analysis nodes when details are not yet known. ",
         "Treat prompt, data, JSON schema, and api_key resource nodes as direct dependencies of inference nodes unless the user says otherwise; ",
         "eval_script resource nodes feed eval nodes. ",
@@ -662,6 +664,9 @@ mod tests {
         assert!(instructions.contains("Use portable GitHub Flavored Markdown for readability"));
         assert!(instructions.contains("fenced code blocks only for code, paths, or configuration"));
         assert!(instructions.contains("Do not use raw HTML"));
+        assert!(instructions.contains("You only have Method draft tools"));
+        assert!(instructions.contains("Use node config only for settings that must differ by node"));
+        assert!(!instructions.contains("App Server native file tools"));
     }
 
     #[test]
