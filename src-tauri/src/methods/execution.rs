@@ -3,37 +3,243 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::sync::{Mutex, OnceLock};
 
 use reqwest::Client;
 use sha2::{Digest, Sha256};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 
 use crate::database::DatabaseState;
 use crate::job_executor::{JobEvent, JobExecutor, WorkerConfig};
+use crate::sampling::parse_execution_node_ref;
 use crate::state::{MethodExecutionControl, MethodExecutionManager};
 
 use super::config::{
     config_f64, config_i32, config_string, method_file_by_kind, model_values,
     resolve_configured_file, runnable_dependency_ids, runnable_nodes, yaml_lookup, yaml_string,
 };
-use super::draft::{get_current_draft_for_root, method_document_for_save};
 use super::model::{
-    ExecuteCurrentMethodDraftResult, MethodArtifactSummary, MethodDocument,
-    MethodExecutionEventSummary, MethodExecutionNodeSummary, MethodExecutionSummary,
-    MethodWorkflowNode,
+    ExecutionFileSummary, MethodArtifactSummary, MethodDocument, MethodExecutionEventSummary,
+    MethodExecutionNodeSummary, MethodExecutionSummary, MethodWorkflowNode, OutputItem,
 };
-use super::paths::{method_dir, project_root, validate_method_id};
-use super::storage::{
-    hash_directory, hex, read_manifest, save_method_to_project_content_addressed,
+use super::paths::{
+    execution_dir, execution_log_path, execution_output_path, project_root,
+    validate_method_source_path,
 };
-use super::validation::validate_method;
+use super::preflight::{format_preflight_blockers, preflight_method_for_root};
+use super::storage::{freeze_files, hex, read_method_document, write_method_document};
 
 fn method_level_config_string(method: &MethodDocument, key: &str) -> Option<String> {
     yaml_string(yaml_lookup(&method.parameters, key))
         .or_else(|| yaml_string(yaml_lookup(&method.provider, key)))
+}
+
+static JSONL_APPEND_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+pub(crate) fn append_jsonl(path: &Path, value: &serde_json::Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!("Failed to create JSONL directory '{}': {}", parent.display(), e)
+        })?;
+    }
+    let mut line = serde_json::to_string(value)
+        .map_err(|e| format!("Failed to encode JSONL record: {}", e))?;
+    line.push('\n');
+    use std::io::Write;
+    let _guard = JSONL_APPEND_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "JSONL append lock is poisoned".to_string())?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|e| format!("Failed to open JSONL file '{}': {}", path.display(), e))?;
+    file.write_all(line.as_bytes())
+        .map_err(|e| format!("Failed to append JSONL file '{}': {}", path.display(), e))?;
+    file.sync_data().map_err(|e| format!("Failed to sync JSONL file '{}': {}", path.display(), e))
+}
+
+fn execution_snapshot_ref(execution_id: i64) -> String {
+    format!(".nightshift/executions/{}/snapshot", execution_id)
+}
+
+fn write_text_atomic(path: &Path, content: &str) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("Path '{}' has no parent directory", path.display()))?;
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("Failed to create directory '{}': {}", parent.display(), e))?;
+    let temp_path = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().and_then(|name| name.to_str()).unwrap_or("write"),
+        uuid::Uuid::new_v4()
+    ));
+    {
+        use std::io::Write;
+        let mut file =
+            fs::OpenOptions::new().create_new(true).write(true).open(&temp_path).map_err(|e| {
+                format!("Failed to create temp file '{}': {}", temp_path.display(), e)
+            })?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write temp file '{}': {}", temp_path.display(), e))?;
+        file.sync_data()
+            .map_err(|e| format!("Failed to sync temp file '{}': {}", temp_path.display(), e))?;
+    }
+    fs::rename(&temp_path, path).map_err(|e| {
+        let _ = fs::remove_file(&temp_path);
+        format!("Failed to replace '{}' with '{}': {}", temp_path.display(), path.display(), e)
+    })
+}
+
+fn encode_execution_metadata(
+    execution_id: i64,
+    method_id: &str,
+    content_hash: &str,
+    status: &str,
+    error_message: Option<&str>,
+    created_at: Option<&str>,
+    started_at: Option<&str>,
+    completed_at: Option<&str>,
+) -> Result<String, String> {
+    serde_yaml::to_string(&serde_json::json!({
+        "id": execution_id,
+        "methodId": method_id,
+        "methodContentHash": content_hash,
+        "status": status,
+        "errorMessage": error_message,
+        "createdAt": created_at,
+        "startedAt": started_at,
+        "completedAt": completed_at,
+    }))
+    .map_err(|e| format!("Failed to encode execution metadata: {}", e))
+}
+
+fn ensure_execution_folder(
+    db: &DatabaseState,
+    execution_id: i64,
+    method: &MethodDocument,
+    content_hash: &str,
+) -> Result<(), String> {
+    let root = project_root(db)?;
+    let dir = execution_dir(&root, execution_id);
+    fs::create_dir_all(dir.join("snapshot").join("files"))
+        .map_err(|e| format!("Failed to create execution snapshot folder: {}", e))?;
+    fs::create_dir_all(dir.join("outputs"))
+        .map_err(|e| format!("Failed to create execution outputs folder: {}", e))?;
+    fs::create_dir_all(dir.join("files"))
+        .map_err(|e| format!("Failed to create execution files folder: {}", e))?;
+    write_text_atomic(
+        &dir.join("execution.yaml"),
+        &encode_execution_metadata(
+            execution_id,
+            &method.id,
+            content_hash,
+            "queued",
+            None,
+            None,
+            None,
+            None,
+        )?,
+    )?;
+    Ok(())
+}
+
+async fn rewrite_execution_metadata(db: &DatabaseState, execution_id: i64) -> Result<(), String> {
+    let summary = sqlx::query_as::<_, MethodExecutionSummary>(
+        r#"
+        SELECT id, method_id, method_content_hash, status, error_message, created_at, started_at, completed_at
+        FROM method_executions
+        WHERE id = ?1
+        "#,
+    )
+    .bind(execution_id)
+    .fetch_one(&db.pool())
+    .await
+    .map_err(|e| format!("Failed to read execution metadata: {}", e))?;
+    let root = project_root(db)?;
+    write_text_atomic(
+        &execution_dir(&root, execution_id).join("execution.yaml"),
+        &encode_execution_metadata(
+            summary.id,
+            &summary.method_id,
+            &summary.method_content_hash,
+            &summary.status,
+            summary.error_message.as_deref(),
+            Some(&summary.created_at),
+            summary.started_at.as_deref(),
+            summary.completed_at.as_deref(),
+        )?,
+    )
+}
+
+async fn cleanup_failed_execution_start(
+    db: &DatabaseState,
+    execution_id: i64,
+) -> Result<(), String> {
+    if let Ok(root) = project_root(db) {
+        let dir = execution_dir(&root, execution_id);
+        if dir.exists() {
+            fs::remove_dir_all(&dir).map_err(|e| {
+                format!("Failed to remove incomplete execution folder '{}': {}", dir.display(), e)
+            })?;
+        }
+    }
+    sqlx::query("DELETE FROM method_executions WHERE id = ?1")
+        .bind(execution_id)
+        .execute(&db.pool())
+        .await
+        .map_err(|e| format!("Failed to remove incomplete execution row: {}", e))?;
+    Ok(())
+}
+
+fn snapshot_method_for_execution(
+    db: &DatabaseState,
+    execution_id: i64,
+    method: &MethodDocument,
+) -> Result<MethodDocument, String> {
+    let root = project_root(db)?;
+    let snapshot_dir = execution_dir(&root, execution_id).join("snapshot");
+    let mut frozen = method.clone();
+    freeze_files(&mut frozen, &root, &snapshot_dir)?;
+    write_method_document(&snapshot_dir.join("method.yaml"), &frozen)?;
+    Ok(frozen)
+}
+
+pub(crate) async fn record_execution_output(
+    db: &DatabaseState,
+    execution_id: i64,
+    node_id: &str,
+    job_id: i64,
+    sample_index: i64,
+    data: &serde_json::Value,
+) -> Result<(), String> {
+    sqlx::query(
+        r#"
+        INSERT INTO method_execution_outputs (execution_id, node_id, job_id, sample_index, data)
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        "#,
+    )
+    .bind(execution_id)
+    .bind(node_id)
+    .bind(job_id)
+    .bind(sample_index)
+    .bind(data)
+    .execute(&db.pool())
+    .await
+    .map_err(|e| format!("Failed to index execution output: {}", e))?;
+    let root = project_root(db)?;
+    append_jsonl(
+        &execution_output_path(&root, execution_id, node_id),
+        &serde_json::json!({
+            "jobId": job_id,
+            "sampleIndex": sample_index,
+            "data": data,
+        }),
+    )
 }
 
 pub(crate) async fn insert_execution(
@@ -54,6 +260,13 @@ pub(crate) async fn insert_execution(
     .map_err(|e| format!("Failed to create method execution: {}", e))?;
 
     let execution_id = result.last_insert_rowid();
+    if let Err(error) = ensure_execution_folder(db, execution_id, method, content_hash) {
+        let cleanup_error = cleanup_failed_execution_start(db, execution_id).await.err();
+        return Err(match cleanup_error {
+            Some(cleanup_error) => format!("{}; additionally, {}", error, cleanup_error),
+            None => error,
+        });
+    }
     tracing::info!(
         execution_id,
         method_id = %method.id,
@@ -65,7 +278,7 @@ pub(crate) async fn insert_execution(
         "Created Method execution"
     );
     for node in runnable_nodes(method) {
-        sqlx::query(
+        let node_result = sqlx::query(
             r#"
             INSERT INTO method_execution_nodes (execution_id, node_id, node_type, status)
             VALUES (?1, ?2, ?3, 'queued')
@@ -76,7 +289,14 @@ pub(crate) async fn insert_execution(
         .bind(&node.node_type)
         .execute(&db.pool())
         .await
-        .map_err(|e| format!("Failed to create method execution node: {}", e))?;
+        .map_err(|e| format!("Failed to create method execution node: {}", e));
+        if let Err(error) = node_result {
+            let cleanup_error = cleanup_failed_execution_start(db, execution_id).await.err();
+            return Err(match cleanup_error {
+                Some(cleanup_error) => format!("{}; additionally, {}", error, cleanup_error),
+                None => error,
+            });
+        }
     }
     Ok(execution_id)
 }
@@ -106,7 +326,7 @@ pub(crate) async fn update_execution_status(
     .execute(&db.pool())
     .await
     .map_err(|e| format!("Failed to update method execution: {}", e))?;
-    Ok(())
+    rewrite_execution_metadata(db, execution_id).await
 }
 
 pub(crate) async fn update_node_status(
@@ -163,6 +383,16 @@ pub(crate) async fn insert_event(
     .await
     .map_err(|e| format!("Failed to record method execution event: {}", e))?;
 
+    let root = project_root(db)?;
+    append_jsonl(
+        &execution_log_path(&root, execution_id),
+        &serde_json::json!({
+            "type": event_type,
+            "nodeId": node_id,
+            "payload": payload,
+        }),
+    )?;
+
     let _ = app.emit(
         "method-execution-event",
         serde_json::json!({
@@ -189,25 +419,25 @@ pub(crate) async fn insert_artifact(
     hasher.update(storage_ref.as_bytes());
     let hash = hex(&hasher.finalize());
 
+    let file_type = if storage_kind.starts_with("inline") { storage_kind } else { artifact_type };
     sqlx::query(
         r#"
-        INSERT INTO method_artifacts (
-            execution_id, node_id, artifact_type, storage_kind, storage_ref, content_hash
+        INSERT INTO method_execution_files (
+            execution_id, node_id, file_type, path, content_hash
         )
-        VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        VALUES (?1, ?2, ?3, ?4, ?5)
         "#,
     )
     .bind(execution_id)
     .bind(node_id)
-    .bind(artifact_type)
-    .bind(storage_kind)
+    .bind(file_type)
     .bind(storage_ref)
     .bind(&hash)
     .execute(&db.pool())
     .await
     .map_err(|e| format!("Failed to record method artifact: {}", e))?;
 
-    Ok(format!("{}:{}", storage_kind, storage_ref))
+    Ok(format!("file:{}", storage_ref))
 }
 
 pub(crate) async fn read_method_artifact_from_db(
@@ -216,8 +446,8 @@ pub(crate) async fn read_method_artifact_from_db(
 ) -> Result<String, String> {
     let artifact = sqlx::query_as::<_, MethodArtifactSummary>(
         r#"
-        SELECT id, execution_id, node_id, artifact_type, storage_kind, storage_ref, content_hash, created_at
-        FROM method_artifacts
+        SELECT id, execution_id, node_id, file_type, path, content_hash, created_at
+        FROM method_execution_files
         WHERE id = ?1
         "#,
     )
@@ -227,18 +457,16 @@ pub(crate) async fn read_method_artifact_from_db(
     .map_err(|e| format!("Failed to read method artifact: {}", e))?
     .ok_or_else(|| "Method artifact not found".to_string())?;
 
-    match artifact.storage_kind.as_str() {
-        "inline_json" | "inline_markdown" => Ok(artifact.storage_ref),
-        "method_execution_file" => {
+    match artifact.file_type.as_str() {
+        "inline_json" | "inline_markdown" | "inline" => Ok(artifact.path),
+        "method_execution_file" | "analysis" | "not_implemented" => {
             let root = project_root(db)?;
-            let path = root.join(&artifact.storage_ref);
+            let path = root.join(&artifact.path);
             fs::read_to_string(&path).map_err(|e| {
                 format!("Failed to read Method artifact file '{}': {}", path.display(), e)
             })
         }
-        "inference_job" => Ok(format!("Inference job {}", artifact.storage_ref)),
-        "job_set" => Ok(format!("Inference jobs {}", artifact.storage_ref)),
-        other => Err(format!("Unsupported method artifact storage kind: {}", other)),
+        other => Err(format!("Unsupported execution file type: {}", other)),
     }
 }
 
@@ -281,9 +509,10 @@ pub(crate) async fn create_inference_job_for_node(
     model_override: Option<&str>,
     name_suffix: Option<&str>,
 ) -> Result<i64, String> {
+    let snapshot_ref = execution_snapshot_ref(execution_id);
     let prompt_file = resolve_configured_file(
         method,
-        &method.id,
+        &snapshot_ref,
         &node.id,
         config_string(node, method, "prompt_file", None),
         "prompt",
@@ -293,7 +522,7 @@ pub(crate) async fn create_inference_job_for_node(
         Some(source) => source,
         None => resolve_configured_file(
             method,
-            &method.id,
+            &snapshot_ref,
             &node.id,
             config_string(node, method, "data_source", None),
             "data",
@@ -305,7 +534,7 @@ pub(crate) async fn create_inference_job_for_node(
     {
         Some(resolve_configured_file(
             method,
-            &method.id,
+            &snapshot_ref,
             &node.id,
             config_string(node, method, "json_schema_file", None),
             "schema",
@@ -407,11 +636,12 @@ pub(crate) async fn create_sample_job_for_node(
     execution_id: i64,
     data_source_override: Option<String>,
 ) -> Result<i64, String> {
+    let snapshot_ref = execution_snapshot_ref(execution_id);
     let data_source = match data_source_override {
         Some(source) => source,
         None => resolve_configured_file(
             method,
-            &method.id,
+            &snapshot_ref,
             &node.id,
             config_string(node, method, "data_source", None),
             "data",
@@ -453,11 +683,12 @@ pub(crate) async fn create_transform_job_for_node(
     data_source_override: Option<String>,
     name_suffix: Option<&str>,
 ) -> Result<i64, String> {
+    let snapshot_ref = execution_snapshot_ref(execution_id);
     let data_source = match data_source_override {
         Some(source) => source,
         None => resolve_configured_file(
             method,
-            &method.id,
+            &snapshot_ref,
             &node.id,
             config_string(node, method, "data_source", None),
             "data",
@@ -465,7 +696,7 @@ pub(crate) async fn create_transform_job_for_node(
     };
     let script_file = resolve_configured_file(
         method,
-        &method.id,
+        &snapshot_ref,
         &node.id,
         config_string(node, method, "script_file", None),
         "script",
@@ -504,39 +735,12 @@ pub(crate) async fn create_transform_job_for_node(
     Ok(result.last_insert_rowid())
 }
 
-pub(crate) async fn collection_ref_for_job(
-    db: &DatabaseState,
-    job_id: i64,
-) -> Result<String, String> {
-    let collection_id: i64 = sqlx::query_scalar("SELECT id FROM collections WHERE job_id = ?1")
-        .bind(job_id)
-        .fetch_one(&db.pool())
-        .await
-        .map_err(|e| format!("Failed to find output collection for job {}: {}", job_id, e))?;
-    Ok(format!("collection:{}", collection_id))
+pub(crate) fn execution_node_ref(execution_id: i64, node_id: &str) -> String {
+    format!("execution:{}/node:{}", execution_id, node_id)
 }
 
-pub(crate) fn parse_job_ids(output_ref: &str) -> Result<Vec<i64>, String> {
-    if let Some(job_id) = output_ref.strip_prefix("inference_job:") {
-        return job_id
-            .parse::<i64>()
-            .map(|id| vec![id])
-            .map_err(|_| format!("Invalid job ref '{}'", output_ref));
-    }
-    if let Some(ids) = output_ref.strip_prefix("job_set:") {
-        return ids
-            .split(',')
-            .filter(|id| !id.trim().is_empty())
-            .map(|id| {
-                id.parse::<i64>().map_err(|_| format!("Invalid job set ref '{}'", output_ref))
-            })
-            .collect();
-    }
-    Ok(vec![])
-}
-
-pub(crate) async fn upstream_collection_source(
-    db: &DatabaseState,
+pub(crate) async fn upstream_output_source(
+    _db: &DatabaseState,
     method: &MethodDocument,
     node: &MethodWorkflowNode,
     node_outputs: &HashMap<String, String>,
@@ -547,11 +751,7 @@ pub(crate) async fn upstream_collection_source(
     let Some(output_ref) = node_outputs.get(dep) else {
         return Ok(None);
     };
-    let job_ids = parse_job_ids(output_ref)?;
-    if let Some(job_id) = job_ids.first() {
-        return collection_ref_for_job(db, *job_id).await.map(Some);
-    }
-    Ok(None)
+    Ok(Some(output_ref.clone()))
 }
 
 pub(crate) async fn upstream_job_sources(
@@ -566,11 +766,29 @@ pub(crate) async fn upstream_job_sources(
     let Some(output_ref) = node_outputs.get(dep) else {
         return Ok(vec![]);
     };
-    let mut sources = Vec::new();
-    for job_id in parse_job_ids(output_ref)? {
-        sources.push((job_id, collection_ref_for_job(db, job_id).await?));
-    }
-    Ok(sources)
+    let Some(source) = parse_execution_node_ref(output_ref)? else {
+        return Ok(vec![]);
+    };
+    let job_ids = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT DISTINCT job_id
+        FROM method_execution_outputs
+        WHERE execution_id = ?1
+          AND node_id = ?2
+          AND job_id IS NOT NULL
+        ORDER BY job_id ASC
+        "#,
+    )
+    .bind(source.execution_id)
+    .bind(&source.node_id)
+    .fetch_all(&db.pool())
+    .await
+    .map_err(|e| format!("Failed to list upstream execution jobs: {}", e))?;
+
+    Ok(job_ids
+        .into_iter()
+        .map(|job_id| (job_id, format!("{}/job:{}", output_ref, job_id)))
+        .collect())
 }
 
 pub(crate) async fn run_job_agent(
@@ -594,6 +812,17 @@ pub(crate) async fn run_job_agent(
     let mut final_status = "completed".to_string();
     while let Some(event) = rx.recv().await {
         match &event {
+            JobEvent::SampleCompleted { sample_index, output, .. } => {
+                record_execution_output(
+                    db,
+                    execution_id,
+                    node_id,
+                    job_id,
+                    *sample_index as i64,
+                    output,
+                )
+                .await?;
+            }
             JobEvent::Completed { failure_count, .. } => {
                 final_status = if *failure_count > 0 {
                     "completed_with_errors".into()
@@ -639,8 +868,7 @@ pub(crate) async fn run_job_agent(
             return Err(error);
         }
     }
-    insert_artifact(db, execution_id, Some(node_id), "job", "inference_job", &job_id.to_string())
-        .await
+    Ok(execution_node_ref(execution_id, node_id))
 }
 
 pub(crate) async fn run_inference_agent(
@@ -662,7 +890,7 @@ pub(crate) async fn run_inference_agent(
         model = ?config_string(node, method, "model", None),
         "Running Method inference node"
     );
-    let upstream_source = upstream_collection_source(db, method, node, node_outputs).await?;
+    let upstream_source = upstream_output_source(db, method, node, node_outputs).await?;
     if models.len() <= 1 {
         let model_name = models
             .first()
@@ -732,9 +960,19 @@ pub(crate) async fn run_inference_agent(
         run_job_agent(app, db, execution_id, &node.id, job_id).await?;
         job_ids.push(job_id);
     }
-    let storage_ref = job_ids.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
-    insert_artifact(db, execution_id, Some(&node.id), "job_set", "job_set", &storage_ref).await?;
-    Ok(format!("job_set:{}", storage_ref))
+    insert_event(
+        app,
+        db,
+        execution_id,
+        Some(&node.id),
+        "sweep_job_set_created",
+        serde_json::json!({
+            "jobIds": job_ids,
+            "outputRef": execution_node_ref(execution_id, &node.id),
+        }),
+    )
+    .await?;
+    Ok(execution_node_ref(execution_id, &node.id))
 }
 
 pub(crate) async fn run_sample_agent(
@@ -745,7 +983,7 @@ pub(crate) async fn run_sample_agent(
     execution_id: i64,
     node_outputs: &HashMap<String, String>,
 ) -> Result<String, String> {
-    let upstream_source = upstream_collection_source(db, method, node, node_outputs).await?;
+    let upstream_source = upstream_output_source(db, method, node, node_outputs).await?;
     let job_id =
         create_sample_job_for_node(db, method, node, execution_id, upstream_source).await?;
     insert_event(
@@ -783,7 +1021,7 @@ pub(crate) async fn run_transform_agent(
 ) -> Result<String, String> {
     let upstream_sources = upstream_job_sources(db, method, node, node_outputs).await?;
     if upstream_sources.is_empty() {
-        let upstream_source = upstream_collection_source(db, method, node, node_outputs).await?;
+        let upstream_source = upstream_output_source(db, method, node, node_outputs).await?;
         let job_id =
             create_transform_job_for_node(db, method, node, execution_id, upstream_source, None)
                 .await?;
@@ -804,9 +1042,7 @@ pub(crate) async fn run_transform_agent(
         run_job_agent(app, db, execution_id, &node.id, job_id).await?;
         job_ids.push(job_id);
     }
-    let storage_ref = job_ids.iter().map(ToString::to_string).collect::<Vec<_>>().join(",");
-    insert_artifact(db, execution_id, Some(&node.id), "job_set", "job_set", &storage_ref).await?;
-    Ok(format!("job_set:{}", storage_ref))
+    Ok(execution_node_ref(execution_id, &node.id))
 }
 
 const ANALYSIS_SQL_ROW_LIMIT: usize = 200;
@@ -937,7 +1173,7 @@ fn analysis_tools() -> Vec<serde_json::Value> {
         serde_json::json!({
             "type": "function",
             "name": ANALYSIS_TOOL_LIST_CONTEXT,
-            "description": "List the current Method execution context, upstream node outputs, node statuses, artifacts, and useful local SQLite tables for experiment analysis.",
+            "description": "List the current Method execution context, upstream node outputs, node statuses, files, and useful local SQLite tables for experiment analysis.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -949,7 +1185,7 @@ fn analysis_tools() -> Vec<serde_json::Value> {
         serde_json::json!({
             "type": "function",
             "name": ANALYSIS_TOOL_RUN_SQL,
-            "description": "Run one read-only SELECT or WITH query against the local Nightshift SQLite database. Useful tables: method_executions, method_execution_nodes, method_execution_events, method_artifacts, inference_jobs, collections, collection_items, job_failures. Results are capped.",
+            "description": "Run one read-only SELECT or WITH query against the local Nightshift SQLite database. Useful tables: method_executions, method_execution_nodes, method_execution_events, method_execution_outputs, method_execution_files, inference_jobs, job_outputs, job_failures. Results are capped.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -993,7 +1229,6 @@ async fn analysis_context(
             serde_json::json!({
                 "node_id": dep,
                 "output_ref": node_outputs.get(&dep),
-                "job_ids": node_outputs.get(&dep).map(|output| parse_job_ids(output).unwrap_or_default()).unwrap_or_default(),
             })
         })
         .collect::<Vec<_>>();
@@ -1009,10 +1244,10 @@ async fn analysis_context(
     .fetch_all(&db.pool())
     .await
     .map_err(|e| format!("Failed to read execution nodes for analysis: {}", e))?;
-    let artifacts = sqlx::query_as::<_, MethodArtifactSummary>(
+    let files = sqlx::query_as::<_, MethodArtifactSummary>(
         r#"
-        SELECT id, execution_id, node_id, artifact_type, storage_kind, storage_ref, content_hash, created_at
-        FROM method_artifacts
+        SELECT id, execution_id, node_id, file_type, path, content_hash, created_at
+        FROM method_execution_files
         WHERE execution_id = ?1
         ORDER BY id ASC
         "#,
@@ -1020,21 +1255,21 @@ async fn analysis_context(
     .bind(execution_id)
     .fetch_all(&db.pool())
     .await
-    .map_err(|e| format!("Failed to read execution artifacts for analysis: {}", e))?;
+    .map_err(|e| format!("Failed to read execution files for analysis: {}", e))?;
     Ok(serde_json::json!({
         "execution_id": execution_id,
         "analysis_node_id": node.id,
         "upstream_outputs": upstream_outputs,
         "execution_nodes": nodes,
-        "artifacts": artifacts,
+        "files": files,
         "useful_tables": [
             "method_executions",
             "method_execution_nodes",
             "method_execution_events",
-            "method_artifacts",
+            "method_execution_outputs",
+            "method_execution_files",
             "inference_jobs",
-            "collections",
-            "collection_items",
+            "job_outputs",
             "job_failures"
         ]
     }))
@@ -1220,30 +1455,27 @@ pub(crate) async fn insert_analysis_report_artifact(
 }
 
 pub(crate) fn analysis_report_relative_path(
-    method: &MethodDocument,
+    _method: &MethodDocument,
     execution_id: i64,
     node: &MethodWorkflowNode,
 ) -> Result<PathBuf, String> {
-    let file_name = if node.node_type == "output_file" {
-        node.path.clone().unwrap_or_else(|| format!("{}.md", node.id))
-    } else {
-        format!("{}.md", node.id)
-    };
+    let file_name = node.path.clone().unwrap_or_else(|| format!("{}.md", node.id));
     let file_name = file_name.trim();
     if file_name.is_empty() {
-        return Err("output_file path must not be empty".into());
+        return Err("analysis report path must not be empty".into());
     }
     let configured = Path::new(file_name);
     if configured.is_absolute() {
-        return Err("output_file path must be relative".into());
+        return Err("analysis report path must be relative".into());
     }
     if file_name.contains("..") {
-        return Err("output_file path must stay inside the execution folder".into());
+        return Err("analysis report path must stay inside the execution folder".into());
     }
     let mut relative = PathBuf::from(".nightshift")
         .join("executions")
         .join(execution_id.to_string())
-        .join(&method.id)
+        .join("files")
+        .join(&node.id)
         .join(configured);
     if relative.extension().is_none() {
         relative.set_extension("md");
@@ -1481,9 +1713,7 @@ async fn run_method_node(
             .await?;
             run_analysis_agent(db, method, execution_id, node, node_outputs).await
         }
-        "analysis" | "output_file" => {
-            run_analysis_agent(db, method, execution_id, node, node_outputs).await
-        }
+        "analysis" => run_analysis_agent(db, method, execution_id, node, node_outputs).await,
         "eval" => {
             *had_not_implemented = true;
             let artifact = run_not_implemented_agent(db, execution_id, node).await?;
@@ -1648,6 +1878,16 @@ async fn start_method_execution(
         "Starting Method execution command"
     );
     let execution_id = insert_execution(&db, &method, &content_hash).await?;
+    let method = match snapshot_method_for_execution(&db, execution_id, &method) {
+        Ok(method) => method,
+        Err(error) => {
+            let cleanup_error = cleanup_failed_execution_start(&db, execution_id).await.err();
+            return Err(match cleanup_error {
+                Some(cleanup_error) => format!("{}; additionally, {}", error, cleanup_error),
+                None => error,
+            });
+        }
+    };
     let control = MethodExecutionControl::new();
     manager.controls.lock().await.insert(execution_id, control.clone());
 
@@ -1682,50 +1922,38 @@ async fn start_method_execution(
 }
 
 #[tauri::command]
-pub async fn execute_method(
+pub async fn execute_method_file(
     app: AppHandle,
     db: State<'_, DatabaseState>,
     manager: State<'_, MethodExecutionManager>,
-    id: String,
-) -> Result<i64, String> {
-    validate_method_id(&id)?;
+    method_path: String,
+) -> Result<MethodExecutionSummary, String> {
+    validate_method_source_path(&method_path)?;
     let root = project_root(&db)?;
-    let folder = method_dir(&root, &id);
-    let method = read_manifest(&folder)?;
-    validate_method(&method)?;
-    let content_hash = hash_directory(&folder)?;
-    tracing::info!(
-        project_root = %root.display(),
-        method_id = %method.id,
-        title = %method.title,
-        folder = %folder.display(),
-        content_hash = %content_hash,
-        provider = ?method_level_config_string(&method, "provider"),
-        server_url = ?method_level_config_string(&method, "server_url"),
-        model_values = ?model_values(&method),
-        "Starting Method execution command"
-    );
-    let execution_id = start_method_execution(app, db, manager, method, content_hash).await?;
-
-    Ok(execution_id)
-}
-
-#[tauri::command]
-pub async fn execute_current_method_draft(
-    app: AppHandle,
-    db: State<'_, DatabaseState>,
-    manager: State<'_, MethodExecutionManager>,
-) -> Result<ExecuteCurrentMethodDraftResult, String> {
-    let root = project_root(&db)?;
-    let draft = get_current_draft_for_root(&root)?
-        .ok_or_else(|| "No Method draft exists yet".to_string())?;
-    let method = method_document_for_save(&draft)?;
-    let summary = save_method_to_project_content_addressed(&db, &root, method).await?;
-    let frozen = read_manifest(&method_dir(&root, &summary.id))?;
-    validate_method(&frozen)?;
+    let method = read_method_document(&root.join(&method_path))?;
+    let completeness = preflight_method_for_root(&method, &root);
+    if completeness.status != "ready" {
+        return Err(format!(
+            "Method is not ready to execute. {}",
+            format_preflight_blockers(&completeness)
+        ));
+    }
+    let manifest_text = serde_yaml::to_string(&method)
+        .map_err(|e| format!("Failed to serialize Method for hashing: {}", e))?;
+    let content_hash = hex(&Sha256::digest(manifest_text.as_bytes()));
     let execution_id =
-        start_method_execution(app, db, manager, frozen, summary.content_hash.clone()).await?;
-    Ok(ExecuteCurrentMethodDraftResult { method: summary, execution_id })
+        start_method_execution(app, db.clone(), manager, method, content_hash).await?;
+    sqlx::query_as::<_, MethodExecutionSummary>(
+        r#"
+        SELECT id, method_id, method_content_hash, status, error_message, created_at, started_at, completed_at
+        FROM method_executions
+        WHERE id = ?1
+        "#,
+    )
+    .bind(execution_id)
+    .fetch_one(&db.pool())
+    .await
+    .map_err(|e| format!("Failed to read execution summary: {}", e))
 }
 
 #[tauri::command]
@@ -1758,6 +1986,15 @@ pub async fn list_method_executions(
         .await
         .map_err(|e| format!("Failed to list method executions: {}", e))
     }
+}
+
+#[tauri::command]
+pub async fn get_execution_method(
+    db: State<'_, DatabaseState>,
+    execution_id: i64,
+) -> Result<MethodDocument, String> {
+    let root = project_root(&db)?;
+    read_method_document(&execution_dir(&root, execution_id).join("snapshot").join("method.yaml"))
 }
 
 #[tauri::command]
@@ -1805,8 +2042,8 @@ pub async fn get_method_execution_artifacts(
 ) -> Result<Vec<MethodArtifactSummary>, String> {
     sqlx::query_as::<_, MethodArtifactSummary>(
         r#"
-        SELECT id, execution_id, node_id, artifact_type, storage_kind, storage_ref, content_hash, created_at
-        FROM method_artifacts
+        SELECT id, execution_id, node_id, file_type, path, content_hash, created_at
+        FROM method_execution_files
         WHERE execution_id = ?1
         ORDER BY id ASC
         "#,
@@ -1814,7 +2051,87 @@ pub async fn get_method_execution_artifacts(
     .bind(execution_id)
     .fetch_all(&db.pool())
     .await
-    .map_err(|e| format!("Failed to list method execution artifacts: {}", e))
+    .map_err(|e| format!("Failed to list method execution files: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_execution_files(
+    db: State<'_, DatabaseState>,
+    execution_id: i64,
+) -> Result<Vec<ExecutionFileSummary>, String> {
+    get_method_execution_artifacts(db, execution_id).await
+}
+
+#[tauri::command]
+pub async fn get_execution_node_outputs(
+    db: State<'_, DatabaseState>,
+    execution_id: i64,
+    node_id: String,
+    page: i32,
+    page_size: i32,
+) -> Result<Vec<OutputItem>, String> {
+    let offset = (page.max(1) - 1) * page_size.max(1);
+    sqlx::query_as::<_, OutputItem>(
+        r#"
+        SELECT id, execution_id, node_id, job_id, sample_index, data, created_at
+        FROM method_execution_outputs
+        WHERE execution_id = ?1 AND node_id = ?2
+        ORDER BY id ASC
+        LIMIT ?3 OFFSET ?4
+        "#,
+    )
+    .bind(execution_id)
+    .bind(node_id)
+    .bind(page_size.max(1))
+    .bind(offset)
+    .fetch_all(&db.pool())
+    .await
+    .map_err(|e| format!("Failed to list execution outputs: {}", e))
+}
+
+#[tauri::command]
+pub async fn get_execution_log(
+    db: State<'_, DatabaseState>,
+    execution_id: i64,
+    filter: Option<String>,
+    page: i32,
+    page_size: i32,
+) -> Result<Vec<MethodExecutionEventSummary>, String> {
+    let offset = (page.max(1) - 1) * page_size.max(1);
+    if let Some(event_type) = filter.filter(|value| !value.trim().is_empty()) {
+        sqlx::query_as::<_, MethodExecutionEventSummary>(
+            r#"
+            SELECT id, execution_id, node_id, event_type, payload_json, created_at
+            FROM method_execution_events
+            WHERE execution_id = ?1 AND event_type = ?2
+            ORDER BY id ASC
+            LIMIT ?3 OFFSET ?4
+            "#,
+        )
+        .bind(execution_id)
+        .bind(event_type)
+        .bind(page_size.max(1))
+        .bind(offset)
+        .fetch_all(&db.pool())
+        .await
+        .map_err(|e| format!("Failed to list execution log: {}", e))
+    } else {
+        sqlx::query_as::<_, MethodExecutionEventSummary>(
+            r#"
+            SELECT id, execution_id, node_id, event_type, payload_json, created_at
+            FROM method_execution_events
+            WHERE execution_id = ?1
+            ORDER BY id ASC
+            LIMIT ?2 OFFSET ?3
+            "#,
+        )
+        .bind(execution_id)
+        .bind(page_size.max(1))
+        .bind(offset)
+        .fetch_all(&db.pool())
+        .await
+        .map_err(|e| format!("Failed to list execution log: {}", e))
+    }
 }
 
 #[tauri::command]

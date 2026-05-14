@@ -202,7 +202,7 @@ pub(crate) fn runnable_dependency_ids<'a>(
 
 pub(crate) fn resolve_configured_file(
     method: &MethodDocument,
-    method_id: &str,
+    base_path: &str,
     node_id: &str,
     configured: Option<String>,
     fallback_kind: &str,
@@ -223,7 +223,7 @@ pub(crate) fn resolve_configured_file(
     if !path.starts_with("files/") {
         return Err(format!("Method file '{}' was not frozen", file.id));
     }
-    Ok(format!("methods/{}/{}", method_id, path))
+    Ok(format!("{}/{}", base_path.trim_end_matches('/'), path))
 }
 
 pub(crate) fn yaml_string_list(value: Option<&serde_json::Value>) -> Vec<String> {

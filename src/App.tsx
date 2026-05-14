@@ -10,8 +10,6 @@ import {
   MethodExecutionGraphPanel,
   MethodWorkspaceProvider,
 } from "./components/AgentWorkspace";
-import CollectionViewer from "./components/CollectionViewer";
-import CollectionsList from "./components/CollectionsList";
 import JobListSidebar from "./components/JobListSidebar";
 import JobViewPage from "./components/JobViewPage";
 import InferenceJobForm from "./components/InferenceJobForm";
@@ -21,17 +19,16 @@ import {
   projectFileViewOptions,
 } from "./components/ProjectFileViews";
 import { ToastProvider } from "./components/Toast";
-import type { Collection, MethodSummary } from "./database";
+import type { MethodExecutionSummary } from "./database";
 import {
   CodeViewIcon,
   DropperIcon,
-  CabinetIcon,
   MarkdownViewIcon,
   TestTubeIcon,
   RackIcon,
   MethodGraphViewIcon,
   MethodIcon,
-  MoonIcon,
+  NightShiftIcon,
 } from "./components/icons";
 import {
   closePanel,
@@ -50,7 +47,6 @@ import {
 const LAYOUT_SAVE_DEBOUNCE_MS = 300;
 
 function getLanguage(filename: string): string | undefined {
-  // Multi-extension files like `prompt.spec.jinja2` → use the FINAL extension.
   const ext = filename.split(".").pop()?.toLowerCase();
   const map: Record<string, string> = {
     js: "javascript",
@@ -80,6 +76,23 @@ function getLanguage(filename: string): string | undefined {
     prompt: "jinja2",
   };
   return ext ? map[ext] : undefined;
+}
+
+function fileNameFromPath(path: string) {
+  return path.split(/[\\/]/).pop() || path;
+}
+
+function isMethodSourceFile(path: string, name: string) {
+  const normalizedPath = path.replace(/\\/g, "/").toLowerCase();
+  const normalizedName = name.toLowerCase();
+  return normalizedName.endsWith(".method.yaml")
+    || normalizedName.endsWith(".method.yml")
+    || normalizedPath.endsWith(".method.yaml")
+    || normalizedPath.endsWith(".method.yml");
+}
+
+function defaultViewModeForFile(path: string, name: string): EditorViewMode | undefined {
+  return isMethodSourceFile(path, name) ? "methodGraph" : undefined;
 }
 
 function ResourceNavButton({
@@ -196,55 +209,6 @@ function ConversationResources({
   );
 }
 
-function MethodResources({ onOpenMethod }: { onOpenMethod: () => void }) {
-  const [methods, setMethods] = useState<MethodSummary[]>([]);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadMethods = useCallback(async () => {
-    try {
-      const result = await invoke<MethodSummary[] | null>("list_methods");
-      setMethods(Array.isArray(result) ? result : []);
-      setError(null);
-    } catch (err) {
-      setError(String(err));
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadMethods();
-  }, [loadMethods]);
-
-  useEffect(() => {
-    const handleMethodsChanged = () => void loadMethods();
-    window.addEventListener("nightshift-method-draft-mutated", handleMethodsChanged);
-    window.addEventListener("nightshift-method-execution-started", handleMethodsChanged);
-    return () => {
-      window.removeEventListener("nightshift-method-draft-mutated", handleMethodsChanged);
-      window.removeEventListener("nightshift-method-execution-started", handleMethodsChanged);
-    };
-  }, [loadMethods]);
-
-  return (
-    <div className="resource-list">
-      {methods.length === 0 && !error && (
-        <p className="resource-empty-copy">Your Methods will appear here after you create one.</p>
-      )}
-      {error && <div className="resource-empty">{error}</div>}
-      {methods.map((method) => (
-        <button
-          key={method.id}
-          type="button"
-          className="resource-row"
-          onClick={onOpenMethod}
-          title={`${method.title} · ${method.id}`}
-        >
-          <span className="resource-name">{method.title}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
 export default function App() {
   const [layout, setLayout] = useState<WorkspaceLayout>(defaultWorkspaceLayout);
   const [layoutPersistenceReady, setLayoutPersistenceReady] = useState(false);
@@ -255,10 +219,14 @@ export default function App() {
     language?: string;
     error?: string;
   }>>({});
-  const [selectedCollectionId, setSelectedCollectionId] = useState<number | null>(null);
   const [jobListRefreshKey, setJobListRefreshKey] = useState(0);
   const [fileTreeRefreshKey, setFileTreeRefreshKey] = useState(0);
   const [projectFolderName, setProjectFolderName] = useState("");
+  const [executingMethodPath, setExecutingMethodPath] = useState<string | null>(null);
+  const [methodExecutionFeedback, setMethodExecutionFeedback] = useState<Record<string, {
+    tone: "success" | "error";
+    text: string;
+  }>>({});
   const fileContentsRef = useRef(new Map<string, string>());
   const hydratingFilePathsRef = useRef(new Set<string>());
   // Per-file disk content captured the first time a file is opened (and after
@@ -361,7 +329,7 @@ export default function App() {
     };
   }, [loadProjectLayout]);
 
-  const openPanel = useCallback((type: PanelType, options: { resourceId?: string | number | null; title?: string } = {}) => {
+  const openPanel = useCallback((type: PanelType, options: { resourceId?: string | number | null; title?: string; viewMode?: EditorViewMode } = {}) => {
     setLayout((current) => openOrFocusPanel(current, createPanel(type, options)));
   }, []);
 
@@ -402,7 +370,51 @@ export default function App() {
       language: getLanguage(node.name),
     };
     setFileSnapshots((current) => ({ ...current, [node.path]: nextFile }));
-    openPanel("project-editor", { resourceId: node.path, title: node.name });
+    openPanel("project-editor", {
+      resourceId: node.path,
+      title: node.name,
+      viewMode: defaultViewModeForFile(node.path, node.name),
+    });
+  }, [openPanel]);
+
+  const openProjectFile = useCallback(async (
+    path: string,
+    options: { title?: string; viewMode?: EditorViewMode; reload?: boolean } = {},
+  ) => {
+    const name = options.title ?? fileNameFromPath(path);
+    const viewMode = options.viewMode ?? defaultViewModeForFile(path, name);
+
+    openPanel("project-editor", { resourceId: path, title: name, viewMode });
+
+    if ((!options.reload && fileContentsRef.current.has(path)) || hydratingFilePathsRef.current.has(path)) return;
+    hydratingFilePathsRef.current.add(path);
+    try {
+      const diskContent = await invoke<string>("read_file", { relativePath: path });
+      fileContentsRef.current.set(path, diskContent);
+      originalContentsRef.current.set(path, diskContent);
+      setFileSnapshots((current) => ({
+        ...current,
+        [path]: {
+          path,
+          name,
+          content: diskContent,
+          language: getLanguage(name),
+        },
+      }));
+    } catch (err) {
+      setFileSnapshots((current) => ({
+        ...current,
+        [path]: {
+          path,
+          name,
+          content: "",
+          language: getLanguage(name),
+          error: String(err),
+        },
+      }));
+    } finally {
+      hydratingFilePathsRef.current.delete(path);
+    }
   }, [openPanel]);
 
   // Called by FileTree after a successful write_file. Re-baselines the saved
@@ -432,7 +444,7 @@ export default function App() {
       const hydratedFiles = await Promise.all(pathsToHydrate.map(async (path) => {
         try {
           const content = await invoke<string>("read_file", { relativePath: path });
-          const name = path.split(/[\\/]/).pop() || path;
+          const name = fileNameFromPath(path);
           return {
             path,
             snapshot: {
@@ -480,40 +492,93 @@ export default function App() {
     };
   }, [layout.panels]);
 
-  const handleOpenCollection = useCallback((collection: Collection) => {
-    setSelectedCollectionId(collection.id);
-    openPanel("collection-view", { resourceId: collection.id, title: collection.name });
-  }, [openPanel]);
-
   const handleJobCreated = useCallback((jobId: number, sourcePanelId: string) => {
     setJobListRefreshKey((key) => key + 1);
     const jobPanel = createPanel("job-view", { resourceId: jobId, title: `Job #${jobId}` });
     setLayout((current) => closePanel(openOrFocusPanel(current, jobPanel), sourcePanelId));
   }, []);
 
+  const executeMethodFile = useCallback(async (filePath: string, sourcePanelId: string) => {
+    if (dirtyPaths.has(filePath) || executingMethodPath === filePath) return;
+    setExecutingMethodPath(filePath);
+    setMethodExecutionFeedback((current) => {
+      const next = { ...current };
+      delete next[filePath];
+      return next;
+    });
+    try {
+      const execution = await invoke<MethodExecutionSummary>("execute_method_file", { methodPath: filePath });
+      window.dispatchEvent(new CustomEvent("nightshift-method-execution-started", {
+        detail: {
+          executionId: execution.id,
+          method: { title: fileNameFromPath(filePath) },
+          sourcePanelId,
+        },
+      }));
+      setMethodExecutionFeedback((current) => ({
+        ...current,
+        [filePath]: { tone: "success", text: `Started execution #${execution.id}.` },
+      }));
+    } catch (err) {
+      setMethodExecutionFeedback((current) => ({
+        ...current,
+        [filePath]: { tone: "error", text: String(err) },
+      }));
+    } finally {
+      setExecutingMethodPath(null);
+    }
+  }, [dirtyPaths, executingMethodPath]);
+
   useEffect(() => {
     const handleExecutionStarted = (event: Event) => {
-      const detail = (event as CustomEvent<{ method?: { title?: string }; executionId?: number }>).detail;
+      const detail = (event as CustomEvent<{
+        method?: { title?: string };
+        executionId?: number;
+        sourcePanelId?: string;
+      }>).detail;
       if (!detail?.executionId) return;
-      openPanel("method-execution", {
+      const executionPanel = createPanel("method-execution", {
         resourceId: detail.executionId,
         title: detail.method?.title ? `Execution: ${detail.method.title}` : `Execution #${detail.executionId}`,
+      });
+      setLayout((current) => {
+        if (current.panels.some((panel) => panel.id === executionPanel.id)) {
+          return detail.sourcePanelId
+            ? closePanel(openOrFocusPanel(current, executionPanel), detail.sourcePanelId)
+            : openOrFocusPanel(current, executionPanel);
+        }
+        const sourceIndex = detail.sourcePanelId
+          ? current.panels.findIndex((panel) => panel.id === detail.sourcePanelId)
+          : -1;
+        if (sourceIndex === -1) return openOrFocusPanel(current, executionPanel);
+        const panels = current.panels.map((panel, index) =>
+          index === sourceIndex ? executionPanel : panel,
+        );
+        return {
+          ...current,
+          panels,
+          activePanelId: executionPanel.id,
+        };
       });
     };
     window.addEventListener("nightshift-method-execution-started", handleExecutionStarted);
     return () => window.removeEventListener("nightshift-method-execution-started", handleExecutionStarted);
-  }, [openPanel]);
+  }, []);
 
   useEffect(() => {
     const handleProjectFilesChanged = () => setFileTreeRefreshKey((key) => key + 1);
-    const handleMethodDraftMutated = () => openPanel("method-graph");
+    const handleMethodDraftMutated = () => void openProjectFile("methods/current.method.yaml", {
+      title: "current.method.yaml",
+      viewMode: "methodGraph",
+      reload: true,
+    });
     window.addEventListener("nightshift-project-files-changed", handleProjectFilesChanged);
     window.addEventListener("nightshift-method-draft-mutated", handleMethodDraftMutated);
     return () => {
       window.removeEventListener("nightshift-project-files-changed", handleProjectFilesChanged);
       window.removeEventListener("nightshift-method-draft-mutated", handleMethodDraftMutated);
     };
-  }, [openPanel]);
+  }, [openProjectFile]);
 
   const renderEmptyWorkspace = () => (
     <div className="workspace-empty-state">
@@ -532,7 +597,7 @@ export default function App() {
           />
         );
       case "method":
-        return <MethodResources onOpenMethod={() => openPanel("method-graph")} />;
+        return <p className="resource-empty-copy">Open Method source files from the project tree.</p>;
       case "project":
         return (
           <FileTree
@@ -555,14 +620,6 @@ export default function App() {
             isActive={layout.activeResourceKind === "job"}
           />
         );
-      case "collection":
-        return (
-          <CollectionsList
-            isActive={layout.activeResourceKind === "collection"}
-            selectedId={selectedCollectionId}
-            onSelectCollection={handleOpenCollection}
-          />
-        );
     }
   };
 
@@ -572,7 +629,9 @@ export default function App() {
     if (!file) return null;
     const options = projectFileViewOptions(file.path, file.name);
     if (options.length <= 1) return null;
-    const selectedMode = options.some((option) => option.mode === panel.viewMode) ? panel.viewMode ?? "code" : "code";
+    const defaultMode = defaultViewModeForFile(file.path, file.name) ?? "code";
+    const requestedMode = panel.viewMode ?? defaultMode;
+    const selectedMode = options.some((option) => option.mode === requestedMode) ? requestedMode : "code";
 
     return (
       <div className="project-file-view-switcher" role="group" aria-label={`View options for ${file.name}`}>
@@ -593,6 +652,44 @@ export default function App() {
     );
   };
 
+  const renderProjectEditorExecuteButton = (panel: WorkspacePanel) => {
+    if (panel.type !== "project-editor") return null;
+    const filePath = panel.resourceId ?? "";
+    const file = fileSnapshots[filePath];
+    if (!file) return null;
+    const defaultMode = defaultViewModeForFile(file.path, file.name) ?? "code";
+    const requestedMode = panel.viewMode ?? defaultMode;
+    const viewMode = projectFileViewOptions(file.path, file.name).some((option) => option.mode === requestedMode)
+      ? requestedMode
+      : "code";
+    if (viewMode !== "methodGraph" || !isMethodSourceFile(file.path, file.name)) return null;
+    const isDirty = dirtyPaths.has(file.path);
+    const isExecuting = executingMethodPath === file.path;
+    const title = isDirty ? "Save this Method file before execution" : "Execute Method file";
+    return (
+      <>
+        <button
+          type="button"
+          className="project-file-execute-button"
+          onClick={() => void executeMethodFile(file.path, panel.id)}
+          disabled={isDirty || isExecuting}
+          title={title}
+          aria-label={isDirty ? `Save ${file.name} before execution` : `Execute ${file.name}`}
+        >
+          {isExecuting ? "Starting" : "Execute"}
+        </button>
+        {methodExecutionFeedback[file.path] && (
+          <span
+            className={`project-file-execution-feedback ${methodExecutionFeedback[file.path].tone}`}
+            role="status"
+          >
+            {methodExecutionFeedback[file.path].text}
+          </span>
+        )}
+      </>
+    );
+  };
+
   const renderPanel = (panel: WorkspacePanel) => {
     switch (panel.type) {
       case "chat":
@@ -606,7 +703,9 @@ export default function App() {
           const filePath = panel.resourceId ?? "";
           const file = fileSnapshots[filePath];
           const viewOptions = file ? projectFileViewOptions(file.path, file.name) : [];
-          const viewMode = viewOptions.some((option) => option.mode === panel.viewMode) ? panel.viewMode ?? "code" : "code";
+          const defaultMode = file ? defaultViewModeForFile(file.path, file.name) ?? "code" : "code";
+          const requestedMode = panel.viewMode ?? defaultMode;
+          const viewMode = viewOptions.some((option) => option.mode === requestedMode) ? requestedMode : "code";
           return file?.error ? (
             <div className="editor-placeholder">Could not load {file.name}: {file.error}</div>
           ) : file ? (
@@ -641,24 +740,11 @@ export default function App() {
             <div className="editor-placeholder">Open this file from the Project sidebar to load its content.</div>
           );
         }
-      case "collection-view": {
-        const collectionId = Number(panel.resourceId);
-        return Number.isFinite(collectionId) ? (
-          <CollectionViewer
-            collectionId={collectionId}
-            collectionName={panel.title}
-          />
-        ) : (
-          <div className="collections-placeholder">
-            <p>Select a collection to view its items.</p>
-          </div>
-        );
-      }
       case "job-view": {
         const jobId = Number(panel.resourceId);
         return Number.isFinite(jobId) ? (
           <div className="job-runner-main panel-job-view">
-            <JobViewPage jobId={jobId} onViewCollection={handleOpenCollection} />
+            <JobViewPage jobId={jobId} />
           </div>
         ) : (
           <div className="editor-placeholder">Select a job to view details.</div>
@@ -681,7 +767,6 @@ export default function App() {
     { kind: "conversation", icon: <RackIcon />, label: "Conversations" },
     { kind: "method", icon: <MethodIcon />, label: "Methods" },
     { kind: "project", icon: <DropperIcon />, label: "Project" },
-    { kind: "collection", icon: <CabinetIcon />, label: "Collections" },
     { kind: "job", icon: <TestTubeIcon />, label: "Jobs" },
   ];
 
@@ -697,11 +782,11 @@ export default function App() {
             <button
               type="button"
               className="sidebar-logo"
-              title={isDark ? "Switch to lab theme" : "Switch to midnight theme"}
+              title={isDark ? "Switch to dumpster theme" : "Switch to midnight theme"}
               aria-pressed={isDark}
               onClick={() => setIsDark((prev) => !prev)}
             >
-              <MoonIcon />
+              <NightShiftIcon />
             </button>
             <nav className="sidebar-nav" aria-label="Resources">
               {resourceButtons.map((resource) => (
@@ -786,11 +871,12 @@ export default function App() {
                             className="workspace-panel-title"
                             onClick={() => setLayout((current) => ({ ...current, activePanelId: panel.id }))}
                             title={panel.resourceId ? `${panel.title} · ${panel.resourceId}` : panel.title}
-                          >
-                            {panel.title}
-                          </button>
-                          {renderProjectEditorViewSwitcher(panel)}
-                        </div>
+	                          >
+	                            {panel.title}
+	                          </button>
+	                          {renderProjectEditorViewSwitcher(panel)}
+	                          {renderProjectEditorExecuteButton(panel)}
+	                        </div>
                         <button
                           type="button"
                           className="workspace-panel-close"

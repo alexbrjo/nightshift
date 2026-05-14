@@ -23,20 +23,6 @@ export interface InferenceJob {
   updated_at: string;
 }
 
-export interface CollectionItem {
-  id: number;
-  collection_id: number;
-  data: Record<string, unknown>;
-  created_at: string;
-}
-
-export interface Collection {
-  id: number;
-  job_id: number;
-  name: string;
-  created_at: string;
-}
-
 export interface JobFailure {
   id: number;
   job_id: number;

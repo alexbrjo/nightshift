@@ -42,11 +42,7 @@ pub async fn get_design_agent_config() -> Result<DesignAgentConfig, String> {
     let model = std::env::var("NIGHTSHIFT_METHOD_AGENT_MODEL").unwrap_or_else(|_| "gpt-5.5".into());
     let reasoning_summary =
         if method_agent_reasoning_config(&model).is_some() { "auto" } else { "off" }.to_string();
-    Ok(DesignAgentConfig {
-        model,
-        reasoning_summary,
-        max_tool_loops: METHOD_AGENT_MAX_TOOL_LOOPS,
-    })
+    Ok(DesignAgentConfig { model, reasoning_summary, max_tool_loops: METHOD_AGENT_MAX_TOOL_LOOPS })
 }
 
 #[tauri::command]
@@ -219,16 +215,18 @@ fn method_agent_instructions() -> &'static str {
         "You are Nightshift's Method design agent. ",
         "Use the provided function tools whenever the user describes, creates, or changes a Method. ",
         "Nightshift owns durable Method draft state; do not pretend a Method is executable while blockers remain. ",
-        "Use App Server native file tools to discover/read candidate project files, then represent prompt, data, ",
-        "JSON schema, eval script, collection, and api_key inputs as type: resource workflow nodes. ",
+        "You only have Method draft tools in this conversation, so use project-relative file paths the user gives you; ",
+        "do not claim to inspect files unless a tool result provided their contents. ",
+        "Represent prompt, data, JSON schema, eval script, and api_key inputs as type: resource workflow nodes. ",
         "Use the execution-config tool when the user provides model names, provider settings, temperature, ",
-        "token limits, sample counts, strategy, or model sweep values. ",
+        "token limits, default sample counts, default strategy, or model sweep values. ",
+        "Use node config only for settings that must differ by node, such as a judge model, node-specific prompt/data/schema/script resource override, or node-specific sampling behavior. ",
         "Prefer creating a concise draft with a DAG of resource, inference, eval, and analysis nodes when details are not yet known. ",
         "Treat prompt, data, JSON schema, and api_key resource nodes as direct dependencies of inference nodes unless the user says otherwise; ",
         "eval_script resource nodes feed eval nodes. ",
         "Do not create separate analysis nodes merely to sample or stage an input dataset. ",
         "Analysis nodes should consume upstream node outputs through graph edges, not raw file resources, and produce experiment reports from execution results. ",
-        "Use a type: output_file node only when the user asks to control the report filename/path; put the relative Markdown path in that node's path field. ",
+        "When the user asks to control the report filename/path, put the relative Markdown path in the analysis node's path field. ",
         "API key values may live in .nightshift/config.json, but Method drafts and bundles should reference API key ids rather than copying values. ",
         "After tool calls, briefly summarize what changed and what is still missing. ",
         "Use portable GitHub Flavored Markdown for readability: short paragraphs, bullets only when useful, ",
@@ -666,6 +664,9 @@ mod tests {
         assert!(instructions.contains("Use portable GitHub Flavored Markdown for readability"));
         assert!(instructions.contains("fenced code blocks only for code, paths, or configuration"));
         assert!(instructions.contains("Do not use raw HTML"));
+        assert!(instructions.contains("You only have Method draft tools"));
+        assert!(instructions.contains("Use node config only for settings that must differ by node"));
+        assert!(!instructions.contains("App Server native file tools"));
     }
 
     #[test]

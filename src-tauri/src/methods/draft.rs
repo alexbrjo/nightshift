@@ -10,18 +10,16 @@ use crate::database::DatabaseState;
 use super::config::normalized_resource_kind;
 use super::model::{
     CreateMethodDraftInput, MethodDocument, MethodDraftIssue, MethodDraftReadiness,
-    MethodLifecycleState, MethodSummary, MethodWorkflow, MethodWorkflowNode,
-    ReplaceMethodDraftGraphInput, UpdateMethodDraftExecutionConfigInput,
-    UpdateMethodDraftMetadataInput,
+    MethodLifecycleState, MethodWorkflow, MethodWorkflowNode, ReplaceMethodDraftGraphInput,
+    UpdateMethodDraftExecutionConfigInput, UpdateMethodDraftMetadataInput,
 };
 use super::paths::{project_root, require_nonempty};
-use super::storage::{read_method_document, save_method_to_project, write_method_document};
+use super::storage::{read_method_document, write_method_document};
 
 const FILE_RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "eval_script"];
-const RESOURCE_KINDS: &[&str] =
-    &["prompt", "data", "json_schema", "eval_script", "collection", "api_key"];
+const RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "eval_script", "api_key"];
 fn draft_path(root: &Path) -> PathBuf {
-    root.join(".nightshift").join("current_method_draft.yaml")
+    root.join("methods").join("current.method.yaml")
 }
 
 fn default_title(input: Option<String>) -> String {
@@ -196,7 +194,7 @@ fn resource_is_missing(resource: &MethodWorkflowNode) -> bool {
     if FILE_RESOURCE_KINDS.contains(&kind) {
         return resource.path.as_deref().is_none_or(|path| path.trim().is_empty());
     }
-    matches!(kind, "collection" | "api_key")
+    kind == "api_key"
         && resource.reference.as_deref().is_none_or(|reference| reference.trim().is_empty())
 }
 
@@ -206,7 +204,6 @@ fn resource_kind_label(kind: &str) -> &'static str {
         "data" => "a data file",
         "json_schema" => "a JSON schema file",
         "eval_script" => "an eval script",
-        "collection" => "a collection",
         "api_key" => "an API key",
         _ => "a supported resource",
     }
@@ -217,7 +214,7 @@ fn resource_kind_matches_node(kind: &str, node_type: &str) -> bool {
         "prompt" | "api_key" => node_type == "inference",
         "json_schema" => matches!(node_type, "inference" | "eval"),
         "eval_script" => matches!(node_type, "eval" | "transform"),
-        "data" | "collection" => matches!(node_type, "sample" | "inference" | "eval" | "transform"),
+        "data" => matches!(node_type, "sample" | "inference" | "eval" | "transform"),
         _ => false,
     }
 }
@@ -325,7 +322,7 @@ fn write_draft_to_root(root: &Path, draft: &MethodDocument) -> Result<(), String
     let path = draft_path(root);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create Nightshift draft directory: {}", e))?;
+            .map_err(|e| format!("Failed to create Method source directory: {}", e))?;
     }
     write_method_document(&path, draft)
 }
@@ -481,31 +478,6 @@ pub(crate) fn reset_draft_for_root(root: &Path) -> Result<Option<MethodDocument>
     Ok(None)
 }
 
-pub(crate) async fn save_current_draft_for_root(
-    db: &DatabaseState,
-    root: &Path,
-) -> Result<MethodSummary, String> {
-    let draft =
-        read_draft_from_root(root)?.ok_or_else(|| "No Method draft exists yet.".to_string())?;
-    tracing::info!(
-        project_root = %root.display(),
-        draft_id = %draft.id,
-        title = %draft.title,
-        provider = ?draft.provider,
-        parameters = ?draft.parameters,
-        "Saving current Method draft"
-    );
-    let method = method_document_for_save(&draft)?;
-    let summary = save_method_to_project(db, root, method).await?;
-    tracing::info!(
-        method_id = %summary.id,
-        folder_path = %summary.folder_path,
-        content_hash = %summary.content_hash,
-        "Saved current Method draft"
-    );
-    Ok(summary)
-}
-
 #[tauri::command]
 pub async fn get_current_method_draft(
     db: State<'_, DatabaseState>,
@@ -576,12 +548,4 @@ pub async fn reset_method_draft(
     let root = project_root(&db)?;
     let draft = reset_draft_for_root(&root)?;
     emit_draft(&app, draft)
-}
-
-#[tauri::command]
-pub async fn save_current_method_draft(
-    db: State<'_, DatabaseState>,
-) -> Result<MethodSummary, String> {
-    let root = project_root(&db)?;
-    save_current_draft_for_root(&db, &root).await
 }

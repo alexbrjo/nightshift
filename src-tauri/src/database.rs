@@ -31,15 +31,6 @@ pub struct InferenceJob {
     pub updated_at: String,
 }
 
-/// Represents a collection item (output from inference job)
-#[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
-pub struct CollectionItem {
-    pub id: i64,
-    pub collection_id: i64,
-    pub data: serde_json::Value,
-    pub created_at: String,
-}
-
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct JobFailure {
     pub id: i64,
@@ -175,7 +166,7 @@ impl DatabaseState {
         ))
     }
 
-    /// Get the database path for a given project
+    /// Get the rebuildable index database path for a given project.
     pub fn get_database_path<P: AsRef<Path>>(project_root: P) -> PathBuf {
         let project_root_ref = project_root.as_ref();
         // Ensure we have an absolute path
@@ -187,7 +178,7 @@ impl DatabaseState {
                 .unwrap_or_else(|_| project_root_ref.to_path_buf())
         };
         let nightshift_dir = abs_project_root.join(".nightshift");
-        nightshift_dir.join("nightshift.db")
+        nightshift_dir.join("index.sqlite")
     }
 
     /// Resolve project root for `start_path`. The opened folder must be the
@@ -232,7 +223,7 @@ impl DatabaseState {
         Ok(root)
     }
 
-    /// Open a connection at the project's `.nightshift/nightshift.db` and run
+    /// Open a connection at the project's `.nightshift/index.sqlite` and run
     /// all migrations. Used by both `new()` and `reconnect()`.
     async fn open_pool(project_root: &Path) -> Result<SqlitePool, sqlx::Error> {
         let db_path = Self::get_database_path(project_root);
@@ -317,34 +308,6 @@ impl DatabaseState {
 
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS collections (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_id INTEGER NOT NULL UNIQUE,
-                name TEXT NOT NULL,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (job_id) REFERENCES inference_jobs(id) ON DELETE CASCADE
-            )
-            "#,
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query(
-            r#"
-            CREATE TABLE IF NOT EXISTS collection_items (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                collection_id INTEGER NOT NULL,
-                data JSON NOT NULL,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE
-            )
-            "#,
-        )
-        .execute(pool)
-        .await?;
-
-        sqlx::query(
-            r#"
             CREATE TABLE IF NOT EXISTS job_failures (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 job_id INTEGER NOT NULL,
@@ -360,12 +323,12 @@ impl DatabaseState {
 
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS methods (
-                id TEXT PRIMARY KEY,
-                title TEXT NOT NULL,
-                content_hash TEXT NOT NULL,
-                folder_path TEXT NOT NULL,
-                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+            CREATE TABLE IF NOT EXISTS job_outputs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                data JSON NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (job_id) REFERENCES inference_jobs(id) ON DELETE CASCADE
             )
             "#,
         )
@@ -427,13 +390,29 @@ impl DatabaseState {
 
         sqlx::query(
             r#"
-            CREATE TABLE IF NOT EXISTS method_artifacts (
+            CREATE TABLE IF NOT EXISTS method_execution_outputs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                node_id TEXT NOT NULL,
+                job_id INTEGER,
+                sample_index INTEGER,
+                data JSON NOT NULL,
+                created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (execution_id) REFERENCES method_executions(id) ON DELETE CASCADE
+            )
+            "#,
+        )
+        .execute(pool)
+        .await?;
+
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS method_execution_files (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 execution_id INTEGER NOT NULL,
                 node_id TEXT,
-                artifact_type TEXT NOT NULL,
-                storage_kind TEXT NOT NULL,
-                storage_ref TEXT NOT NULL,
+                file_type TEXT NOT NULL,
+                path TEXT NOT NULL,
                 content_hash TEXT,
                 created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (execution_id) REFERENCES method_executions(id) ON DELETE CASCADE
@@ -448,18 +427,10 @@ impl DatabaseState {
         )
         .execute(pool)
         .await?;
-        sqlx::query("DROP INDEX IF EXISTS idx_collections_job_id").execute(pool).await?;
-        sqlx::query(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_collections_job_id ON collections(job_id)",
-        )
-        .execute(pool)
-        .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_collection_items_collection_id ON collection_items(collection_id)")
-            .execute(pool).await?;
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_job_failures_job_id ON job_failures(job_id)")
             .execute(pool)
             .await?;
-        sqlx::query("CREATE INDEX IF NOT EXISTS idx_methods_content_hash ON methods(content_hash)")
+        sqlx::query("CREATE INDEX IF NOT EXISTS idx_job_outputs_job_id ON job_outputs(job_id)")
             .execute(pool)
             .await?;
         sqlx::query(
@@ -478,7 +449,12 @@ impl DatabaseState {
         .execute(pool)
         .await?;
         sqlx::query(
-            "CREATE INDEX IF NOT EXISTS idx_method_artifacts_execution_id ON method_artifacts(execution_id)",
+            "CREATE INDEX IF NOT EXISTS idx_method_execution_outputs_execution_node ON method_execution_outputs(execution_id, node_id)",
+        )
+        .execute(pool)
+        .await?;
+        sqlx::query(
+            "CREATE INDEX IF NOT EXISTS idx_method_execution_files_execution_id ON method_execution_files(execution_id)",
         )
         .execute(pool)
         .await?;
@@ -560,10 +536,6 @@ impl DatabaseState {
         self.project_root.lock().unwrap().clone()
     }
 }
-
-// Include collection command tests
-#[path = "database_collection_tests.rs"]
-mod collection_commands_tests;
 
 #[cfg(test)]
 mod tests {
@@ -717,7 +689,7 @@ mod tests {
 
         let db_path = DatabaseState::get_database_path(&project_dir);
 
-        assert_eq!(db_path, project_dir.join(".nightshift").join("nightshift.db"));
+        assert_eq!(db_path, project_dir.join(".nightshift").join("index.sqlite"));
     }
 
     #[test]
@@ -727,7 +699,7 @@ mod tests {
 
         let db_path = DatabaseState::get_database_path(&project_dir);
 
-        assert_eq!(db_path, project_dir.join(".nightshift").join("nightshift.db"));
+        assert_eq!(db_path, project_dir.join(".nightshift").join("index.sqlite"));
     }
 
     fn valid_job_input() -> InferenceJobInput {
@@ -797,17 +769,17 @@ mod tests {
             .await
             .expect("Failed to get job ID");
 
-        // Try to insert a collection with invalid job_id (should fail due to FK constraint)
-        let result = sqlx::query("INSERT INTO collections (job_id, name) VALUES (?, ?)")
+        // Try to insert a job output with invalid job_id (should fail due to FK constraint)
+        let result = sqlx::query("INSERT INTO job_outputs (job_id, data) VALUES (?, ?)")
             .bind(99999) // Non-existent job ID
-            .bind("test_collection")
+            .bind(serde_json::json!({"content":"test"}))
             .execute(&pool.pool())
             .await;
 
         // Should fail because foreign key constraint is enforced
         assert!(
             result.is_err(),
-            "Foreign key constraint should prevent inserting collection with invalid job_id"
+            "Foreign key constraint should prevent inserting job output with invalid job_id"
         );
 
         let err = result.unwrap_err();
@@ -893,7 +865,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_index_exists_on_collections_job_id() {
+    async fn test_index_exists_on_job_outputs_job_id() {
         // Acquire the global lock to prevent concurrent database operations
         let _guard = get_test_lock().lock().unwrap();
 
@@ -910,13 +882,13 @@ mod tests {
 
         // Query sqlite_master to check if the index exists
         let index_exists: bool = sqlx::query_scalar(
-            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_collections_job_id'"
+            "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='index' AND name='idx_job_outputs_job_id'"
         )
         .fetch_one(&pool.pool())
         .await
         .expect("Failed to query sqlite_master");
 
-        assert!(index_exists, "Index 'idx_collections_job_id' should exist on collections table");
+        assert!(index_exists, "Index 'idx_job_outputs_job_id' should exist on job outputs table");
 
         // Cleanup
         fs::remove_dir_all(&project_dir).ok();
@@ -1250,428 +1222,4 @@ pub async fn delete_inference_job(
     .map_err(|e| format!("Failed to delete inference job: {}", e))?;
 
     Ok(result.rows_affected() > 0)
-}
-
-/// Tauri command to create a collection for an inference job
-#[tauri::command]
-pub async fn create_collection(
-    state: State<'_, DatabaseState>,
-    job_id: i64,
-    name: String,
-) -> Result<i64, String> {
-    // Verify job exists
-    let job_exists = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS(SELECT 1 FROM inference_jobs WHERE id = ?)
-        "#,
-    )
-    .bind(job_id)
-    .fetch_one(&state.pool())
-    .await
-    .map_err(|e| format!("Failed to check job existence: {}", e))?;
-
-    if !job_exists {
-        return Err("Inference job not found".to_string());
-    }
-
-    let result = sqlx::query(
-        r#"
-        INSERT INTO collections (job_id, name)
-        VALUES (?1, ?2)
-        "#,
-    )
-    .bind(job_id)
-    .bind(name)
-    .execute(&state.pool())
-    .await
-    .map_err(|e| format!("Failed to create collection: {}", e))?;
-
-    Ok(result.last_insert_rowid())
-}
-
-/// Tauri command to get all collections for a job
-#[tauri::command]
-pub async fn get_collections_for_job(
-    state: State<'_, DatabaseState>,
-    job_id: i64,
-) -> Result<Vec<Collection>, String> {
-    sqlx::query_as::<_, Collection>(
-        r#"
-        SELECT id, job_id, name, created_at
-        FROM collections
-        WHERE job_id = ?
-        ORDER BY created_at ASC
-        "#,
-    )
-    .bind(job_id)
-    .fetch_all(&state.pool())
-    .await
-    .map_err(|e| format!("Failed to get collections: {}", e))
-}
-
-/// Tauri command to list all collections
-#[tauri::command]
-pub async fn list_all_collections(
-    state: State<'_, DatabaseState>,
-) -> Result<Vec<Collection>, String> {
-    sqlx::query_as::<_, Collection>(
-        r#"
-        SELECT id, job_id, name, created_at
-        FROM collections
-        ORDER BY created_at DESC
-        "#,
-    )
-    .fetch_all(&state.pool())
-    .await
-    .map_err(|e| format!("Failed to list collections: {}", e))
-}
-
-/// Collection representation
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-pub struct Collection {
-    pub id: i64,
-    pub job_id: i64,
-    pub name: String,
-    pub created_at: String,
-}
-
-/// Collection summary for the data-source picker.
-#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
-#[serde(rename_all = "camelCase")]
-pub struct SelectableCollection {
-    pub id: i64,
-    pub name: String,
-    pub item_count: i64,
-}
-
-pub async fn list_selectable_collections_with_pool(
-    pool: &SqlitePool,
-) -> Result<Vec<SelectableCollection>, String> {
-    sqlx::query_as::<_, SelectableCollection>(
-        r#"
-        SELECT
-            c.id AS id,
-            c.name AS name,
-            (SELECT COUNT(*) FROM collection_items WHERE collection_id = c.id) AS item_count
-        FROM collections c
-        JOIN inference_jobs j ON j.id = c.job_id
-        WHERE j.status IN ('completed', 'completed_with_errors')
-        ORDER BY c.created_at DESC
-        "#,
-    )
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to list selectable collections: {}", e))
-}
-
-/// Tauri command: list collections eligible to be used as a data source.
-/// Only includes collections whose owning job reached a successful terminal status.
-#[tauri::command]
-pub async fn list_selectable_collections(
-    state: State<'_, DatabaseState>,
-) -> Result<Vec<SelectableCollection>, String> {
-    list_selectable_collections_with_pool(&state.pool()).await
-}
-
-/// Tauri command to add an item to a collection
-#[tauri::command]
-pub async fn add_collection_item(
-    state: State<'_, DatabaseState>,
-    collection_id: i64,
-    data: serde_json::Value,
-) -> Result<i64, String> {
-    // Verify collection exists
-    let collection_exists = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?)
-        "#,
-    )
-    .bind(collection_id)
-    .fetch_one(&state.pool())
-    .await
-    .map_err(|e| format!("Failed to check collection existence: {}", e))?;
-
-    if !collection_exists {
-        return Err("Collection not found".to_string());
-    }
-
-    let result = sqlx::query(
-        r#"
-        INSERT INTO collection_items (collection_id, data)
-        VALUES (?1, ?2)
-        "#,
-    )
-    .bind(collection_id)
-    .bind(data)
-    .execute(&state.pool())
-    .await
-    .map_err(|e| format!("Failed to add collection item: {}", e))?;
-
-    Ok(result.last_insert_rowid())
-}
-
-/// Tauri command to get collection items with pagination
-#[tauri::command]
-pub async fn get_collection_items(
-    state: State<'_, DatabaseState>,
-    collection_id: i64,
-    page: i32,
-    page_size: i32,
-) -> Result<Vec<CollectionItem>, String> {
-    // Verify collection exists
-    let collection_exists = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?)
-        "#,
-    )
-    .bind(collection_id)
-    .fetch_one(&state.pool())
-    .await
-    .map_err(|e| format!("Failed to check collection existence: {}", e))?;
-
-    if !collection_exists {
-        return Err("Collection not found".to_string());
-    }
-
-    let offset = (page - 1) * page_size;
-
-    let items = sqlx::query_as::<_, CollectionItem>(
-        r#"
-        SELECT * FROM collection_items
-        WHERE collection_id = ?
-        ORDER BY created_at DESC
-        LIMIT ? OFFSET ?
-        "#,
-    )
-    .bind(collection_id)
-    .bind(page_size)
-    .bind(offset)
-    .fetch_all(&state.pool())
-    .await
-    .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
-
-    Ok(items)
-}
-
-/// Tauri command to get collection count
-#[tauri::command]
-pub async fn get_collection_count(
-    state: State<'_, DatabaseState>,
-    collection_id: i64,
-) -> Result<i64, String> {
-    let count = sqlx::query_scalar::<_, i64>(
-        r#"
-        SELECT COUNT(*) FROM collection_items WHERE collection_id = ?
-        "#,
-    )
-    .bind(collection_id)
-    .fetch_one(&state.pool())
-    .await
-    .map_err(|e| format!("Failed to get collection count: {}", e))?;
-
-    Ok(count)
-}
-
-/// Tauri command to delete a collection item
-#[tauri::command]
-pub async fn delete_collection_item(
-    state: State<'_, DatabaseState>,
-    item_id: i64,
-) -> Result<bool, String> {
-    delete_collection_item_by_id(&state.pool(), item_id).await
-}
-
-pub(crate) async fn delete_collection_item_by_id(
-    pool: &SqlitePool,
-    item_id: i64,
-) -> Result<bool, String> {
-    let result = sqlx::query(
-        r#"
-        DELETE FROM collection_items WHERE id = ?
-        "#,
-    )
-    .bind(item_id)
-    .execute(pool)
-    .await
-    .map_err(|e| format!("Failed to delete collection item: {}", e))?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-/// Export format for collection items
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CollectionItemExport {
-    pub id: i64,
-    pub data: serde_json::Value,
-    pub created_at: String,
-}
-
-/// Tauri command to export collection items as JSONL
-#[tauri::command]
-pub async fn export_collection_jsonl(
-    state: State<'_, DatabaseState>,
-    collection_id: i64,
-) -> Result<String, String> {
-    export_collection_jsonl_by_id(&state.pool(), collection_id).await
-}
-
-pub(crate) async fn export_collection_jsonl_by_id(
-    pool: &SqlitePool,
-    collection_id: i64,
-) -> Result<String, String> {
-    // Verify collection exists
-    let collection_exists = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?)
-        "#,
-    )
-    .bind(collection_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to check collection existence: {}", e))?;
-
-    if !collection_exists {
-        return Err("Collection not found".to_string());
-    }
-
-    let items = sqlx::query_as::<_, CollectionItem>(
-        r#"
-        SELECT * FROM collection_items
-        WHERE collection_id = ?
-        ORDER BY created_at ASC
-        "#,
-    )
-    .bind(collection_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
-
-    // Convert to export format and serialize as JSONL
-    let export_items: Vec<CollectionItemExport> = items
-        .into_iter()
-        .map(|item| CollectionItemExport {
-            id: item.id,
-            data: item.data,
-            created_at: item.created_at,
-        })
-        .collect();
-
-    let jsonl_lines: Result<Vec<String>, _> =
-        export_items.iter().map(|item| serde_json::to_string(item)).collect();
-
-    let jsonl_content =
-        jsonl_lines.map_err(|e| format!("Failed to serialize items to JSONL: {}", e))?.join("\n");
-
-    Ok(jsonl_content)
-}
-
-/// Tauri command to export collection items as CSV
-#[tauri::command]
-pub async fn export_collection_csv(
-    state: State<'_, DatabaseState>,
-    collection_id: i64,
-) -> Result<String, String> {
-    export_collection_csv_by_id(&state.pool(), collection_id).await
-}
-
-pub(crate) async fn export_collection_csv_by_id(
-    pool: &SqlitePool,
-    collection_id: i64,
-) -> Result<String, String> {
-    // Verify collection exists
-    let collection_exists = sqlx::query_scalar::<_, bool>(
-        r#"
-        SELECT EXISTS(SELECT 1 FROM collections WHERE id = ?)
-        "#,
-    )
-    .bind(collection_id)
-    .fetch_one(pool)
-    .await
-    .map_err(|e| format!("Failed to check collection existence: {}", e))?;
-
-    if !collection_exists {
-        return Err("Collection not found".to_string());
-    }
-
-    let items = sqlx::query_as::<_, CollectionItem>(
-        r#"
-        SELECT * FROM collection_items
-        WHERE collection_id = ?
-        ORDER BY created_at ASC
-        "#,
-    )
-    .bind(collection_id)
-    .fetch_all(pool)
-    .await
-    .map_err(|e| format!("Failed to fetch collection items: {}", e))?;
-
-    if items.is_empty() {
-        return Ok(String::new());
-    }
-
-    // Auto-detect columns from the first item's data
-    let all_keys: std::collections::BTreeSet<String> = items
-        .iter()
-        .flat_map(|item| {
-            if let serde_json::Value::Object(map) = &item.data {
-                Box::new(map.keys().cloned()) as Box<dyn Iterator<Item = String>>
-            } else {
-                Box::new(std::iter::empty()) as Box<dyn Iterator<Item = String>>
-            }
-        })
-        .collect();
-
-    if all_keys.is_empty() {
-        return Ok(String::new());
-    }
-
-    // Build CSV header
-    let mut csv_lines = Vec::new();
-    let headers: Vec<String> = all_keys.into_iter().collect();
-    csv_lines.push(format!("id,{}", headers.join(",")));
-
-    // Build CSV rows
-    for item in items {
-        let row_values: Vec<String> = headers
-            .iter()
-            .map(|key| {
-                if let serde_json::Value::Object(map) = &item.data {
-                    map.get(key).map(|v| format_csv_value(v)).unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            })
-            .collect();
-        csv_lines.push(format!("{},{}", item.id, row_values.join(",")));
-    }
-
-    Ok(csv_lines.join("\n"))
-}
-
-/// Helper function to format a JSON value as a CSV-safe string
-pub fn format_csv_value(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::Null => String::new(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::String(s) => {
-            // Escape quotes and wrap in quotes if contains comma, quote, or newline
-            let escaped = s.replace('"', "\"\"");
-            if escaped.contains(',') || escaped.contains('"') || escaped.contains('\n') {
-                format!("\"{}\"", escaped)
-            } else {
-                escaped
-            }
-        }
-        serde_json::Value::Array(arr) => {
-            // Convert arrays to JSON string representation
-            let arr_str = serde_json::to_string(arr).unwrap_or_default();
-            format!("\"{}\"", arr_str.replace('"', "\"\""))
-        }
-        serde_json::Value::Object(obj) => {
-            // Convert objects to JSON string representation
-            let obj_str = serde_json::to_string(obj).unwrap_or_default();
-            format!("\"{}\"", obj_str.replace('"', "\"\""))
-        }
-    }
 }

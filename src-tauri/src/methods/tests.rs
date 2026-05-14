@@ -15,17 +15,15 @@ use super::draft::{
     update_draft_execution_config_for_root, validate_graph,
 };
 use super::execution::{
-    analysis_report_relative_path, analysis_report_repair_prompt, create_inference_job_for_node,
-    create_sample_job_for_node, create_transform_job_for_node, insert_analysis_report_artifact,
-    insert_artifact, insert_execution, read_method_artifact_from_db, run_analysis_sql_query,
-    topological_nodes, validate_analysis_sql,
+    analysis_report_relative_path, analysis_report_repair_prompt, append_jsonl,
+    create_inference_job_for_node, create_sample_job_for_node, create_transform_job_for_node,
+    insert_analysis_report_artifact, insert_artifact, insert_execution,
+    read_method_artifact_from_db, run_analysis_sql_query, topological_nodes,
+    update_execution_status, upstream_job_sources, validate_analysis_sql,
 };
 use super::model::*;
 use super::preflight::preflight_method_for_root;
-use super::storage::{
-    freeze_files, read_manifest, read_method_document, save_method_to_project,
-    save_method_to_project_content_addressed, write_method_document,
-};
+use super::storage::{freeze_files, read_method_document, write_method_document};
 use super::validation::validate_method;
 
 fn sample_method() -> MethodDocument {
@@ -64,6 +62,20 @@ fn sample_method() -> MethodDocument {
         outputs: vec![],
         metadata: serde_json::Value::Null,
     }
+}
+
+async fn prepare_frozen_execution(
+    db: &DatabaseState,
+    root: &PathBuf,
+    method: MethodDocument,
+) -> (MethodDocument, i64) {
+    let execution_id = insert_execution(db, &method, "test-hash").await.unwrap();
+    let snapshot_dir =
+        root.join(".nightshift").join("executions").join(execution_id.to_string()).join("snapshot");
+    let mut frozen = method;
+    freeze_files(&mut frozen, root, &snapshot_dir).unwrap();
+    write_method_document(&snapshot_dir.join("method.yaml"), &frozen).unwrap();
+    (frozen, execution_id)
 }
 
 fn method_resource(id: &str, kind: &str, path: &str) -> MethodWorkflowNode {
@@ -175,7 +187,7 @@ fn draft_graph_validation_rejects_cycles() {
 fn agent_tool_style_draft_creation_persists_current_draft() {
     let temp =
         std::env::temp_dir().join(format!("nightshift-method-draft-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(temp.join(".nightshift")).unwrap();
+    fs::create_dir_all(temp.join("methods")).unwrap();
 
     let draft = create_draft_for_root(
         &temp,
@@ -190,7 +202,7 @@ fn agent_tool_style_draft_creation_persists_current_draft() {
     assert_eq!(persisted.id, draft.id);
     assert_eq!(persisted.title, "Model rubric benchmark");
     assert_eq!(super::draft::derive_readiness(&persisted).status, MethodLifecycleState::Drafting);
-    let yaml_path = temp.join(".nightshift/current_method_draft.yaml");
+    let yaml_path = temp.join("methods/current.method.yaml");
     let yaml = fs::read_to_string(&yaml_path).unwrap();
     assert!(yaml.contains("schema_version:"), "got: {yaml}");
     assert!(yaml.contains("provider:"), "got: {yaml}");
@@ -247,7 +259,7 @@ fn resource_node_persists_as_graph_dependency() {
     let draft = get_current_draft_for_root(&temp).unwrap().unwrap();
     assert_eq!(draft.workflow.nodes[0].path.as_deref(), Some("prompts/main.md"));
     assert_eq!(draft.workflow.nodes[1].depends_on, vec!["main_prompt"]);
-    let yaml = fs::read_to_string(temp.join(".nightshift/current_method_draft.yaml")).unwrap();
+    let yaml = fs::read_to_string(temp.join("methods/current.method.yaml")).unwrap();
     assert!(yaml.contains("type: resource"), "got: {yaml}");
     assert!(!yaml.contains("consumed_by"), "got: {yaml}");
     assert!(!yaml.contains("resources:"), "got: {yaml}");
@@ -282,12 +294,10 @@ fn named_file_resource_with_path_is_not_reported_missing() {
         metadata: serde_json::json!({}),
     };
 
-    assert!(
-        !super::draft::derive_readiness(&draft)
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == "missing_resource")
-    );
+    assert!(!super::draft::derive_readiness(&draft)
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == "missing_resource"));
 }
 
 #[test]
@@ -496,6 +506,7 @@ fn sample_node_allows_inference_without_direct_data_resource() {
 fn api_key_resource_uses_reference_without_persisting_value() {
     let temp =
         std::env::temp_dir().join(format!("nightshift-method-api-key-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("methods")).unwrap();
     fs::create_dir_all(temp.join(".nightshift")).unwrap();
     fs::write(
         temp.join(".nightshift/config.json"),
@@ -553,6 +564,7 @@ fn api_key_resource_uses_reference_without_persisting_value() {
 fn nightshift_config_loads_provider_profiles_with_api_key_env_vars() {
     let temp =
         std::env::temp_dir().join(format!("nightshift-method-config-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("methods")).unwrap();
     fs::create_dir_all(temp.join(".nightshift")).unwrap();
     fs::write(
         temp.join(".nightshift/config.json"),
@@ -586,6 +598,7 @@ fn nightshift_config_loads_provider_profiles_with_api_key_env_vars() {
 fn nightshift_config_rejects_file_stored_api_key_values() {
     let temp = std::env::temp_dir()
         .join(format!("nightshift-method-config-secret-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join("methods")).unwrap();
     fs::create_dir_all(temp.join(".nightshift")).unwrap();
     fs::write(
         temp.join(".nightshift/config.json"),
@@ -619,27 +632,12 @@ fn validate_method_rejects_secret_values() {
     assert!(err.contains("secret-like"), "got: {err}");
 }
 
-#[tokio::test]
-async fn save_method_rejects_pre_frozen_file_paths() {
-    let temp =
-        std::env::temp_dir().join(format!("nightshift-method-prefrozen-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(&temp).unwrap();
-    let db = DatabaseState::new(&temp).await.unwrap();
-    let mut method = sample_method();
-    method.workflow.nodes[0].path = Some("files/already-frozen.jinja2".into());
-
-    let err = save_method_to_project(&db, &temp, method).await.unwrap_err();
-
-    assert!(err.contains("project file before save"), "got: {err}");
-    fs::remove_dir_all(temp).unwrap();
-}
-
 #[test]
 fn freeze_files_rewrites_to_content_addressed_paths() {
     let temp = std::env::temp_dir().join(format!("nightshift-method-test-{}", Uuid::new_v4()));
     fs::create_dir_all(temp.join("prompts")).unwrap();
     fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
-    let dest = temp.join("methods/edge-method");
+    let dest = temp.join(".nightshift/executions/1/snapshot");
     let mut method = sample_method();
 
     freeze_files(&mut method, &temp, &dest).unwrap();
@@ -649,84 +647,12 @@ fn freeze_files_rewrites_to_content_addressed_paths() {
     fs::remove_dir_all(temp).unwrap();
 }
 
-#[tokio::test]
-async fn save_method_persists_metadata_and_frozen_manifest() {
-    let temp = std::env::temp_dir().join(format!("nightshift-method-db-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(temp.join("prompts")).unwrap();
-    fs::create_dir_all(temp.join("data")).unwrap();
-    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
-    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
-    let db = DatabaseState::new(&temp).await.unwrap();
-    let mut method = sample_method();
-    add_resource_dependency(
-        &mut method,
-        method_resource("data", "data", "data/examples.jsonl"),
-        "generate",
-    );
-    method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
-
-    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
-    let listed = sqlx::query_as::<_, MethodSummary>(
-        "SELECT id, title, content_hash, folder_path, created_at FROM methods",
-    )
-    .fetch_all(&db.pool())
-    .await
-    .unwrap();
-    let manifest = read_manifest(&PathBuf::from(&summary.folder_path)).unwrap();
-
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].id, "edge-method");
-    assert_eq!(listed[0].content_hash, summary.content_hash);
-    assert!(manifest.workflow.nodes[0].path.as_deref().unwrap().starts_with("files/"));
-    assert!(
-        PathBuf::from(&summary.folder_path)
-            .join(manifest.workflow.nodes[0].path.as_deref().unwrap())
-            .is_file()
-    );
-    fs::remove_dir_all(temp).unwrap();
-}
-
-#[tokio::test]
-async fn content_addressed_method_save_uses_hash_identity_and_reuses_identical_content() {
-    let temp =
-        std::env::temp_dir().join(format!("nightshift-method-content-id-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(temp.join("prompts")).unwrap();
-    fs::create_dir_all(temp.join("data")).unwrap();
-    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
-    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
-    let db = DatabaseState::new(&temp).await.unwrap();
-    let mut method = sample_method();
-    add_resource_dependency(
-        &mut method,
-        method_resource("data", "data", "data/examples.jsonl"),
-        "generate",
-    );
-    method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
-
-    let first = save_method_to_project_content_addressed(&db, &temp, method.clone()).await.unwrap();
-    method.id = "different-draft-id".into();
-    let second = save_method_to_project_content_addressed(&db, &temp, method).await.unwrap();
-    let manifest = read_manifest(&PathBuf::from(&first.folder_path)).unwrap();
-    let listed = sqlx::query_as::<_, MethodSummary>(
-        "SELECT id, title, content_hash, folder_path, created_at FROM methods",
-    )
-    .fetch_all(&db.pool())
-    .await
-    .unwrap();
-
-    assert_eq!(first.id, second.id);
-    assert_eq!(first.id, format!("method-{}", first.content_hash));
-    assert_eq!(manifest.id, first.id);
-    assert_eq!(listed.len(), 1);
-    fs::remove_dir_all(temp).unwrap();
-}
-
 #[test]
-fn method_document_round_trips_through_draft_and_saved_paths() {
+fn method_document_round_trips_through_source_paths() {
     let temp =
         std::env::temp_dir().join(format!("nightshift-method-roundtrip-test-{}", Uuid::new_v4()));
-    let draft_path = temp.join(".nightshift/current_method_draft.yaml");
-    let saved_path = temp.join("methods/edge-method/method.yaml");
+    let draft_path = temp.join("methods/current.method.yaml");
+    let saved_path = temp.join("methods/edge.method.yaml");
     fs::create_dir_all(draft_path.parent().unwrap()).unwrap();
     fs::create_dir_all(saved_path.parent().unwrap()).unwrap();
     let method = sample_method();
@@ -737,82 +663,6 @@ fn method_document_round_trips_through_draft_and_saved_paths() {
     assert_eq!(read_method_document(&draft_path).unwrap(), method);
     assert_eq!(read_method_document(&saved_path).unwrap(), method);
     assert_eq!(yaml_top_level_keys(&draft_path), yaml_top_level_keys(&saved_path));
-    fs::remove_dir_all(temp).unwrap();
-}
-
-#[tokio::test]
-async fn draft_and_saved_yaml_use_same_canonical_shape_without_derived_state() {
-    let temp =
-        std::env::temp_dir().join(format!("nightshift-method-shape-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(temp.join(".nightshift")).unwrap();
-    fs::create_dir_all(temp.join("prompts")).unwrap();
-    fs::create_dir_all(temp.join("data")).unwrap();
-    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
-    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
-    let db = DatabaseState::new(&temp).await.unwrap();
-    let mut method = sample_method();
-    add_resource_dependency(
-        &mut method,
-        method_resource("data", "data", "data/examples.jsonl"),
-        "generate",
-    );
-    method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
-    method.parameters = serde_yaml::from_str("samples: 2").unwrap();
-    let draft_path = temp.join(".nightshift/current_method_draft.yaml");
-
-    write_method_document(&draft_path, &method).unwrap();
-    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
-    let saved_path = PathBuf::from(summary.folder_path).join("method.yaml");
-    let draft_keys = yaml_top_level_keys(&draft_path);
-    let saved_keys = yaml_top_level_keys(&saved_path);
-
-    assert_eq!(draft_keys, saved_keys);
-    for forbidden in ["readiness", "lifecycle", "edges", "files", "schemaVersion", "providerConfig"]
-    {
-        assert!(!draft_keys.contains(forbidden), "draft persisted {forbidden}");
-        assert!(!saved_keys.contains(forbidden), "saved Method persisted {forbidden}");
-    }
-    let saved = fs::read_to_string(&saved_path).unwrap();
-    assert!(!saved.contains("resources:"), "got: {saved}");
-    assert!(saved.contains("type: resource"), "got: {saved}");
-    assert!(saved.contains("workflow:"), "got: {saved}");
-    assert!(saved.contains("depends_on:"), "got: {saved}");
-    fs::remove_dir_all(temp).unwrap();
-}
-
-#[tokio::test]
-async fn save_method_updates_existing_method_id_in_place() {
-    let temp =
-        std::env::temp_dir().join(format!("nightshift-method-resave-test-{}", Uuid::new_v4()));
-    fs::create_dir_all(temp.join("prompts")).unwrap();
-    fs::create_dir_all(temp.join("data")).unwrap();
-    fs::write(temp.join("prompts/main.jinja2"), "Hello {{name}}").unwrap();
-    fs::write(temp.join("data/examples.jsonl"), r#"{"name":"Ada"}"#).unwrap();
-    let db = DatabaseState::new(&temp).await.unwrap();
-    let mut method = sample_method();
-    add_resource_dependency(
-        &mut method,
-        method_resource("data", "data", "data/examples.jsonl"),
-        "generate",
-    );
-    method.provider = serde_yaml::from_str("model: bonsai-8b").unwrap();
-
-    let first = save_method_to_project(&db, &temp, method.clone()).await.unwrap();
-    method.title = "Renamed edge method".into();
-    let second = save_method_to_project(&db, &temp, method).await.unwrap();
-    let listed = sqlx::query_as::<_, MethodSummary>(
-        "SELECT id, title, content_hash, folder_path, created_at FROM methods",
-    )
-    .fetch_all(&db.pool())
-    .await
-    .unwrap();
-    let manifest = read_manifest(&PathBuf::from(&second.folder_path)).unwrap();
-
-    assert_eq!(first.id, "edge-method");
-    assert_eq!(second.id, "edge-method");
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].title, "Renamed edge method");
-    assert_eq!(manifest.title, "Renamed edge method");
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -840,14 +690,16 @@ fn preflight_reports_missing_required_files() {
     let result = preflight_method_for_root(&method, &temp);
 
     assert_eq!(result.status, "drafting");
-    assert!(
-        result.blockers.iter().any(|blocker| blocker.code == "missing_file"
-            && blocker.file_kind.as_deref() == Some("prompt"))
-    );
-    assert!(
-        result.blockers.iter().any(|blocker| blocker.code == "missing_file"
-            && blocker.file_kind.as_deref() == Some("data"))
-    );
+    assert!(result
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == "missing_file"
+            && blocker.file_kind.as_deref() == Some("prompt")));
+    assert!(result
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == "missing_file"
+            && blocker.file_kind.as_deref() == Some("data")));
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -923,6 +775,57 @@ async fn insert_execution_creates_node_rows() {
 }
 
 #[tokio::test]
+async fn insert_execution_cleans_up_when_execution_folder_creation_fails() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-execution-cleanup-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".nightshift")).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    fs::write(temp.join(".nightshift/executions"), "not a directory").unwrap();
+
+    let err = insert_execution(&db, &sample_method(), "hash").await.unwrap_err();
+    let execution_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM method_executions")
+        .fetch_one(&db.pool())
+        .await
+        .unwrap();
+
+    assert!(err.contains("Failed to create execution snapshot folder"), "got: {err}");
+    assert_eq!(execution_count, 0);
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn execution_yaml_tracks_status_transitions() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-execution-yaml-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let execution_id = insert_execution(&db, &sample_method(), "hash").await.unwrap();
+    let metadata_path = temp
+        .join(".nightshift")
+        .join("executions")
+        .join(execution_id.to_string())
+        .join("execution.yaml");
+
+    let queued: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(queued["status"].as_str(), Some("queued"));
+
+    update_execution_status(&db, execution_id, "running", None).await.unwrap();
+    let running: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(running["status"].as_str(), Some("running"));
+    assert!(running["startedAt"].as_str().is_some());
+
+    update_execution_status(&db, execution_id, "failed", Some("boom")).await.unwrap();
+    let failed: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&metadata_path).unwrap()).unwrap();
+    assert_eq!(failed["status"].as_str(), Some("failed"));
+    assert_eq!(failed["errorMessage"].as_str(), Some("boom"));
+    assert!(failed["completedAt"].as_str().is_some());
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
 async fn create_inference_job_for_node_uses_frozen_method_files() {
     let temp = std::env::temp_dir().join(format!("nightshift-method-job-test-{}", Uuid::new_v4()));
     fs::create_dir_all(temp.join("prompts")).unwrap();
@@ -945,9 +848,7 @@ model: qwen-test
     )
     .unwrap();
 
-    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
-    let frozen = read_manifest(&PathBuf::from(&summary.folder_path)).unwrap();
-    let execution_id = insert_execution(&db, &frozen, &summary.content_hash).await.unwrap();
+    let (frozen, execution_id) = prepare_frozen_execution(&db, &temp, method).await;
     let job_id = create_inference_job_for_node(
         &db,
         &frozen,
@@ -961,8 +862,9 @@ model: qwen-test
     .unwrap();
     let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
 
-    assert!(job.prompt_file.starts_with("methods/edge-method/files/"));
-    assert!(job.data_source.starts_with("methods/edge-method/files/"));
+    let snapshot_prefix = format!(".nightshift/executions/{}/snapshot/files/", execution_id);
+    assert!(job.prompt_file.starts_with(&snapshot_prefix));
+    assert!(job.data_source.starts_with(&snapshot_prefix));
     assert_eq!(job.model, "qwen-test");
     fs::remove_dir_all(temp).unwrap();
 }
@@ -1019,9 +921,7 @@ async fn create_inference_job_for_node_prefers_prompt_consumed_by_node() {
         metadata: serde_json::Value::Null,
     };
 
-    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
-    let frozen = read_manifest(&PathBuf::from(&summary.folder_path)).unwrap();
-    let execution_id = insert_execution(&db, &frozen, &summary.content_hash).await.unwrap();
+    let (frozen, execution_id) = prepare_frozen_execution(&db, &temp, method).await;
     let judge_node = frozen.workflow.nodes.iter().find(|node| node.id == "judge").unwrap();
 
     let job_id = create_inference_job_for_node(
@@ -1029,7 +929,7 @@ async fn create_inference_job_for_node_prefers_prompt_consumed_by_node() {
         &frozen,
         judge_node,
         execution_id,
-        Some("collection:42".into()),
+        Some("execution:42/node:generate".into()),
         None,
         None,
     )
@@ -1037,7 +937,9 @@ async fn create_inference_job_for_node_prefers_prompt_consumed_by_node() {
     .unwrap();
     let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
 
-    assert!(job.prompt_file.starts_with("methods/node-prompt-method/files/"));
+    assert!(job
+        .prompt_file
+        .starts_with(&format!(".nightshift/executions/{}/snapshot/files/", execution_id)));
     assert!(job.prompt_file.ends_with(".jinja2"));
     let prompt = fs::read_to_string(temp.join(&job.prompt_file)).unwrap();
     assert_eq!(prompt, "Judge {{word_de}}");
@@ -1068,16 +970,14 @@ async fn create_inference_job_for_node_uses_upstream_sample_without_resampling()
         "samples": 99,
         "strategy": "random"
     });
-    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
-    let frozen = read_manifest(&PathBuf::from(&summary.folder_path)).unwrap();
-    let execution_id = insert_execution(&db, &frozen, &summary.content_hash).await.unwrap();
+    let (frozen, execution_id) = prepare_frozen_execution(&db, &temp, method).await;
 
     let job_id = create_inference_job_for_node(
         &db,
         &frozen,
         frozen.workflow.nodes.iter().find(|node| node.id == "generate").unwrap(),
         execution_id,
-        Some("collection:42".into()),
+        Some("execution:42/node:sample".into()),
         None,
         None,
     )
@@ -1085,7 +985,7 @@ async fn create_inference_job_for_node_uses_upstream_sample_without_resampling()
     .unwrap();
     let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
 
-    assert_eq!(job.data_source, "collection:42");
+    assert_eq!(job.data_source, "execution:42/node:sample");
     assert_eq!(job.samples, 1);
     assert_eq!(job.strategy, "exhaustive");
     fs::remove_dir_all(temp).unwrap();
@@ -1123,9 +1023,7 @@ async fn create_sample_job_for_node_persists_sampling_config() {
         outputs: vec![],
         metadata: serde_json::Value::Null,
     };
-    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
-    let frozen = read_manifest(&PathBuf::from(&summary.folder_path)).unwrap();
-    let execution_id = insert_execution(&db, &frozen, &summary.content_hash).await.unwrap();
+    let (frozen, execution_id) = prepare_frozen_execution(&db, &temp, method).await;
 
     let sample_node =
         frozen.workflow.nodes.iter().find(|node| node.id == "sample_records").unwrap();
@@ -1134,7 +1032,9 @@ async fn create_sample_job_for_node_persists_sampling_config() {
     let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
 
     assert_eq!(job.job_type, "sample");
-    assert!(job.data_source.starts_with("methods/sample-method/files/"));
+    assert!(job
+        .data_source
+        .starts_with(&format!(".nightshift/executions/{}/snapshot/files/", execution_id)));
     assert_eq!(job.samples, 2);
     assert_eq!(job.strategy, "random");
     fs::remove_dir_all(temp).unwrap();
@@ -1166,9 +1066,7 @@ async fn create_transform_job_for_node_uses_frozen_script_and_data() {
         },
     ];
 
-    let summary = save_method_to_project(&db, &temp, method).await.unwrap();
-    let frozen = read_manifest(&PathBuf::from(&summary.folder_path)).unwrap();
-    let execution_id = insert_execution(&db, &frozen, &summary.content_hash).await.unwrap();
+    let (frozen, execution_id) = prepare_frozen_execution(&db, &temp, method).await;
     let job_id = create_transform_job_for_node(
         &db,
         &frozen,
@@ -1182,8 +1080,9 @@ async fn create_transform_job_for_node_uses_frozen_script_and_data() {
     let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
 
     assert_eq!(job.job_type, "transform");
-    assert!(job.data_source.starts_with("methods/edge-method/files/"));
-    assert!(job.transform_script_file.unwrap().starts_with("methods/edge-method/files/"));
+    let snapshot_prefix = format!(".nightshift/executions/{}/snapshot/files/", execution_id);
+    assert!(job.data_source.starts_with(&snapshot_prefix));
+    assert!(job.transform_script_file.unwrap().starts_with(&snapshot_prefix));
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -1221,7 +1120,7 @@ fn method_tool_schema_exposes_analysis_without_aggregate() {
         .collect::<Vec<_>>();
 
     assert!(enum_values.contains(&"analysis"));
-    assert!(enum_values.contains(&"output_file"));
+    assert!(!enum_values.contains(&"output_file"));
     assert!(!enum_values.contains(&"aggregate"));
     assert!(replace_graph["parameters"]["properties"]["workflow"]["properties"]["nodes"]["items"]
         ["properties"]["config"]["properties"]
@@ -1229,6 +1128,13 @@ fn method_tool_schema_exposes_analysis_without_aggregate() {
         .unwrap()
         .get("output_file")
         .is_none());
+    let config_properties = replace_graph["parameters"]["properties"]["workflow"]["properties"]
+        ["nodes"]["items"]["properties"]["config"]["properties"]
+        .as_object()
+        .unwrap();
+    for key in ["samples", "strategy", "model", "server_url", "prompt_file", "json_schema_file"] {
+        assert!(config_properties.contains_key(key), "missing config key {key}");
+    }
 }
 
 #[test]
@@ -1274,15 +1180,15 @@ fn aggregate_draft_nodes_are_normalized_to_analysis() {
 
 #[test]
 fn analysis_sql_guardrails_allow_only_read_queries() {
-    assert!(validate_analysis_sql("SELECT * FROM collection_items").is_ok());
+    assert!(validate_analysis_sql("SELECT * FROM method_execution_outputs").is_ok());
     assert!(validate_analysis_sql("WITH rows AS (SELECT 1 AS n) SELECT n FROM rows;").is_ok());
     for sql in [
-        "INSERT INTO collection_items VALUES (1)",
+        "INSERT INTO method_execution_outputs VALUES (1)",
         "SELECT 1; SELECT 2",
-        "PRAGMA table_info(collection_items)",
+        "PRAGMA table_info(method_execution_outputs)",
         "SELECT 1 -- hidden",
         "/* hidden */ SELECT 1",
-        "WITH deleted AS (DELETE FROM collection_items RETURNING *) SELECT * FROM deleted",
+        "WITH deleted AS (DELETE FROM method_execution_outputs RETURNING *) SELECT * FROM deleted",
     ] {
         assert!(validate_analysis_sql(sql).is_err(), "query should be rejected: {sql}");
     }
@@ -1309,16 +1215,13 @@ async fn analysis_sql_query_applies_row_limit() {
     .await
     .unwrap()
     .last_insert_rowid();
-    let collection_id =
-        sqlx::query("INSERT INTO collections (job_id, name) VALUES (?1, 'outputs')")
-            .bind(job_id)
-            .execute(&db.pool())
-            .await
-            .unwrap()
-            .last_insert_rowid();
+    let execution_id = insert_execution(&db, &sample_method(), "hash").await.unwrap();
     for item in [serde_json::json!({ "pass": true }), serde_json::json!({ "pass": false })] {
-        sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?1, ?2)")
-            .bind(collection_id)
+        sqlx::query(
+            "INSERT INTO method_execution_outputs (execution_id, node_id, job_id, data) VALUES (?1, 'analysis', ?2, ?3)",
+        )
+            .bind(execution_id)
+            .bind(job_id)
             .bind(item)
             .execute(&db.pool())
             .await
@@ -1326,7 +1229,7 @@ async fn analysis_sql_query_applies_row_limit() {
     }
 
     let result =
-        run_analysis_sql_query(&db, "SELECT id, data FROM collection_items ORDER BY id", 1)
+        run_analysis_sql_query(&db, "SELECT id, data FROM method_execution_outputs ORDER BY id", 1)
             .await
             .unwrap();
 
@@ -1381,30 +1284,28 @@ Conclusion.
         insert_analysis_report_artifact(&db, &method, execution_id, &node, report).await.unwrap();
     let bad_report = report.replace("## Caveats", "## Limitations");
 
-    assert!(output_ref.starts_with("method_execution_file:"));
-    assert!(
-        temp.join(".nightshift/executions")
-            .join(execution_id.to_string())
-            .join("report-method")
-            .join("analysis.md")
-            .is_file()
-    );
-    assert!(
-        insert_analysis_report_artifact(&db, &method, execution_id, &node, &bad_report)
-            .await
-            .is_err()
-    );
+    assert!(output_ref.starts_with("file:"));
+    assert!(temp
+        .join(".nightshift/executions")
+        .join(execution_id.to_string())
+        .join("files")
+        .join("analysis")
+        .join("analysis.md")
+        .is_file());
+    assert!(insert_analysis_report_artifact(&db, &method, execution_id, &node, &bad_report)
+        .await
+        .is_err());
     fs::remove_dir_all(temp).unwrap();
 }
 
 #[test]
-fn output_file_node_path_controls_analysis_report_location() {
+fn analysis_node_path_controls_analysis_report_location() {
     let mut method = sample_method();
     method.id = "branch-method".into();
     let node = MethodWorkflowNode {
         id: "analyze_branch_a".into(),
         label: "Analyze branch A".into(),
-        node_type: "output_file".into(),
+        node_type: "analysis".into(),
         kind: None,
         path: Some("branch-a/report".into()),
         reference: None,
@@ -1416,32 +1317,28 @@ fn output_file_node_path_controls_analysis_report_location() {
 
     assert_eq!(
         path.to_string_lossy().replace('\\', "/"),
-        ".nightshift/executions/42/branch-method/branch-a/report.md"
+        ".nightshift/executions/42/files/analyze_branch_a/branch-a/report.md"
     );
     assert!(!path.starts_with("methods/branch-method"));
 }
 
 #[test]
-fn analysis_node_ignores_legacy_output_file_config() {
+fn output_file_node_type_is_rejected() {
     let mut method = sample_method();
-    method.id = "branch-method".into();
-    let node = MethodWorkflowNode {
-        id: "analysis".into(),
-        label: "Analyze".into(),
-        node_type: "analysis".into(),
+    method.workflow.nodes.push(MethodWorkflowNode {
+        id: "report_file".into(),
+        label: "Report file".into(),
+        node_type: "output_file".into(),
         kind: None,
-        path: None,
+        path: Some("report.md".into()),
         reference: None,
-        depends_on: vec![],
-        config: serde_json::json!({ "output_file": "branch-a/report" }),
-    };
+        depends_on: vec!["analysis".into()],
+        config: serde_json::json!({}),
+    });
 
-    let path = analysis_report_relative_path(&method, 42, &node).unwrap();
+    let err = validate_method(&method).unwrap_err();
 
-    assert_eq!(
-        path.to_string_lossy().replace('\\', "/"),
-        ".nightshift/executions/42/branch-method/analysis.md"
-    );
+    assert!(err.contains("removed type 'output_file'"), "got: {err}");
 }
 
 #[test]
@@ -1483,7 +1380,7 @@ async fn read_method_artifact_returns_inline_content() {
     .await
     .unwrap();
     let artifact = sqlx::query_as::<_, MethodArtifactSummary>(
-        "SELECT id, execution_id, node_id, artifact_type, storage_kind, storage_ref, content_hash, created_at FROM method_artifacts WHERE execution_id = ?",
+        "SELECT id, execution_id, node_id, file_type, path, content_hash, created_at FROM method_execution_files WHERE execution_id = ?",
     )
     .bind(execution_id)
     .fetch_one(&db.pool())
@@ -1492,6 +1389,87 @@ async fn read_method_artifact_returns_inline_content() {
     let content = read_method_artifact_from_db(&db, artifact.id).await.unwrap();
 
     assert_eq!(content, "# Analysis");
-    assert_eq!(artifact.artifact_type, "analysis");
+    assert_eq!(artifact.file_type, "inline_markdown");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn upstream_job_sources_returns_real_job_scoped_execution_refs() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-upstream-jobs-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let method = sample_method();
+    let execution_id = insert_execution(&db, &method, "hash").await.unwrap();
+    sqlx::query(
+        "UPDATE method_execution_nodes SET status = 'completed' WHERE execution_id = ? AND node_id = 'generate'",
+    )
+    .bind(execution_id)
+    .execute(&db.pool())
+    .await
+    .unwrap();
+    for job_id in [101_i64, 202_i64] {
+        sqlx::query(
+            "INSERT INTO method_execution_outputs (execution_id, node_id, job_id, sample_index, data) VALUES (?, 'generate', ?, 0, ?)",
+        )
+        .bind(execution_id)
+        .bind(job_id)
+        .bind(serde_json::json!({ "job": job_id }))
+        .execute(&db.pool())
+        .await
+        .unwrap();
+    }
+
+    let analysis_node = method.workflow.nodes.iter().find(|node| node.id == "analysis").unwrap();
+    let mut node_outputs = std::collections::HashMap::new();
+    node_outputs
+        .insert("generate".to_string(), format!("execution:{}/node:generate", execution_id));
+
+    let sources = upstream_job_sources(&db, &method, analysis_node, &node_outputs).await.unwrap();
+
+    assert_eq!(
+        sources,
+        vec![
+            (101, format!("execution:{}/node:generate/job:101", execution_id)),
+            (202, format!("execution:{}/node:generate/job:202", execution_id)),
+        ]
+    );
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn append_jsonl_writes_complete_lines_under_concurrent_calls() {
+    use std::sync::{Arc, Barrier};
+
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-jsonl-append-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp).unwrap();
+    let path = temp.join("log.jsonl");
+    let barrier = Arc::new(Barrier::new(8));
+    let handles = (0..8)
+        .map(|index| {
+            let barrier = Arc::clone(&barrier);
+            let path = path.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                append_jsonl(&path, &serde_json::json!({ "index": index })).unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let content = fs::read_to_string(&path).unwrap();
+    let mut seen = content
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).unwrap()["index"].as_i64().unwrap()
+        })
+        .collect::<Vec<_>>();
+    seen.sort();
+
+    assert_eq!(seen, vec![0, 1, 2, 3, 4, 5, 6, 7]);
     fs::remove_dir_all(temp).unwrap();
 }

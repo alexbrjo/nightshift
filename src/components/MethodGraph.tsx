@@ -130,8 +130,6 @@ function resourceKindLabel(kind: string | undefined) {
       return "Schema";
     case "eval_script":
       return "Eval script";
-    case "collection":
-      return "Collection";
     case "api_key":
       return "API key";
     default:

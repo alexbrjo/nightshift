@@ -5,8 +5,7 @@ use super::config::normalized_resource_kind;
 use super::model::{MethodDocument, MethodWorkflowNode};
 use super::paths::{require_nonempty, validate_method_id, validate_relative_path};
 
-const RESOURCE_KINDS: &[&str] =
-    &["prompt", "data", "json_schema", "eval_script", "collection", "api_key"];
+const RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "eval_script", "api_key"];
 const GENERATED_OR_DEPENDENCY_DIRS: &[&str] = &[
     ".git",
     ".nightshift",
@@ -82,17 +81,14 @@ pub fn validate_method(method: &MethodDocument) -> Result<(), String> {
             return Err(format!("method.workflow node id '{}' is duplicated", node.id));
         }
         if node.node_type == "output_file" {
-            require_nonempty(
-                "method.workflow.nodes[].path",
-                node.path.as_deref().unwrap_or_default(),
-            )?;
-            if node.path.as_deref().is_some_and(|path| {
-                Path::new(path).is_absolute() || path.contains("..") || path.trim().is_empty()
-            }) {
-                return Err(format!(
-                    "method.workflow output_file node '{}' path must stay inside the execution folder",
-                    node.id
-                ));
+            return Err(format!(
+                "method.workflow node '{}' uses removed type 'output_file'; set path on an analysis node instead",
+                node.id
+            ));
+        }
+        if node.node_type == "analysis" {
+            if let Some(path) = node.path.as_deref().filter(|path| !path.trim().is_empty()) {
+                validate_relative_path(path)?;
             }
         }
         if node.is_resource() {
@@ -147,9 +143,7 @@ fn resource_kind_matches_node(resource: &MethodWorkflowNode, node: &MethodWorkfl
         "prompt" | "api_key" => node.node_type == "inference",
         "json_schema" => matches!(node.node_type.as_str(), "inference" | "eval"),
         "eval_script" => node.node_type == "eval" || node.node_type == "transform",
-        "data" | "collection" => {
-            matches!(node.node_type.as_str(), "sample" | "inference" | "eval" | "transform")
-        }
+        "data" => matches!(node.node_type.as_str(), "sample" | "inference" | "eval" | "transform"),
         _ => false,
     }
 }
@@ -160,7 +154,6 @@ fn resource_kind_label(kind: &str) -> &'static str {
         "data" => "a data file",
         "json_schema" => "a JSON schema file",
         "eval_script" => "an eval script",
-        "collection" => "a collection",
         "api_key" => "an API key",
         _ => "a supported resource",
     }

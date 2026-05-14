@@ -55,7 +55,6 @@ describe("AgentWorkspace", () => {
           return Promise.resolve(null);
         case "get_current_method_draft":
           return Promise.resolve(null);
-        case "list_methods":
           return Promise.resolve([]);
         case "list_method_executions":
         case "get_method_execution_nodes":
@@ -105,7 +104,7 @@ describe("AgentWorkspace", () => {
 
     expect(main).toBeInTheDocument();
     expect(main.style.getPropertyValue("--agent-graph-width")).toBe("");
-    expect(screen.getByRole("button", { name: "Execute Draft" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Execute Draft" })).not.toBeInTheDocument();
   });
 
   it("refreshes execution graph panels from execution events without polling", async () => {
@@ -126,7 +125,7 @@ describe("AgentWorkspace", () => {
           return Promise.resolve(null);
         case "list_method_executions":
           return Promise.resolve([{ id: 42, methodId: "method-hash", status: executionStatus, createdAt: "2026-05-13T00:00:00Z" }]);
-        case "get_method":
+        case "get_execution_method":
           return Promise.resolve({
             schema_version: 2,
             id: "method-hash",
@@ -151,7 +150,10 @@ describe("AgentWorkspace", () => {
       </MethodWorkspaceProvider>,
     );
 
-    expect(await screen.findByText("running")).toBeInTheDocument();
+    const generateNode = await screen.findByText("Generate");
+    expect(generateNode).toBeInTheDocument();
+    expect(generateNode.closest(".agent-graph-sidebar")).toHaveClass("graph-only");
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
     expect(setIntervalSpy.mock.calls.some(([, delay]) => delay === 5000)).toBe(false);
     const initialLoads = mockInvoke.mock.calls.filter(([command]) => command === "list_method_executions").length;
 
@@ -165,7 +167,6 @@ describe("AgentWorkspace", () => {
       );
     });
 
-    expect(await screen.findByText("completed")).toBeInTheDocument();
     expect(mockInvoke.mock.calls.filter(([command]) => command === "list_method_executions").length)
       .toBeGreaterThan(initialLoads);
     setIntervalSpy.mockRestore();
@@ -225,7 +226,6 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
         case "get_current_method_draft":
           return Promise.resolve(null);
-        case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
@@ -357,7 +357,6 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
         case "get_current_method_draft":
           return Promise.resolve(null);
-        case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
@@ -650,427 +649,29 @@ describe("AgentWorkspace", () => {
     });
   });
 
-  it("executes a saved Method and renders execution state", async () => {
+  it("does not expose draft execution controls from the chat workspace", async () => {
     mockInvoke.mockImplementation((command: string) => {
-      switch (command) {
-        case "start_design_session":
-          return Promise.resolve({ threadId: "thr_123" });
-        case "get_current_method_draft":
-          return Promise.resolve({
-            schema_version: 2,
-            id: "edge-method",
-            title: "Edge method",
-            objective: "Measure accuracy",
-            workflow: {
-              nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
-            },
-            parameters: {},
-            provider: {},
-            outputs: [],
-            metadata: {},
-          });
-        case "list_methods":
-          return Promise.resolve([
-            {
-              id: "edge-method",
-              title: "Edge method",
-              contentHash: "hash",
-              folderPath: "/tmp/methods/edge-method",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        case "execute_current_method_draft":
-          return Promise.resolve({
-            method: {
-              id: "method-hash",
-              title: "Edge method",
-              contentHash: "hash",
-              folderPath: "/tmp/methods/method-hash",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-            executionId: 42,
-          });
-        case "list_method_executions":
-          return Promise.resolve([
-            {
-              id: 42,
-              methodId: "method-hash",
-              methodContentHash: "hash",
-              status: "running",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        case "get_method_execution_nodes":
-          return Promise.resolve([
-            {
-              id: 1,
-              executionId: 42,
-              nodeId: "generate",
-              nodeType: "inference",
-              status: "running",
-            },
-          ]);
-        case "get_method_execution_events":
-          return Promise.resolve([
-            {
-              id: 1,
-              executionId: 42,
-              nodeId: "generate",
-              eventType: "node_started",
-              payloadJson: {},
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        default:
-          return Promise.resolve(null);
+      if (command === "start_design_session") return Promise.resolve({ threadId: "thr_123" });
+      if (command === "get_current_method_draft") {
+        return Promise.resolve({
+          schema_version: 2,
+          id: "edge-method",
+          title: "Edge method",
+          objective: "Measure accuracy",
+          workflow: { nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }] },
+          parameters: {},
+          provider: {},
+          outputs: [],
+          metadata: {},
+        });
       }
+      return Promise.resolve(null);
     });
 
     render(<AgentWorkspace />);
 
     await screen.findByText("Generate");
-    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
-
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("execute_current_method_draft");
-      expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
-      expect(screen.queryByText("Execution 42")).not.toBeInTheDocument();
-      expect(screen.queryByText("Started Method execution 42.")).not.toBeInTheDocument();
-      expect(screen.queryByText("node_started")).not.toBeInTheDocument();
-    });
-    expect(mockInvoke).not.toHaveBeenCalledWith("get_method_execution_events", { executionId: 42 });
-  });
-
-  it("blocks execution when the current draft is not ready", async () => {
-    mockInvoke.mockImplementation((command: string) => {
-      switch (command) {
-        case "start_design_session":
-          return Promise.resolve({ threadId: "thr_123" });
-        case "get_current_method_draft":
-          return Promise.resolve({
-            schema_version: 1,
-            id: "draft-1",
-            title: "Edge Model 50% Flash-Card Accuracy Benchmark",
-            objective: "",
-            workflow: {
-              nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
-            },
-            parameters: {},
-            provider: {},
-            outputs: [],
-            metadata: {},
-          });
-        case "list_methods":
-          return Promise.resolve([
-            {
-              id: "edge-model-98-flash-card-accuracy-benchmark",
-              title: "Edge Model 98% Flash-Card Accuracy Benchmark",
-              contentHash: "hash",
-              folderPath: "/tmp/methods/edge-model-98-flash-card-accuracy-benchmark",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        case "list_method_executions":
-        case "get_method_execution_nodes":
-        case "get_method_execution_events":
-          return Promise.resolve([]);
-        default:
-          return Promise.resolve(null);
-      }
-    });
-
-    render(<AgentWorkspace />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Execute Draft" })).toBeDisabled();
-      expect(mockInvoke).not.toHaveBeenCalledWith("execute_current_method_draft");
-    });
-  });
-
-  it("executes a ready draft through the combined save-and-execute command", async () => {
-    mockInvoke.mockImplementation((command: string) => {
-      switch (command) {
-        case "start_design_session":
-          return Promise.resolve({ threadId: "thr_123" });
-        case "get_current_method_draft":
-          return Promise.resolve({
-            schema_version: 1,
-            id: "draft-1",
-            title: "Edge method",
-            objective: "Measure accuracy",
-            workflow: {
-              nodes: [{ id: "generate", label: "Generate", type: "eval", config: {} }],
-            },
-            parameters: {},
-            provider: {},
-            outputs: [],
-            metadata: {},
-          });
-        case "list_methods":
-          return Promise.resolve([]);
-        case "execute_current_method_draft":
-          return Promise.resolve({
-            method: {
-              id: "method-hash",
-              title: "Edge method",
-              contentHash: "hash",
-              folderPath: "/tmp/methods/method-hash",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-            executionId: 77,
-          });
-        default:
-          return Promise.resolve(null);
-      }
-    });
-
-    render(<AgentWorkspace />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Execute Draft" })).toBeEnabled();
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
-
-    await waitFor(() => {
-      expect(mockInvoke).toHaveBeenCalledWith("execute_current_method_draft");
-      expect(screen.queryByRole("status")).not.toBeInTheDocument();
-    });
-  });
-
-  it("shows inline feedback when executing a ready draft fails", async () => {
-    mockInvoke.mockImplementation((command: string) => {
-      switch (command) {
-        case "start_design_session":
-          return Promise.resolve({ threadId: "thr_123" });
-        case "get_current_method_draft":
-          return Promise.resolve({
-            schema_version: 1,
-            id: "draft-1",
-            title: "Edge method",
-            objective: "Measure accuracy",
-            workflow: {
-              nodes: [{ id: "generate", label: "Generate", type: "eval", config: {} }],
-            },
-            parameters: {},
-            provider: {},
-            outputs: [],
-            metadata: {},
-          });
-        case "list_methods":
-          return Promise.resolve([]);
-        case "execute_current_method_draft":
-          return Promise.reject("Inference needs a model name.");
-        default:
-          return Promise.resolve(null);
-      }
-    });
-
-    render(<AgentWorkspace />);
-
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Execute Draft" })).toBeEnabled();
-    });
-    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText(/I could not execute the current Method draft: Inference needs a model name\./)[0])
-        .toBeInTheDocument();
-    });
-    expect(screen.getByRole("status")).toHaveTextContent(/Inference needs a model name/);
-  });
-
-  it("refreshes execution state when backend events arrive", async () => {
-    let nodeStatus = "queued";
-    mockInvoke.mockImplementation((command: string) => {
-      switch (command) {
-        case "start_design_session":
-          return Promise.resolve({ threadId: "thr_123" });
-        case "get_current_method_draft":
-          return Promise.resolve({
-            schema_version: 1,
-            id: "edge-method",
-            title: "Edge method",
-            objective: "Measure accuracy",
-            workflow: {
-              nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
-            },
-            parameters: {},
-            provider: {},
-            outputs: [],
-            metadata: {},
-          });
-        case "list_methods":
-          return Promise.resolve([
-            {
-              id: "edge-method",
-              title: "Edge method",
-              contentHash: "hash",
-              folderPath: "/tmp/methods/edge-method",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        case "execute_current_method_draft":
-          return Promise.resolve({
-            method: {
-              id: "method-hash",
-              title: "Edge method",
-              contentHash: "hash",
-              folderPath: "/tmp/methods/method-hash",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-            executionId: 42,
-          });
-        case "list_method_executions":
-          return Promise.resolve([
-            {
-              id: 42,
-              methodId: "method-hash",
-              methodContentHash: "hash",
-              status: nodeStatus,
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        case "get_method_execution_nodes":
-          return Promise.resolve([
-            {
-              id: 1,
-              executionId: 42,
-              nodeId: "generate",
-              nodeType: "inference",
-              status: nodeStatus,
-            },
-          ]);
-        case "get_method_execution_events":
-          return Promise.resolve([
-            {
-              id: 1,
-              executionId: 42,
-              nodeId: "generate",
-              eventType: nodeStatus === "completed" ? "node_completed" : "node_started",
-              payloadJson: {},
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        default:
-          return Promise.resolve(null);
-      }
-    });
-
-    render(<AgentWorkspace />);
-
-    await screen.findByText("Generate");
-    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Queued").length).toBeGreaterThan(0);
-      expect(screen.queryByText("Execution 42")).not.toBeInTheDocument();
-    });
-    nodeStatus = "completed";
-    eventBus.handlers.get("method-execution-event")?.forEach((handler) =>
-      handler({
-        payload: {
-          executionId: 42,
-          nodeId: "generate",
-          eventType: "node_completed",
-          payload: {},
-        },
-      }),
-    );
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
-      expect(screen.queryByText("node_completed")).not.toBeInTheDocument();
-    });
-  });
-
-  it("shows node failure status in the graph without raw execution text", async () => {
-    mockInvoke.mockImplementation((command: string) => {
-      switch (command) {
-        case "start_design_session":
-          return Promise.resolve({ threadId: "thr_123" });
-        case "get_current_method_draft":
-          return Promise.resolve({
-            schema_version: 1,
-            id: "edge-method",
-            title: "Edge method",
-            objective: "Measure accuracy",
-            workflow: {
-              nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }],
-            },
-            parameters: {},
-            provider: {},
-            outputs: [],
-            metadata: {},
-          });
-        case "list_methods":
-          return Promise.resolve([
-            {
-              id: "edge-method",
-              title: "Edge method",
-              contentHash: "hash",
-              folderPath: "/tmp/methods/edge-method",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        case "execute_current_method_draft":
-          return Promise.resolve({
-            method: {
-              id: "method-hash",
-              title: "Edge method",
-              contentHash: "hash",
-              folderPath: "/tmp/methods/method-hash",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-            executionId: 42,
-          });
-        case "list_method_executions":
-          return Promise.resolve([
-            {
-              id: 42,
-              methodId: "method-hash",
-              methodContentHash: "hash",
-              status: "failed",
-              errorMessage: "Inference job failed",
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        case "get_method_execution_nodes":
-          return Promise.resolve([
-            {
-              id: 1,
-              executionId: 42,
-              nodeId: "generate",
-              nodeType: "inference",
-              status: "failed",
-              errorMessage: "Provider returned 401",
-            },
-          ]);
-        case "get_method_execution_events":
-          return Promise.resolve([
-            {
-              id: 1,
-              executionId: 42,
-              nodeId: "generate",
-              eventType: "node_failed",
-              payloadJson: { error: "Provider returned 401" },
-              createdAt: "2026-05-08T12:00:00Z",
-            },
-          ]);
-        default:
-          return Promise.resolve(null);
-      }
-    });
-
-    render(<AgentWorkspace />);
-
-    await screen.findByText("Generate");
-    fireEvent.click(screen.getByRole("button", { name: "Execute Draft" }));
-
-    await waitFor(() => {
-      expect(screen.getAllByText("Failed").length).toBeGreaterThan(0);
-      expect(screen.queryByText("Provider returned 401")).not.toBeInTheDocument();
-      expect(screen.queryByText("node_failed")).not.toBeInTheDocument();
-    });
+    expect(screen.queryByRole("button", { name: "Execute Draft" })).not.toBeInTheDocument();
   });
 
   it("shows recoverable connection failures without losing the conversation", async () => {
@@ -1106,7 +707,6 @@ describe("AgentWorkspace", () => {
           return Promise.resolve({ threadId: "thr_123", turnId: "turn_456" });
         case "get_current_method_draft":
           return Promise.resolve(null);
-        case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":

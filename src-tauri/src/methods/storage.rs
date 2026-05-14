@@ -2,15 +2,12 @@ use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::State;
-use uuid::Uuid;
 
 use crate::database::DatabaseState;
 
-use super::model::{MethodDocument, MethodPreflightResult, MethodSummary, SaveMethodInput};
-use super::paths::{
-    method_dir, methods_dir, project_root, validate_method_id, validate_relative_path,
-};
-use super::preflight::{format_preflight_blockers, preflight_method_for_root};
+use super::model::{MethodDocument, MethodPreflightResult, MethodSummary};
+use super::paths::{project_root, validate_method_source_path, validate_relative_path};
+use super::preflight::preflight_method_for_root;
 use super::validation::validate_method;
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -60,42 +57,6 @@ pub(crate) fn freeze_files(
     Ok(())
 }
 
-pub(crate) fn hash_directory(folder: &Path) -> Result<String, String> {
-    let mut paths = Vec::new();
-    fn collect(dir: &Path, root: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
-        for entry in
-            fs::read_dir(dir).map_err(|e| format!("Failed to read method folder: {}", e))?
-        {
-            let entry = entry.map_err(|e| format!("Failed to read method folder entry: {}", e))?;
-            let path = entry.path();
-            if path.is_dir() {
-                collect(&path, root, paths)?;
-            } else {
-                let rel = path
-                    .strip_prefix(root)
-                    .map_err(|e| format!("Failed to hash method folder: {}", e))?
-                    .to_path_buf();
-                paths.push(rel);
-            }
-        }
-        Ok(())
-    }
-    collect(folder, folder, &mut paths)?;
-    paths.sort();
-
-    let mut hasher = Sha256::new();
-    for rel in paths {
-        let rel_text = rel.to_string_lossy();
-        hasher.update(rel_text.as_bytes());
-        hasher.update([0]);
-        let bytes = fs::read(folder.join(&rel))
-            .map_err(|e| format!("Failed to hash method file '{}': {}", rel_text, e))?;
-        hasher.update(bytes);
-        hasher.update([0]);
-    }
-    Ok(hex(&hasher.finalize()))
-}
-
 pub(crate) fn read_method_document(path: &Path) -> Result<MethodDocument, String> {
     let text = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read Method document {}: {}", path.display(), e))?;
@@ -110,249 +71,122 @@ pub(crate) fn write_method_document(path: &Path, method: &MethodDocument) -> Res
         .map_err(|e| format!("Failed to write Method document {}: {}", path.display(), e))
 }
 
-fn method_document_for_content_hash(method: &MethodDocument) -> MethodDocument {
-    let mut canonical = method.clone();
-    canonical.id.clear();
-    canonical
+fn project_relative_path(root: &Path, relative_path: &str) -> Result<PathBuf, String> {
+    validate_method_source_path(relative_path)?;
+    Ok(root.join(relative_path))
 }
 
-pub(crate) fn read_manifest(folder: &Path) -> Result<MethodDocument, String> {
-    read_method_document(&folder.join("method.yaml"))
-}
-
-pub(crate) async fn upsert_method_metadata(
-    db: &DatabaseState,
-    method: &MethodDocument,
-    content_hash: &str,
-    folder_path: &Path,
-) -> Result<(), String> {
-    sqlx::query(
-        r#"
-        INSERT INTO methods (id, title, content_hash, folder_path)
-        VALUES (?1, ?2, ?3, ?4)
-        ON CONFLICT(id) DO UPDATE SET
-            title = excluded.title,
-            content_hash = excluded.content_hash,
-            folder_path = excluded.folder_path
-        "#,
-    )
-    .bind(&method.id)
-    .bind(&method.title)
-    .bind(content_hash)
-    .bind(folder_path.to_string_lossy().to_string())
-    .execute(&db.pool())
-    .await
-    .map_err(|e| format!("Failed to store method metadata: {}", e))?;
-    Ok(())
-}
-
-pub(crate) async fn save_method_to_project(
-    db: &DatabaseState,
-    root: &Path,
-    method_input: MethodDocument,
-) -> Result<MethodSummary, String> {
-    validate_method(&method_input)?;
-    for resource in method_input.workflow.nodes.iter().filter(|node| node.is_resource()) {
-        if resource.path.as_deref().is_some_and(|path| path.starts_with("files/")) {
-            return Err(format!(
-                "Method resource '{}' must reference a project file before save",
-                resource.id
-            ));
-        }
-    }
-    let preflight = preflight_method_for_root(&method_input, root);
-    if preflight.status != "ready" {
-        return Err(format!(
-            "Method is not ready to save. {}",
-            format_preflight_blockers(&preflight)
-        ));
-    }
-    let final_dir = method_dir(root, &method_input.id);
-
-    fs::create_dir_all(methods_dir(&root))
-        .map_err(|e| format!("Failed to create methods directory: {}", e))?;
-    let temp_dir = methods_dir(&root).join(format!(".{}.tmp", Uuid::new_v4()));
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp method: {}", e))?;
-
-    let mut method = method_input;
-    if let Err(e) = freeze_files(&mut method, &root, &temp_dir)
-        .and_then(|_| write_method_document(&temp_dir.join("method.yaml"), &method))
-    {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Err(e);
-    }
-
-    let content_hash = match hash_directory(&temp_dir) {
-        Ok(hash) => hash,
-        Err(e) => {
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Err(e);
-        }
-    };
-
-    let backup_dir = if final_dir.exists() {
-        let backup = methods_dir(&root).join(format!(".{}.bak", Uuid::new_v4()));
-        if let Err(e) = fs::rename(&final_dir, &backup) {
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Err(format!("Failed to replace existing method folder: {}", e));
-        }
-        Some(backup)
+fn slug_for_title(title: &str) -> String {
+    let slug = title
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if slug.is_empty() {
+        "untitled-method".into()
     } else {
-        None
-    };
-
-    if let Err(e) = fs::rename(&temp_dir, &final_dir) {
-        if let Some(backup) = backup_dir.as_ref() {
-            let _ = fs::rename(backup, &final_dir);
-        }
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Err(format!("Failed to finalize method folder: {}", e));
+        slug
     }
-    if let Some(backup) = backup_dir {
-        let _ = fs::remove_dir_all(backup);
-    }
-
-    upsert_method_metadata(db, &method, &content_hash, &final_dir).await?;
-    get_method_summary(db, &method.id).await
 }
 
-pub(crate) async fn save_method_to_project_content_addressed(
-    db: &DatabaseState,
-    root: &Path,
-    method_input: MethodDocument,
-) -> Result<MethodSummary, String> {
-    validate_method(&method_input)?;
-    for resource in method_input.workflow.nodes.iter().filter(|node| node.is_resource()) {
-        if resource.path.as_deref().is_some_and(|path| path.starts_with("files/")) {
-            return Err(format!(
-                "Method resource '{}' must reference a project file before save",
-                resource.id
-            ));
-        }
+fn method_source_summary(root: &Path, path: &Path, method: &MethodDocument) -> MethodSummary {
+    let relative = path.strip_prefix(root).unwrap_or(path).to_string_lossy().replace('\\', "/");
+    MethodSummary {
+        id: relative.clone(),
+        title: method.title.clone(),
+        content_hash: String::new(),
+        folder_path: relative,
+        created_at: String::new(),
     }
-    let preflight = preflight_method_for_root(&method_input, root);
-    if preflight.status != "ready" {
-        return Err(format!(
-            "Method is not ready to execute. {}",
-            format_preflight_blockers(&preflight)
-        ));
-    }
-
-    fs::create_dir_all(methods_dir(&root))
-        .map_err(|e| format!("Failed to create methods directory: {}", e))?;
-    let temp_dir = methods_dir(&root).join(format!(".{}.tmp", Uuid::new_v4()));
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Failed to create temp method: {}", e))?;
-
-    let mut frozen = method_input;
-    if let Err(e) = freeze_files(&mut frozen, &root, &temp_dir).and_then(|_| {
-        write_method_document(
-            &temp_dir.join("method.yaml"),
-            &method_document_for_content_hash(&frozen),
-        )
-    }) {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Err(e);
-    }
-
-    let content_hash = match hash_directory(&temp_dir) {
-        Ok(hash) => hash,
-        Err(e) => {
-            let _ = fs::remove_dir_all(&temp_dir);
-            return Err(e);
-        }
-    };
-    frozen.id = format!("method-{}", content_hash);
-    let final_dir = method_dir(root, &frozen.id);
-
-    if let Err(e) = write_method_document(&temp_dir.join("method.yaml"), &frozen) {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Err(e);
-    }
-
-    if final_dir.exists() {
-        let _ = fs::remove_dir_all(&temp_dir);
-    } else if let Err(e) = fs::rename(&temp_dir, &final_dir) {
-        let _ = fs::remove_dir_all(&temp_dir);
-        return Err(format!("Failed to finalize method folder: {}", e));
-    }
-
-    upsert_method_metadata(db, &frozen, &content_hash, &final_dir).await?;
-    get_method_summary(db, &frozen.id).await
-}
-
-pub(crate) async fn get_method_summary(
-    db: &DatabaseState,
-    id: &str,
-) -> Result<MethodSummary, String> {
-    sqlx::query_as::<_, MethodSummary>(
-        r#"
-        SELECT id, title, content_hash, folder_path, created_at
-        FROM methods
-        WHERE id = ?1
-        "#,
-    )
-    .bind(id)
-    .fetch_one(&db.pool())
-    .await
-    .map_err(|e| format!("Failed to read method metadata: {}", e))
 }
 
 #[tauri::command]
-pub async fn save_method(
+pub async fn create_method_file(
     db: State<'_, DatabaseState>,
-    input: SaveMethodInput,
+    path: Option<String>,
+    input: super::model::CreateMethodDraftInput,
+) -> Result<MethodDocument, String> {
+    let root = project_root(&db)?;
+    let title = input
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Untitled Method")
+        .to_string();
+    let relative_path =
+        path.unwrap_or_else(|| format!("methods/{}.method.yaml", slug_for_title(&title)));
+    let target = project_relative_path(&root, &relative_path)?;
+    if target.exists() {
+        return Err(format!("Method file already exists: {}", relative_path));
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create Method source directory: {}", e))?;
+    }
+    let method = MethodDocument {
+        schema_version: 2,
+        id: relative_path.trim_end_matches(".method.yaml").replace(['/', '\\'], "-"),
+        title,
+        objective: input.objective.unwrap_or_default().trim().to_string(),
+        workflow: Default::default(),
+        parameters: serde_json::Value::Object(Default::default()),
+        provider: serde_json::Value::Object(Default::default()),
+        outputs: Vec::new(),
+        metadata: serde_json::Value::Object(Default::default()),
+    };
+    write_method_document(&target, &method)?;
+    Ok(method)
+}
+
+#[tauri::command]
+pub async fn get_method_file(
+    db: State<'_, DatabaseState>,
+    method_path: String,
+) -> Result<MethodDocument, String> {
+    let root = project_root(&db)?;
+    read_method_document(&project_relative_path(&root, &method_path)?)
+}
+
+#[tauri::command]
+pub async fn save_method_file(
+    db: State<'_, DatabaseState>,
+    method_path: String,
+    method: MethodDocument,
 ) -> Result<MethodSummary, String> {
     let root = project_root(&db)?;
-    save_method_to_project(&db, &root, input.method).await
+    let path = project_relative_path(&root, &method_path)?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create Method source directory: {}", e))?;
+    }
+    validate_method(&method)?;
+    write_method_document(&path, &method)?;
+    Ok(method_source_summary(&root, &path, &method))
 }
 
 #[tauri::command]
-pub async fn preflight_method(
+pub async fn check_method_completeness(
     db: State<'_, DatabaseState>,
-    input: SaveMethodInput,
+    method_path: String,
 ) -> Result<MethodPreflightResult, String> {
     let root = project_root(&db)?;
-    Ok(preflight_method_for_root(&input.method, &root))
+    let method = read_method_document(&project_relative_path(&root, &method_path)?)?;
+    Ok(preflight_method_for_root(&method, &root))
 }
 
 #[tauri::command]
-pub async fn list_methods(db: State<'_, DatabaseState>) -> Result<Vec<MethodSummary>, String> {
-    let methods = sqlx::query_as::<_, MethodSummary>(
-        r#"
-        SELECT id, title, content_hash, folder_path, created_at
-        FROM methods
-        ORDER BY created_at DESC, id ASC
-        "#,
-    )
-    .fetch_all(&db.pool())
-    .await
-    .map_err(|e| format!("Failed to list methods: {}", e))?;
-    Ok(methods)
-}
-
-#[tauri::command]
-pub async fn get_method(
+pub async fn check_method_document_completeness(
     db: State<'_, DatabaseState>,
-    id: String,
-) -> Result<MethodDocument, String> {
-    validate_method_id(&id)?;
+    method: MethodDocument,
+    base_path: Option<String>,
+) -> Result<MethodPreflightResult, String> {
     let root = project_root(&db)?;
-    let manifest = read_manifest(&method_dir(&root, &id))?;
-    validate_method(&manifest)?;
-    Ok(manifest)
-}
-
-#[tauri::command]
-pub async fn read_method_file(
-    db: State<'_, DatabaseState>,
-    id: String,
-    path: String,
-) -> Result<String, String> {
-    validate_method_id(&id)?;
-    if !path.starts_with("files/") || path.contains("..") {
-        return Err("path must be a frozen method file path under files/".into());
+    if let Some(path) = base_path {
+        validate_method_source_path(&path)?;
     }
-    let root = project_root(&db)?;
-    fs::read_to_string(method_dir(&root, &id).join(path))
-        .map_err(|e| format!("Failed to read method file: {}", e))
+    Ok(preflight_method_for_root(&method, &root))
 }

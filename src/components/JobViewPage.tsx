@@ -1,18 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { InferenceJob, Collection, JobFailure } from "../database";
+import type { InferenceJob, JobFailure } from "../database";
 import { formatDetailTimestamp } from "../utils/date";
 
 interface JobViewPageProps {
   jobId: number;
   onBack?: () => void;
-  onViewCollection?: (collection: Collection) => void;
 }
 
-export default function JobViewPage({ jobId, onBack, onViewCollection }: JobViewPageProps) {
+export default function JobViewPage({ jobId, onBack }: JobViewPageProps) {
   const [job, setJob] = useState<InferenceJob | null>(null);
-  const [collections, setCollections] = useState<Collection[]>([]);
   const [failures, setFailures] = useState<JobFailure[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [progress, setProgress] = useState({
@@ -40,15 +38,6 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
     }
   }, [jobId]);
 
-  const loadCollections = useCallback(async () => {
-    try {
-      const collectionsData = await invoke<Collection[]>("get_collections_for_job", { jobId });
-      setCollections(collectionsData);
-    } catch (error) {
-      console.error("Failed to load collections:", error);
-    }
-  }, [jobId]);
-
   const loadFailures = useCallback(async () => {
     try {
       const failureData = await invoke<JobFailure[]>("get_job_failures", { jobId });
@@ -61,7 +50,6 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
   useEffect(() => {
     setIsLoading(true);
     loadJob();
-    loadCollections();
     loadFailures();
 
     // Listener registration is async, so an early unmount can race with it.
@@ -97,21 +85,18 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
             if (event.payload.job_id !== jobId) return;
             setIsStreaming(false);
             loadJob();
-            loadCollections();
             loadFailures();
           }),
           listen<{ job_id: number }>("job-cancelled", (event) => {
             if (event.payload.job_id !== jobId) return;
             setIsStreaming(false);
             loadJob();
-            loadCollections();
             loadFailures();
           }),
           listen<{ job_id: number }>("job-failed", (event) => {
             if (event.payload.job_id !== jobId) return;
             setIsStreaming(false);
             loadJob();
-            loadCollections();
             loadFailures();
           }),
         ]);
@@ -130,7 +115,7 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
       cancelled = true;
       unlistens.forEach((fn) => fn());
     };
-  }, [loadJob, loadCollections, loadFailures, jobId]);
+  }, [loadJob, loadFailures, jobId]);
 
   const handleStartJob = async () => {
     try {
@@ -167,13 +152,6 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
       URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Failed to export YAML:", error);
-    }
-  };
-
-  const handleViewCollection = () => {
-    if (collections.length > 0 && onViewCollection) {
-      // Use the first collection (or could show a selection dialog for multiple)
-      onViewCollection(collections[0]);
     }
   };
 
@@ -390,22 +368,13 @@ export default function JobViewPage({ jobId, onBack, onViewCollection }: JobView
         </div>
       )}
 
-      {/* Collections Link */}
-      <div className="collections-section">
+      <div className="job-results-section">
         <h2>Results</h2>
         <p>
-          Job output will be saved to a collection once the job completes.
+          Job output is indexed locally and execution output is written as JSONL when jobs run inside a Method execution.
         </p>
-        {hasTerminalOutput && collections.length > 0 ? (
-          <button className="btn-primary" onClick={handleViewCollection}>
-            View Collection ({collections.length})
-          </button>
-        ) : hasTerminalOutput ? (
-          <button className="btn-secondary" disabled title="No collections yet">
-            View Collection (No data)
-          </button>
-        ) : (
-          <p className="info-text">Run the job to generate collection data.</p>
+        {!hasTerminalOutput && (
+          <p className="info-text">Run the job to generate output data.</p>
         )}
       </div>
     </div>

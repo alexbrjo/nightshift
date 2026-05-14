@@ -27,18 +27,11 @@ interface TransformJobConfig {
   outputMode: "one_to_one" | "unwrap_arrays";
 }
 
-interface SelectableCollection {
-  id: number;
-  name: string;
-  itemCount: number;
-}
-
 interface DataSourceSelectProps {
   id: string;
   value: string;
   error?: string;
   dataFiles: string[];
-  collections: SelectableCollection[];
   onChange: (value: string) => void;
   onBrowse: () => void;
 }
@@ -48,11 +41,10 @@ function DataSourceSelect({
   value,
   error,
   dataFiles,
-  collections,
   onChange,
   onBrowse,
 }: DataSourceSelectProps) {
-  if (dataFiles.length > 0 || collections.length > 0) {
+  if (dataFiles.length > 0) {
     return (
       <select
         id={id}
@@ -65,15 +57,6 @@ function DataSourceSelect({
           <optgroup label="Files">
             {dataFiles.map((file) => (
               <option key={`f:${file}`} value={file}>{file}</option>
-            ))}
-          </optgroup>
-        )}
-        {collections.length > 0 && (
-          <optgroup label="Collections">
-            {collections.map((c) => (
-              <option key={`c:${c.id}`} value={`collection:${c.id}`}>
-                {c.name} ({c.itemCount})
-              </option>
             ))}
           </optgroup>
         )}
@@ -146,7 +129,6 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
   const [dataFiles, setDataFiles] = useState<string[]>([]);
   const [schemaFiles, setSchemaFiles] = useState<string[]>([]);
   const [scriptFiles, setScriptFiles] = useState<string[]>([]);
-  const [collections, setCollections] = useState<SelectableCollection[]>([]);
   const [transformRuntimeError, setTransformRuntimeError] = useState<string | null>(null);
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -161,21 +143,17 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
     const loadFiles = async () => {
       setIsLoadingPrompts(true);
       try {
-        const [prompts, datas, schemas, scripts, cols] = await Promise.all([
+        const [prompts, datas, schemas, scripts] = await Promise.all([
           invoke<string[]>("list_prompt_files"),
           invoke<string[]>("list_data_files"),
           invoke<string[]>("list_schema_files"),
           invoke<string[]>("list_transform_scripts"),
-          invoke<Array<{ id: number; name: string; itemCount: number }>>(
-            "list_selectable_collections",
-          ),
         ]);
         if (cancelled) return;
         setPromptFiles(prompts);
         setDataFiles(datas);
         setSchemaFiles(schemas);
         setScriptFiles(scripts);
-        setCollections(cols);
         try {
           await invoke("check_transform_runtime");
           setTransformRuntimeError(null);
@@ -514,7 +492,6 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
                   value={transformData.dataSource}
                   error={errors.dataSource}
                   dataFiles={dataFiles}
-                  collections={collections}
                   onChange={(value) => updateTransformField("dataSource", value)}
                   onBrowse={handleBrowseTransformDataSource}
                 />
@@ -806,7 +783,6 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
               value={formData.dataSource}
               error={errors.dataSource}
               dataFiles={dataFiles}
-              collections={collections}
               onChange={(value) => updateField("dataSource", value)}
               onBrowse={handleBrowseDataSource}
             />

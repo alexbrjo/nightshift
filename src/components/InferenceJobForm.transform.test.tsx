@@ -62,8 +62,6 @@ describe("InferenceJobForm transform jobs", () => {
           return Promise.resolve(["data/input.jsonl"]);
         case "list_transform_scripts":
           return Promise.resolve(["transforms/clean.js"]);
-        case "list_selectable_collections":
-          return Promise.resolve([]);
         case "check_transform_runtime":
           return Promise.resolve();
         case "create_transform_job":
@@ -113,7 +111,6 @@ describe("InferenceJobForm transform jobs", () => {
         case "list_prompt_files":
         case "list_schema_files":
         case "list_data_files":
-        case "list_selectable_collections":
           return Promise.resolve([]);
         case "list_transform_scripts":
           return Promise.resolve(["transforms/clean.js"]);
@@ -173,8 +170,6 @@ describe("InferenceJobForm transform jobs", () => {
           return Promise.resolve(["data/input.jsonl"]);
         case "list_transform_scripts":
           return Promise.resolve(["transforms/clean.js"]);
-        case "list_selectable_collections":
-          return Promise.resolve([]);
         case "check_transform_runtime":
           return Promise.resolve();
         case "create_transform_job":
@@ -228,8 +223,6 @@ describe("InferenceJobForm transform jobs", () => {
           return Promise.resolve(["data/input.jsonl"]);
         case "list_transform_scripts":
           return Promise.resolve(["transforms/clean.js"]);
-        case "list_selectable_collections":
-          return Promise.resolve([]);
         case "check_transform_runtime":
           return Promise.resolve();
         case "create_transform_job":
