@@ -3,21 +3,15 @@
 mod codex_app_server;
 mod commands;
 mod database;
-mod job_executor;
+mod execution;
 mod methods;
-mod sampling;
 mod state;
-mod transform_runner;
 mod utils;
 
 use tauri::Manager;
 
 use crate::codex_app_server::CodexAppServerManager;
-use crate::commands::*;
-use crate::database::{
-    create_inference_job, create_transform_job, delete_inference_job, get_inference_job,
-    get_job_failures, list_inference_jobs, update_inference_job, DatabaseState,
-};
+use crate::database::DatabaseState;
 use crate::state::{AppState, JobManager, MethodExecutionManager};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -55,78 +49,7 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
-            // File operations
-            scan_folder,
-            set_root_path,
-            get_root_path,
-            read_file,
-            rename_path,
-            move_path,
-            delete_path,
-            copy_file,
-            write_file,
-            create_folder,
-            create_file,
-            // Persistence
-            save_last_folder,
-            load_last_folder,
-            save_expanded_state,
-            load_expanded_state,
-            load_project_layout,
-            save_project_layout,
-            load_project_conversations,
-            save_project_conversations,
-            // Database commands
-            create_inference_job,
-            create_transform_job,
-            get_inference_job,
-            get_job_failures,
-            list_inference_jobs,
-            update_inference_job,
-            delete_inference_job,
-            // Job execution commands
-            start_inference_job,
-            cancel_inference_job,
-            subscribe_to_job_status,
-            export_job_to_yaml,
-            list_prompt_files,
-            list_data_files,
-            list_schema_files,
-            list_transform_scripts,
-            check_transform_runtime,
-            // Methods
-            start_design_session,
-            send_design_chat_message,
-            get_design_agent_config,
-            get_method_agent_function_tools,
-            call_method_agent_function_tool,
-            get_current_method_draft,
-            create_method_draft,
-            update_method_draft_metadata,
-            update_method_draft_execution_config,
-            replace_method_draft_graph,
-            explain_current_method_draft,
-            reset_method_draft,
-            create_method_file,
-            get_method_file,
-            save_method_file,
-            check_method_completeness,
-            check_method_document_completeness,
-            execute_method_file,
-            list_method_executions,
-            get_execution_method,
-            get_method_execution_nodes,
-            get_method_execution_events,
-            get_method_execution_artifacts,
-            get_execution_files,
-            get_execution_log,
-            get_execution_node_outputs,
-            read_method_artifact,
-            pause_method_execution,
-            resume_method_execution,
-            cancel_method_execution,
-        ])
+        .invoke_handler(commands::invoke_handler())
         .run(tauri::generate_context!())
         .expect("error while running nightshift");
 }

@@ -2,9 +2,8 @@ use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
 
 use crate::database::{self, DatabaseState};
-use crate::job_executor::{JobEvent, JobExecutor, WorkerConfig};
+use crate::execution::{transform_runner, JobEvent, JobExecutor, WorkerConfig};
 use crate::state::JobManager;
-use crate::transform_runner;
 
 /// Spawn the event-broadcast and execution tasks for a job whose queue entry
 /// has already been marked Running via `executor.start_job`.

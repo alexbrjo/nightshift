@@ -478,7 +478,6 @@ pub(crate) fn reset_draft_for_root(root: &Path) -> Result<Option<MethodDocument>
     Ok(None)
 }
 
-#[tauri::command]
 pub async fn get_current_method_draft(
     db: State<'_, DatabaseState>,
 ) -> Result<Option<MethodDocument>, String> {
@@ -486,7 +485,6 @@ pub async fn get_current_method_draft(
     get_current_draft_for_root(&root)
 }
 
-#[tauri::command]
 pub async fn create_method_draft(
     app: AppHandle,
     db: State<'_, DatabaseState>,
@@ -498,7 +496,6 @@ pub async fn create_method_draft(
     Ok(draft)
 }
 
-#[tauri::command]
 pub async fn update_method_draft_metadata(
     app: AppHandle,
     db: State<'_, DatabaseState>,
@@ -510,7 +507,6 @@ pub async fn update_method_draft_metadata(
     Ok(draft)
 }
 
-#[tauri::command]
 pub async fn update_method_draft_execution_config(
     app: AppHandle,
     db: State<'_, DatabaseState>,
@@ -522,7 +518,6 @@ pub async fn update_method_draft_execution_config(
     Ok(draft)
 }
 
-#[tauri::command]
 pub async fn replace_method_draft_graph(
     app: AppHandle,
     db: State<'_, DatabaseState>,
@@ -534,13 +529,11 @@ pub async fn replace_method_draft_graph(
     Ok(draft)
 }
 
-#[tauri::command]
 pub async fn explain_current_method_draft(db: State<'_, DatabaseState>) -> Result<String, String> {
     let root = project_root(&db)?;
     explain_current_draft_for_root(&root)
 }
 
-#[tauri::command]
 pub async fn reset_method_draft(
     app: AppHandle,
     db: State<'_, DatabaseState>,

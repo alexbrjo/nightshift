@@ -103,7 +103,6 @@ fn method_source_summary(root: &Path, path: &Path, method: &MethodDocument) -> M
     }
 }
 
-#[tauri::command]
 pub async fn create_method_file(
     db: State<'_, DatabaseState>,
     path: Option<String>,
@@ -142,7 +141,6 @@ pub async fn create_method_file(
     Ok(method)
 }
 
-#[tauri::command]
 pub async fn get_method_file(
     db: State<'_, DatabaseState>,
     method_path: String,
@@ -151,7 +149,6 @@ pub async fn get_method_file(
     read_method_document(&project_relative_path(&root, &method_path)?)
 }
 
-#[tauri::command]
 pub async fn save_method_file(
     db: State<'_, DatabaseState>,
     method_path: String,
@@ -168,7 +165,6 @@ pub async fn save_method_file(
     Ok(method_source_summary(&root, &path, &method))
 }
 
-#[tauri::command]
 pub async fn check_method_completeness(
     db: State<'_, DatabaseState>,
     method_path: String,
@@ -178,7 +174,6 @@ pub async fn check_method_completeness(
     Ok(preflight_method_for_root(&method, &root))
 }
 
-#[tauri::command]
 pub async fn check_method_document_completeness(
     db: State<'_, DatabaseState>,
     method: MethodDocument,
