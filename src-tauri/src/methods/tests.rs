@@ -15,10 +15,11 @@ use super::draft::{
     update_draft_execution_config_for_root, validate_graph,
 };
 use super::execution::{
-    analysis_report_relative_path, analysis_report_repair_prompt, create_inference_job_for_node,
-    create_sample_job_for_node, create_transform_job_for_node, insert_analysis_report_artifact,
-    insert_artifact, insert_execution, read_method_artifact_from_db, run_analysis_sql_query,
-    topological_nodes, validate_analysis_sql,
+    analysis_report_relative_path, analysis_report_repair_prompt, append_jsonl,
+    create_inference_job_for_node, create_sample_job_for_node, create_transform_job_for_node,
+    insert_analysis_report_artifact, insert_artifact, insert_execution,
+    read_method_artifact_from_db, run_analysis_sql_query, topological_nodes, upstream_job_sources,
+    validate_analysis_sql,
 };
 use super::model::*;
 use super::preflight::preflight_method_for_root;
@@ -1068,7 +1069,7 @@ fn method_tool_schema_exposes_analysis_without_aggregate() {
         .collect::<Vec<_>>();
 
     assert!(enum_values.contains(&"analysis"));
-    assert!(enum_values.contains(&"output_file"));
+    assert!(!enum_values.contains(&"output_file"));
     assert!(!enum_values.contains(&"aggregate"));
     assert!(replace_graph["parameters"]["properties"]["workflow"]["properties"]["nodes"]["items"]
         ["properties"]["config"]["properties"]
@@ -1240,13 +1241,13 @@ Conclusion.
 }
 
 #[test]
-fn output_file_node_path_controls_analysis_report_location() {
+fn analysis_node_path_controls_analysis_report_location() {
     let mut method = sample_method();
     method.id = "branch-method".into();
     let node = MethodWorkflowNode {
         id: "analyze_branch_a".into(),
         label: "Analyze branch A".into(),
-        node_type: "output_file".into(),
+        node_type: "analysis".into(),
         kind: None,
         path: Some("branch-a/report".into()),
         reference: None,
@@ -1264,26 +1265,22 @@ fn output_file_node_path_controls_analysis_report_location() {
 }
 
 #[test]
-fn analysis_node_ignores_legacy_output_file_config() {
+fn output_file_node_type_is_rejected() {
     let mut method = sample_method();
-    method.id = "branch-method".into();
-    let node = MethodWorkflowNode {
-        id: "analysis".into(),
-        label: "Analyze".into(),
-        node_type: "analysis".into(),
+    method.workflow.nodes.push(MethodWorkflowNode {
+        id: "report_file".into(),
+        label: "Report file".into(),
+        node_type: "output_file".into(),
         kind: None,
-        path: None,
+        path: Some("report.md".into()),
         reference: None,
-        depends_on: vec![],
-        config: serde_json::json!({ "output_file": "branch-a/report" }),
-    };
+        depends_on: vec!["analysis".into()],
+        config: serde_json::json!({}),
+    });
 
-    let path = analysis_report_relative_path(&method, 42, &node).unwrap();
+    let err = validate_method(&method).unwrap_err();
 
-    assert_eq!(
-        path.to_string_lossy().replace('\\', "/"),
-        ".nightshift/executions/42/files/analysis/analysis.md"
-    );
+    assert!(err.contains("removed type 'output_file'"), "got: {err}");
 }
 
 #[test]
@@ -1335,5 +1332,86 @@ async fn read_method_artifact_returns_inline_content() {
 
     assert_eq!(content, "# Analysis");
     assert_eq!(artifact.file_type, "inline_markdown");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn upstream_job_sources_returns_real_job_scoped_execution_refs() {
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-upstream-jobs-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let method = sample_method();
+    let execution_id = insert_execution(&db, &method, "hash").await.unwrap();
+    sqlx::query(
+        "UPDATE method_execution_nodes SET status = 'completed' WHERE execution_id = ? AND node_id = 'generate'",
+    )
+    .bind(execution_id)
+    .execute(&db.pool())
+    .await
+    .unwrap();
+    for job_id in [101_i64, 202_i64] {
+        sqlx::query(
+            "INSERT INTO method_execution_outputs (execution_id, node_id, job_id, sample_index, data) VALUES (?, 'generate', ?, 0, ?)",
+        )
+        .bind(execution_id)
+        .bind(job_id)
+        .bind(serde_json::json!({ "job": job_id }))
+        .execute(&db.pool())
+        .await
+        .unwrap();
+    }
+
+    let analysis_node = method.workflow.nodes.iter().find(|node| node.id == "analysis").unwrap();
+    let mut node_outputs = std::collections::HashMap::new();
+    node_outputs
+        .insert("generate".to_string(), format!("execution:{}/node:generate", execution_id));
+
+    let sources = upstream_job_sources(&db, &method, analysis_node, &node_outputs).await.unwrap();
+
+    assert_eq!(
+        sources,
+        vec![
+            (101, format!("execution:{}/node:generate/job:101", execution_id)),
+            (202, format!("execution:{}/node:generate/job:202", execution_id)),
+        ]
+    );
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[test]
+fn append_jsonl_writes_complete_lines_under_concurrent_calls() {
+    use std::sync::{Arc, Barrier};
+
+    let temp =
+        std::env::temp_dir().join(format!("nightshift-jsonl-append-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp).unwrap();
+    let path = temp.join("log.jsonl");
+    let barrier = Arc::new(Barrier::new(8));
+    let handles = (0..8)
+        .map(|index| {
+            let barrier = Arc::clone(&barrier);
+            let path = path.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                append_jsonl(&path, &serde_json::json!({ "index": index })).unwrap();
+            })
+        })
+        .collect::<Vec<_>>();
+
+    for handle in handles {
+        handle.join().unwrap();
+    }
+
+    let content = fs::read_to_string(&path).unwrap();
+    let mut seen = content
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).unwrap()["index"].as_i64().unwrap()
+        })
+        .collect::<Vec<_>>();
+    seen.sort();
+
+    assert_eq!(seen, vec![0, 1, 2, 3, 4, 5, 6, 7]);
     fs::remove_dir_all(temp).unwrap();
 }

@@ -1232,6 +1232,14 @@ mod tests {
         .await
         .unwrap();
         let node_id = "source".to_string();
+        sqlx::query(
+            "INSERT INTO method_execution_nodes (execution_id, node_id, node_type, status) VALUES (?, ?, 'sample', 'completed')",
+        )
+        .bind(execution_id)
+        .bind(&node_id)
+        .execute(&exec.db.pool())
+        .await
+        .unwrap();
         for (index, item) in items.iter().enumerate() {
             let data: serde_json::Value = serde_json::from_str(item).unwrap();
             sqlx::query(
@@ -1276,6 +1284,118 @@ mod tests {
         };
         let out = exec.load_samples(&cfg).await.unwrap();
         assert_eq!(out.len(), 2);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn load_execution_node_samples_refuses_incomplete_source_node() {
+        let (exec, dir) = make_executor().await;
+        let execution_id: i64 = sqlx::query_scalar(
+            "INSERT INTO method_executions (method_id, method_content_hash, status) VALUES ('m', 'h', 'running') RETURNING id",
+        )
+        .fetch_one(&exec.db.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO method_execution_nodes (execution_id, node_id, node_type, status) VALUES (?, 'source', 'sample', 'running')",
+        )
+        .bind(execution_id)
+        .execute(&exec.db.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO method_execution_outputs (execution_id, node_id, sample_index, data) VALUES (?, 'source', 0, ?)",
+        )
+        .bind(execution_id)
+        .bind(serde_json::json!({ "content": "not ready" }))
+        .execute(&exec.db.pool())
+        .await
+        .unwrap();
+
+        let cfg = WorkerConfig {
+            job_id: 1,
+            job_type: "sample".into(),
+            name: "n".into(),
+            prompt_file: "".into(),
+            data_source: format!("execution:{}/node:source", execution_id),
+            provider: "Nightshift".into(),
+            model: "Sampling".into(),
+            server_url: "".into(),
+            output_mode: "Sample".into(),
+            temperature: None,
+            max_tokens: None,
+            thinking_budget: None,
+            samples: 1,
+            strategy: SamplingStrategy::Exhaustive,
+            json_schema_file: None,
+            transform_script_file: None,
+            transform_error_mode: "stop".into(),
+            transform_output_mode: "one_to_one".into(),
+        };
+
+        let err = exec.load_samples(&cfg).await.unwrap_err();
+        assert!(err.contains("node is running"), "got: {err}");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[tokio::test]
+    async fn load_execution_node_samples_filters_by_job_ref() {
+        let (exec, dir) = make_executor().await;
+        let execution_id: i64 = sqlx::query_scalar(
+            "INSERT INTO method_executions (method_id, method_content_hash, status) VALUES ('m', 'h', 'completed') RETURNING id",
+        )
+        .fetch_one(&exec.db.pool())
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO method_execution_nodes (execution_id, node_id, node_type, status) VALUES (?, 'source', 'inference', 'completed')",
+        )
+        .bind(execution_id)
+        .execute(&exec.db.pool())
+        .await
+        .unwrap();
+        for (job_id, label) in [(10_i64, "a"), (20_i64, "b")] {
+            sqlx::query(
+                "INSERT INTO method_execution_outputs (execution_id, node_id, job_id, sample_index, data) VALUES (?, 'source', ?, 0, ?)",
+            )
+            .bind(execution_id)
+            .bind(job_id)
+            .bind(serde_json::json!({ "label": label }))
+            .execute(&exec.db.pool())
+            .await
+            .unwrap();
+        }
+
+        let cfg = WorkerConfig {
+            job_id: 1,
+            job_type: "sample".into(),
+            name: "n".into(),
+            prompt_file: "".into(),
+            data_source: format!("execution:{}/node:source/job:20", execution_id),
+            provider: "Nightshift".into(),
+            model: "Sampling".into(),
+            server_url: "".into(),
+            output_mode: "Sample".into(),
+            temperature: None,
+            max_tokens: None,
+            thinking_budget: None,
+            samples: 1,
+            strategy: SamplingStrategy::Exhaustive,
+            json_schema_file: None,
+            transform_script_file: None,
+            transform_error_mode: "stop".into(),
+            transform_output_mode: "one_to_one".into(),
+        };
+
+        let out = exec.load_samples(&cfg).await.unwrap();
+        assert_eq!(out, vec![serde_json::json!({ "label": "b" })]);
+
+        let missing_cfg = WorkerConfig {
+            data_source: format!("execution:{}/node:source/job:99", execution_id),
+            ..cfg
+        };
+        let err = exec.load_samples(&missing_cfg).await.unwrap_err();
+        assert!(err.contains("/job:99"), "got: {err}");
         std::fs::remove_dir_all(dir).ok();
     }
 

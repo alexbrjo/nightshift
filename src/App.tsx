@@ -498,7 +498,7 @@ export default function App() {
     setLayout((current) => closePanel(openOrFocusPanel(current, jobPanel), sourcePanelId));
   }, []);
 
-  const executeMethodFile = useCallback(async (filePath: string) => {
+  const executeMethodFile = useCallback(async (filePath: string, sourcePanelId: string) => {
     if (dirtyPaths.has(filePath) || executingMethodPath === filePath) return;
     setExecutingMethodPath(filePath);
     setMethodExecutionFeedback((current) => {
@@ -512,6 +512,7 @@ export default function App() {
         detail: {
           executionId: execution.id,
           method: { title: fileNameFromPath(filePath) },
+          sourcePanelId,
         },
       }));
       setMethodExecutionFeedback((current) => ({
@@ -530,16 +531,39 @@ export default function App() {
 
   useEffect(() => {
     const handleExecutionStarted = (event: Event) => {
-      const detail = (event as CustomEvent<{ method?: { title?: string }; executionId?: number }>).detail;
+      const detail = (event as CustomEvent<{
+        method?: { title?: string };
+        executionId?: number;
+        sourcePanelId?: string;
+      }>).detail;
       if (!detail?.executionId) return;
-      openPanel("method-execution", {
+      const executionPanel = createPanel("method-execution", {
         resourceId: detail.executionId,
         title: detail.method?.title ? `Execution: ${detail.method.title}` : `Execution #${detail.executionId}`,
+      });
+      setLayout((current) => {
+        if (current.panels.some((panel) => panel.id === executionPanel.id)) {
+          return detail.sourcePanelId
+            ? closePanel(openOrFocusPanel(current, executionPanel), detail.sourcePanelId)
+            : openOrFocusPanel(current, executionPanel);
+        }
+        const sourceIndex = detail.sourcePanelId
+          ? current.panels.findIndex((panel) => panel.id === detail.sourcePanelId)
+          : -1;
+        if (sourceIndex === -1) return openOrFocusPanel(current, executionPanel);
+        const panels = current.panels.map((panel, index) =>
+          index === sourceIndex ? executionPanel : panel,
+        );
+        return {
+          ...current,
+          panels,
+          activePanelId: executionPanel.id,
+        };
       });
     };
     window.addEventListener("nightshift-method-execution-started", handleExecutionStarted);
     return () => window.removeEventListener("nightshift-method-execution-started", handleExecutionStarted);
-  }, [openPanel]);
+  }, []);
 
   useEffect(() => {
     const handleProjectFilesChanged = () => setFileTreeRefreshKey((key) => key + 1);
@@ -647,7 +671,7 @@ export default function App() {
         <button
           type="button"
           className="project-file-execute-button"
-          onClick={() => void executeMethodFile(file.path)}
+          onClick={() => void executeMethodFile(file.path, panel.id)}
           disabled={isDirty || isExecuting}
           title={title}
           aria-label={isDirty ? `Save ${file.name} before execution` : `Execute ${file.name}`}

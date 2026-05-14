@@ -749,7 +749,7 @@ describe("App workspace shell", () => {
 
     fireEvent.click(await screen.findByRole("button", { name: "Execute edge.method.yaml" }));
 
-    await waitFor(() => expect(workspacePanelTitles()).toContain("Execution: edge.method.yaml"));
+    await waitFor(() => expect(workspacePanelTitles()).toEqual(["Execution: edge.method.yaml"]));
     expect(mockInvoke).toHaveBeenCalledWith("execute_method_file", { methodPath: "methods/edge.method.yaml" });
   });
 

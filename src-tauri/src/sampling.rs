@@ -14,6 +14,13 @@ pub enum SamplingStrategy {
     Exhaustive,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExecutionNodeRef {
+    pub execution_id: i64,
+    pub node_id: String,
+    pub job_id: Option<i64>,
+}
+
 impl std::str::FromStr for SamplingStrategy {
     type Err = String;
 
@@ -37,8 +44,8 @@ pub async fn load_samples(
 ) -> Result<Vec<serde_json::Value>, String> {
     debug!("Loading samples from data source: {} with strategy: {:?}", data_source, strategy);
 
-    let samples = if let Some((execution_id, node_id)) = parse_execution_node_ref(data_source)? {
-        load_execution_node_samples(db, execution_id, &node_id).await?
+    let samples = if let Some(source) = parse_execution_node_ref(data_source)? {
+        load_execution_node_samples(db, source.execution_id, &source.node_id, source.job_id).await?
     } else {
         load_file_samples(db, data_source).await?
     };
@@ -55,12 +62,16 @@ pub async fn load_samples(
     Ok(apply_strategy(samples, strategy, limit))
 }
 
-fn parse_execution_node_ref(value: &str) -> Result<Option<(i64, String)>, String> {
+pub(crate) fn parse_execution_node_ref(value: &str) -> Result<Option<ExecutionNodeRef>, String> {
     let Some(rest) = value.strip_prefix("execution:") else {
         return Ok(None);
     };
     let Some((execution, node)) = rest.split_once("/node:") else {
         return Err(format!("Invalid execution output reference: {}", value));
+    };
+    let (node, job) = match node.split_once("/job:") {
+        Some((node, job)) => (node, Some(job)),
+        None => (node, None),
     };
     let execution_id = execution
         .parse::<i64>()
@@ -68,7 +79,12 @@ fn parse_execution_node_ref(value: &str) -> Result<Option<(i64, String)>, String
     if node.trim().is_empty() {
         return Err(format!("Invalid node id in reference: {}", value));
     }
-    Ok(Some((execution_id, node.to_string())))
+    let job_id = job
+        .map(|job| {
+            job.parse::<i64>().map_err(|_| format!("Invalid job id in reference: {}", value))
+        })
+        .transpose()?;
+    Ok(Some(ExecutionNodeRef { execution_id, node_id: node.to_string(), job_id }))
 }
 
 async fn load_file_samples(
@@ -137,15 +153,65 @@ pub async fn load_execution_node_samples(
     db: &DatabaseState,
     execution_id: i64,
     node_id: &str,
+    job_id: Option<i64>,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let rows = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT data FROM method_execution_outputs WHERE execution_id = ? AND node_id = ? ORDER BY id ASC",
+    let status: Option<String> = sqlx::query_scalar(
+        "SELECT status FROM method_execution_nodes WHERE execution_id = ? AND node_id = ?",
     )
     .bind(execution_id)
     .bind(node_id)
-    .fetch_all(&db.pool())
+    .fetch_optional(&db.pool())
     .await
+    .map_err(|e| format!("Failed to check execution output source status: {}", e))?;
+
+    let Some(status) = status else {
+        return Err(format!(
+            "Execution output source not found: execution:{}/node:{}",
+            execution_id, node_id
+        ));
+    };
+    if status != "completed" {
+        return Err(format!(
+            "Execution output source execution:{}/node:{} is not usable: node is {}",
+            execution_id, node_id, status
+        ));
+    }
+
+    let rows = if let Some(job_id) = job_id {
+        sqlx::query_scalar::<_, serde_json::Value>(
+            r#"
+            SELECT data
+            FROM method_execution_outputs
+            WHERE execution_id = ? AND node_id = ? AND job_id = ?
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(execution_id)
+        .bind(node_id)
+        .bind(job_id)
+        .fetch_all(&db.pool())
+        .await
+    } else {
+        sqlx::query_scalar::<_, serde_json::Value>(
+            r#"
+            SELECT data
+            FROM method_execution_outputs
+            WHERE execution_id = ? AND node_id = ?
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(execution_id)
+        .bind(node_id)
+        .fetch_all(&db.pool())
+        .await
+    }
     .map_err(|e| format!("Failed to load execution output items: {}", e))?;
+    if let Some(job_id) = job_id.filter(|_| rows.is_empty()) {
+        return Err(format!(
+            "Execution output source not found: execution:{}/node:{}/job:{}",
+            execution_id, node_id, job_id
+        ));
+    }
 
     Ok(rows.into_iter().map(parse_content_field).collect())
 }

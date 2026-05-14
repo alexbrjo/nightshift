@@ -81,9 +81,9 @@ pub fn method_function_tools() -> Vec<Value> {
                         "items": object_schema(json!({
                             "id": { "type": "string", "description": "Stable node id, lower snake/kebab style." },
                             "label": { "type": "string", "description": "Human-readable node label." },
-                            "type": { "type": "string", "enum": ["resource", "sample", "inference", "eval", "analysis", "output_file"] },
+                            "type": { "type": "string", "enum": ["resource", "sample", "inference", "eval", "analysis"] },
                             "kind": { "type": ["string", "null"], "enum": ["prompt", "data", "json_schema", "eval_script", "api_key", null] },
-                            "path": { "type": ["string", "null"], "description": "Project-relative path for file-backed resource nodes, or Markdown output path for output_file nodes." },
+                            "path": { "type": ["string", "null"], "description": "Project-relative path for file-backed resource nodes, or relative Markdown report path for analysis nodes." },
                             "reference": { "type": ["string", "null"], "description": "API key id for reference-backed resource nodes." },
                             "depends_on": { "type": "array", "items": { "type": "string" } },
                             "config": object_schema(json!({}), vec![])

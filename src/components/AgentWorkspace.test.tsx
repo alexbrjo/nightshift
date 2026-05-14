@@ -150,7 +150,8 @@ describe("AgentWorkspace", () => {
       </MethodWorkspaceProvider>,
     );
 
-    expect(await screen.findByText("running")).toBeInTheDocument();
+    expect(await screen.findByText("Generate")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
     expect(setIntervalSpy.mock.calls.some(([, delay]) => delay === 5000)).toBe(false);
     const initialLoads = mockInvoke.mock.calls.filter(([command]) => command === "list_method_executions").length;
 
@@ -164,7 +165,6 @@ describe("AgentWorkspace", () => {
       );
     });
 
-    expect(await screen.findByText("completed")).toBeInTheDocument();
     expect(mockInvoke.mock.calls.filter(([command]) => command === "list_method_executions").length)
       .toBeGreaterThan(initialLoads);
     setIntervalSpy.mockRestore();

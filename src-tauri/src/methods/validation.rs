@@ -81,17 +81,14 @@ pub fn validate_method(method: &MethodDocument) -> Result<(), String> {
             return Err(format!("method.workflow node id '{}' is duplicated", node.id));
         }
         if node.node_type == "output_file" {
-            require_nonempty(
-                "method.workflow.nodes[].path",
-                node.path.as_deref().unwrap_or_default(),
-            )?;
-            if node.path.as_deref().is_some_and(|path| {
-                Path::new(path).is_absolute() || path.contains("..") || path.trim().is_empty()
-            }) {
-                return Err(format!(
-                    "method.workflow output_file node '{}' path must stay inside the execution folder",
-                    node.id
-                ));
+            return Err(format!(
+                "method.workflow node '{}' uses removed type 'output_file'; set path on an analysis node instead",
+                node.id
+            ));
+        }
+        if node.node_type == "analysis" {
+            if let Some(path) = node.path.as_deref().filter(|path| !path.trim().is_empty()) {
+                validate_relative_path(path)?;
             }
         }
         if node.is_resource() {

@@ -224,7 +224,7 @@ fn method_agent_instructions() -> &'static str {
         "eval_script resource nodes feed eval nodes. ",
         "Do not create separate analysis nodes merely to sample or stage an input dataset. ",
         "Analysis nodes should consume upstream node outputs through graph edges, not raw file resources, and produce experiment reports from execution results. ",
-        "Use a type: output_file node only when the user asks to control the report filename/path; put the relative Markdown path in that node's path field. ",
+        "When the user asks to control the report filename/path, put the relative Markdown path in the analysis node's path field. ",
         "API key values may live in .nightshift/config.json, but Method drafts and bundles should reference API key ids rather than copying values. ",
         "After tool calls, briefly summarize what changed and what is still missing. ",
         "Use portable GitHub Flavored Markdown for readability: short paragraphs, bullets only when useful, ",

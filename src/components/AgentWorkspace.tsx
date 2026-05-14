@@ -1252,13 +1252,11 @@ function ExecutionGraphPanelView({ executionId }: { executionId?: string | numbe
   const numericExecutionId = Number(executionId);
   const [method, setMethod] = useState<MethodDocument | null>(null);
   const [nodes, setNodes] = useState<MethodExecutionNodeSummary[]>([]);
-  const [status, setStatus] = useState<string>("loading");
   const [error, setError] = useState<string | null>(null);
 
   const loadExecution = useCallback(async () => {
     if (!Number.isFinite(numericExecutionId)) {
       setError("Execution id is missing.");
-      setStatus("failed");
       return;
     }
     try {
@@ -1271,11 +1269,9 @@ function ExecutionGraphPanelView({ executionId }: { executionId?: string | numbe
       ]);
       setMethod(frozenMethod);
       setNodes(executionNodes);
-      setStatus(execution.status);
       setError(null);
     } catch (err) {
       setError(String(err));
-      setStatus("failed");
     }
   }, [numericExecutionId]);
 
@@ -1311,12 +1307,6 @@ function ExecutionGraphPanelView({ executionId }: { executionId?: string | numbe
   return (
     <div className="agent-chat-workspace panel-embedded">
       <div className="agent-visual-panel agent-graph-sidebar">
-        <section className="method-execution-panel" aria-label="Method execution">
-          <div className="method-execution-controls">
-            <span className="resource-meta">{status}</span>
-            <button type="button" onClick={() => void loadExecution()}>Refresh</button>
-          </div>
-        </section>
         <MethodGraph draft={method} executionNodes={nodes} />
       </div>
     </div>

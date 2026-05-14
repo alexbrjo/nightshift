@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
+use std::sync::{Mutex, OnceLock};
 
 use reqwest::Client;
 use sha2::{Digest, Sha256};
@@ -13,6 +14,7 @@ use tokio::time::{sleep, Duration};
 
 use crate::database::DatabaseState;
 use crate::job_executor::{JobEvent, JobExecutor, WorkerConfig};
+use crate::sampling::parse_execution_node_ref;
 use crate::state::{MethodExecutionControl, MethodExecutionManager};
 
 use super::config::{
@@ -35,7 +37,9 @@ fn method_level_config_string(method: &MethodDocument, key: &str) -> Option<Stri
         .or_else(|| yaml_string(yaml_lookup(&method.provider, key)))
 }
 
-fn append_jsonl(path: &Path, value: &serde_json::Value) -> Result<(), String> {
+static JSONL_APPEND_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+pub(crate) fn append_jsonl(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| {
             format!("Failed to create JSONL directory '{}': {}", parent.display(), e)
@@ -45,13 +49,18 @@ fn append_jsonl(path: &Path, value: &serde_json::Value) -> Result<(), String> {
         .map_err(|e| format!("Failed to encode JSONL record: {}", e))?;
     line.push('\n');
     use std::io::Write;
+    let _guard = JSONL_APPEND_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| "JSONL append lock is poisoned".to_string())?;
     let mut file = fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(|e| format!("Failed to open JSONL file '{}': {}", path.display(), e))?;
     file.write_all(line.as_bytes())
-        .map_err(|e| format!("Failed to append JSONL file '{}': {}", path.display(), e))
+        .map_err(|e| format!("Failed to append JSONL file '{}': {}", path.display(), e))?;
+    file.sync_data().map_err(|e| format!("Failed to sync JSONL file '{}': {}", path.display(), e))
 }
 
 fn execution_snapshot_ref(execution_id: i64) -> String {
@@ -632,7 +641,7 @@ pub(crate) async fn upstream_output_source(
 }
 
 pub(crate) async fn upstream_job_sources(
-    _db: &DatabaseState,
+    db: &DatabaseState,
     method: &MethodDocument,
     node: &MethodWorkflowNode,
     node_outputs: &HashMap<String, String>,
@@ -643,7 +652,29 @@ pub(crate) async fn upstream_job_sources(
     let Some(output_ref) = node_outputs.get(dep) else {
         return Ok(vec![]);
     };
-    Ok(vec![(0, output_ref.clone())])
+    let Some(source) = parse_execution_node_ref(output_ref)? else {
+        return Ok(vec![]);
+    };
+    let job_ids = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT DISTINCT job_id
+        FROM method_execution_outputs
+        WHERE execution_id = ?1
+          AND node_id = ?2
+          AND job_id IS NOT NULL
+        ORDER BY job_id ASC
+        "#,
+    )
+    .bind(source.execution_id)
+    .bind(&source.node_id)
+    .fetch_all(&db.pool())
+    .await
+    .map_err(|e| format!("Failed to list upstream execution jobs: {}", e))?;
+
+    Ok(job_ids
+        .into_iter()
+        .map(|job_id| (job_id, format!("{}/job:{}", output_ref, job_id)))
+        .collect())
 }
 
 pub(crate) async fn run_job_agent(
@@ -815,6 +846,18 @@ pub(crate) async fn run_inference_agent(
         run_job_agent(app, db, execution_id, &node.id, job_id).await?;
         job_ids.push(job_id);
     }
+    insert_event(
+        app,
+        db,
+        execution_id,
+        Some(&node.id),
+        "sweep_job_set_created",
+        serde_json::json!({
+            "jobIds": job_ids,
+            "outputRef": execution_node_ref(execution_id, &node.id),
+        }),
+    )
+    .await?;
     Ok(execution_node_ref(execution_id, &node.id))
 }
 
@@ -1302,21 +1345,17 @@ pub(crate) fn analysis_report_relative_path(
     execution_id: i64,
     node: &MethodWorkflowNode,
 ) -> Result<PathBuf, String> {
-    let file_name = if node.node_type == "output_file" {
-        node.path.clone().unwrap_or_else(|| format!("{}.md", node.id))
-    } else {
-        format!("{}.md", node.id)
-    };
+    let file_name = node.path.clone().unwrap_or_else(|| format!("{}.md", node.id));
     let file_name = file_name.trim();
     if file_name.is_empty() {
-        return Err("output_file path must not be empty".into());
+        return Err("analysis report path must not be empty".into());
     }
     let configured = Path::new(file_name);
     if configured.is_absolute() {
-        return Err("output_file path must be relative".into());
+        return Err("analysis report path must be relative".into());
     }
     if file_name.contains("..") {
-        return Err("output_file path must stay inside the execution folder".into());
+        return Err("analysis report path must stay inside the execution folder".into());
     }
     let mut relative = PathBuf::from(".nightshift")
         .join("executions")
@@ -1560,9 +1599,7 @@ async fn run_method_node(
             .await?;
             run_analysis_agent(db, method, execution_id, node, node_outputs).await
         }
-        "analysis" | "output_file" => {
-            run_analysis_agent(db, method, execution_id, node, node_outputs).await
-        }
+        "analysis" => run_analysis_agent(db, method, execution_id, node, node_outputs).await,
         "eval" => {
             *had_not_implemented = true;
             let artifact = run_not_implemented_agent(db, execution_id, node).await?;
