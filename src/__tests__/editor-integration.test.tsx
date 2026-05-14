@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import FileTree from "../components/FileTree";
-import { ToastProvider } from "../components/Toast";
+import FileTree from "../features/project-tree/FileTree";
+import { ToastProvider } from "../components/ui/Toast";
 import { mockInvoke, mockOpen, mockAsk } from "../setupTests";
 
 describe("Editor file operations integration", () => {

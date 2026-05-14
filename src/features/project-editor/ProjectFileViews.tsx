@@ -2,9 +2,9 @@ import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import { parse } from "yaml";
-import type { MethodDocument } from "../database";
-import type { EditorViewMode } from "../layout";
-import MethodGraph from "./MethodGraph";
+import type { MethodDocument } from "../../database";
+import type { EditorViewMode } from "../../layout";
+import MethodGraph from "../method-graph/MethodGraph";
 
 interface ProjectFileViewProps {
   content: string;

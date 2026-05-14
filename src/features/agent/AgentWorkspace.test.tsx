@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mockInvoke } from "../setupTests";
+import { mockInvoke } from "../../setupTests";
 import AgentWorkspace, {
   ChatPanel,
   MethodExecutionGraphPanel,

@@ -2,23 +2,23 @@ import { Fragment, useState, useEffect, useCallback, useRef, type ReactNode } fr
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
-import Editor from "./components/Editor";
-import FileTree, { type FsNode } from "./components/FileTree";
+import Editor from "./features/project-editor/Editor";
+import FileTree, { type FsNode } from "./features/project-tree/FileTree";
 import {
   ChatPanel,
   DraftMethodGraphPanel,
   MethodExecutionGraphPanel,
   MethodWorkspaceProvider,
-} from "./components/AgentWorkspace";
-import JobListSidebar from "./components/JobListSidebar";
-import JobViewPage from "./components/JobViewPage";
-import InferenceJobForm from "./components/InferenceJobForm";
+} from "./features/agent/AgentWorkspace";
+import JobListSidebar from "./features/jobs/JobListSidebar";
+import JobViewPage from "./features/jobs/JobViewPage";
+import InferenceJobForm from "./features/jobs/InferenceJobForm";
 import {
   MarkdownPreview,
   MethodGraphPreview,
   projectFileViewOptions,
-} from "./components/ProjectFileViews";
-import { ToastProvider } from "./components/Toast";
+} from "./features/project-editor/ProjectFileViews";
+import { ToastProvider } from "./components/ui/Toast";
 import type { MethodExecutionSummary } from "./database";
 import raccoonsDumpsterImage from "./assets/raccoons_dumpster.png";
 import {
@@ -30,7 +30,7 @@ import {
   MethodGraphViewIcon,
   MethodIcon,
   NightShiftIcon,
-} from "./components/icons";
+} from "./components/ui/icons";
 import {
   closePanel,
   createPanel,

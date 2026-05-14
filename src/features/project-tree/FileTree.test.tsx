@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import FileTree from "./FileTree";
-import { ToastProvider } from "./Toast";
-import { mockInvoke, mockOpen, mockAsk } from "../setupTests";
+import { ToastProvider } from "../../components/ui/Toast";
+import { mockInvoke, mockOpen, mockAsk } from "../../setupTests";
 
 describe("FileTree", () => {
   const defaultProps = {

@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { InferenceJob } from "../database";
-import { useActiveRefresh } from "../hooks/useActiveRefresh";
-import { formatDetailTimestamp, formatListTimestamp } from "../utils/date";
+import type { InferenceJob } from "../../database";
+import { useActiveRefresh } from "../../hooks/useActiveRefresh";
+import { formatDetailTimestamp, formatListTimestamp } from "../../utils/date";
 
 interface JobListSidebarProps {
   selectedId?: number | null;

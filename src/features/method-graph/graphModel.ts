@@ -1,28 +1,16 @@
-import {
-  Controls,
-  Handle,
-  MarkerType,
-  Position,
-  ReactFlow,
-  type Edge,
-  type Node,
-  type NodeProps,
-  type Viewport,
-} from "@xyflow/react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import "@xyflow/react/dist/style.css";
+import { MarkerType, type Edge, type Node, type Viewport } from "@xyflow/react";
 import type {
   MethodDocument,
   MethodDraftIssue,
   MethodWorkflowNode,
   MethodDraftReadiness,
   MethodExecutionNodeSummary,
-} from "../database";
+} from "../../database";
 
 const NODE_HEIGHT = 180;
 const ROW_GAP = NODE_HEIGHT + 64;
 const MAX_CONFIG_HINTS = 3;
-const MAX_NODE_ISSUES = 3;
+export const MAX_NODE_ISSUES = 3;
 const METHOD_NODE_X = 0;
 const RESOURCE_NODE_GAP_X = 116;
 const RESOURCE_NODE_HEIGHT = NODE_HEIGHT / 2;
@@ -30,7 +18,7 @@ const RESOURCE_NODE_GAP = 14;
 const METHOD_NODE_WIDTH = 300;
 const RESOURCE_NODE_WIDTH = METHOD_NODE_WIDTH;
 const GRAPH_FIT_PADDING = 24;
-const MIN_GRAPH_ZOOM = 0.18;
+export const MIN_GRAPH_ZOOM = 0.18;
 const MAX_GRAPH_ZOOM = 1.08;
 
 type MethodGraphNodeData = {
@@ -47,8 +35,8 @@ type MethodGraphResourceData = {
   resource: MethodWorkflowNode;
 };
 
-type MethodFlowNode = Node<MethodGraphNodeData, "method">;
-type MethodResourceNode = Node<MethodGraphResourceData, "resource">;
+export type MethodFlowNode = Node<MethodGraphNodeData, "method">;
+export type MethodResourceNode = Node<MethodGraphResourceData, "resource">;
 type MethodAnyNode = MethodFlowNode | MethodResourceNode;
 
 export interface MethodGraphElements {
@@ -56,12 +44,12 @@ export interface MethodGraphElements {
   edges: Edge[];
 }
 
-interface FlowSize {
+export interface FlowSize {
   width: number;
   height: number;
 }
 
-function classSafeStatus(status: string) {
+export function classSafeStatus(status: string) {
   return status.replace(/[^a-z0-9_-]/gi, "_").toLowerCase();
 }
 
@@ -117,7 +105,7 @@ function isRunnableNode(node: MethodWorkflowNode) {
   return !isResourceNode(node);
 }
 
-function resourceKindLabel(kind: string | undefined) {
+export function resourceKindLabel(kind: string | undefined) {
   switch (kind) {
     case "prompt":
     case "prompt_file":
@@ -137,7 +125,7 @@ function resourceKindLabel(kind: string | undefined) {
   }
 }
 
-function resourceLocation(resource: MethodWorkflowNode) {
+export function resourceLocation(resource: MethodWorkflowNode) {
   return resource.path || resource.reference || resourceStatus(resource);
 }
 
@@ -216,7 +204,7 @@ function methodEdges(draft: MethodDocument) {
   );
 }
 
-function resourceStatus(resource: MethodWorkflowNode) {
+export function resourceStatus(resource: MethodWorkflowNode) {
   return resource.path || resource.reference ? "attached" : "missing";
 }
 
@@ -267,13 +255,13 @@ function derivedNodeStatus(node: MethodWorkflowNode & { status?: string }, block
   return blockers.length > 0 ? "blocked" : "ready";
 }
 
-function statusLabel(status: string) {
+export function statusLabel(status: string) {
   return status
     .replace(/_/g, " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function statusIcon(status: string) {
+export function statusIcon(status: string) {
   switch (status) {
     case "completed":
       return "✓";
@@ -381,83 +369,6 @@ export function buildMethodGraphElements(
   return { nodes: [...resourceNodes, ...nodes], edges };
 }
 
-function MethodGraphNode({ data }: NodeProps<MethodFlowNode>) {
-  const { draftNode, incomingLabels, blockerCount, warningCount, resourceCount, issues, configHints } = data;
-  const issueCount = blockerCount + warningCount;
-  const shownIssues = issues.slice(0, MAX_NODE_ISSUES);
-  const normalizedStatus = classSafeStatus(draftNode.status);
-  const icon = statusIcon(normalizedStatus);
-
-  return (
-    <article className={`method-flow-node status-${normalizedStatus}`}>
-      <Handle id="top" type="target" position={Position.Top} isConnectable={false} />
-      <Handle id="left" type="target" position={Position.Left} isConnectable={false} />
-      <div className="method-flow-node-header">
-        <div>
-          <strong>{draftNode.type}</strong>
-        </div>
-        <span className={`method-flow-status status-${normalizedStatus}`}>
-          <span>{statusLabel(draftNode.status || "draft")}</span>
-          {normalizedStatus === "running" && <span className="method-flow-recording-dot" aria-hidden="true" />}
-          {icon && <span className="method-flow-status-icon" aria-hidden="true">{icon}</span>}
-        </span>
-      </div>
-      <p className="method-flow-node-description">{draftNode.label || draftNode.id}</p>
-      <div className="method-flow-node-meta" aria-label={`Graph details for ${draftNode.id}`}>
-        <span>{incomingLabels.length ? `${incomingLabels.length} deps` : "source"}</span>
-        <span>{resourceCount ? `${resourceCount} resources` : "no resources"}</span>
-        <span>{issueCount ? `${issueCount} issues` : "no issues"}</span>
-      </div>
-      <div className="method-flow-config">
-        {configHints.length > 0 ? (
-          configHints.map((hint) => <span key={hint}>{hint}</span>)
-        ) : (
-          <span>Config not set</span>
-        )}
-      </div>
-      {shownIssues.length > 0 && (
-        <div className="method-flow-node-issues" aria-label={`Issues for ${draftNode.id}`}>
-          {shownIssues.map((issue) => (
-            <span key={`${issue.code}-${issue.resourceId ?? issue.nodeId ?? issue.message}`}>
-              {issue.message}
-            </span>
-          ))}
-          {issues.length > shownIssues.length && (
-            <span className="method-flow-more">+{issues.length - shownIssues.length} more issues</span>
-          )}
-        </div>
-      )}
-      <Handle id="bottom" type="source" position={Position.Bottom} isConnectable={false} />
-    </article>
-  );
-}
-
-function MethodGraphResourceNode({ data }: NodeProps<MethodResourceNode>) {
-  const { resource } = data;
-  const hasMissing = resourceStatus(resource) === "missing";
-
-  return (
-    <article className={`method-flow-resource-node ${hasMissing ? "status-missing" : ""}`}>
-      <div className="method-flow-resource-node-title">
-        <span>Input</span>
-        <strong>{resource.label || resource.id}</strong>
-      </div>
-      <div className="method-flow-resource-node-list">
-        <div>
-          <span>{resourceKindLabel(resource.kind)}</span>
-          <code>{resourceLocation(resource)}</code>
-        </div>
-      </div>
-      <Handle id="right" type="source" position={Position.Right} isConnectable={false} />
-    </article>
-  );
-}
-
-const nodeTypes = {
-  method: MethodGraphNode,
-  resource: MethodGraphResourceNode,
-};
-
 function graphNodeDimensions(node: MethodAnyNode) {
   return node.type === "resource"
     ? { width: RESOURCE_NODE_WIDTH, height: RESOURCE_NODE_HEIGHT }
@@ -499,82 +410,4 @@ export function fitMethodGraphViewport(nodes: MethodGraphElements["nodes"], size
   const y = Math.max(GRAPH_FIT_PADDING, (size.height - graphHeight * zoom) / 2) - bounds.minY * zoom;
 
   return { x, y, zoom };
-}
-
-interface MethodGraphProps {
-  draft: MethodDocument;
-  executionNodes?: MethodExecutionNodeSummary[];
-}
-
-export default function MethodGraph({ draft, executionNodes = [] }: MethodGraphProps) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const { nodes, edges } = useMemo(
-    () => buildMethodGraphElements(draft, executionNodes),
-    [draft, executionNodes],
-  );
-  const [flowSize, setFlowSize] = useState<FlowSize>({ width: 0, height: 0 });
-  const graphSignature = [
-    nodes.map((node) => `${node.id}:${node.position.x}:${node.position.y}`).join("|"),
-    edges.map((edge) => edge.id).join("|"),
-  ].join("::");
-
-  const updateFlowSize = useCallback(() => {
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    const width = Math.floor(rect.width);
-    const height = Math.floor(rect.height);
-    setFlowSize((current) =>
-      current.width === width && current.height === height ? current : { width, height },
-    );
-  }, []);
-
-  useEffect(() => {
-    updateFlowSize();
-    const container = containerRef.current;
-    const resizeObserver = typeof ResizeObserver === "undefined" || !container
-      ? null
-      : new ResizeObserver(updateFlowSize);
-    if (container) resizeObserver?.observe(container);
-    window.addEventListener("resize", updateFlowSize);
-
-    return () => {
-      resizeObserver?.disconnect();
-      window.removeEventListener("resize", updateFlowSize);
-    };
-  }, [updateFlowSize]);
-
-  const fittedViewport = useMemo(
-    () => fitMethodGraphViewport(nodes, flowSize),
-    [flowSize, graphSignature, nodes],
-  );
-  const flowKey = `${graphSignature}:${flowSize.width}:${flowSize.height}`;
-
-  if (nodes.length === 0) {
-    return <div className="agent-empty-visual">No nodes yet.</div>;
-  }
-
-  return (
-    <div ref={containerRef} className="method-flow" aria-label="Draft Method graph">
-      <ReactFlow
-        key={flowKey}
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={nodeTypes}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        nodesFocusable={false}
-        elementsSelectable={false}
-        edgesFocusable={false}
-        defaultViewport={fittedViewport}
-        minZoom={MIN_GRAPH_ZOOM}
-        maxZoom={1.8}
-        panOnDrag
-        panOnScroll
-        proOptions={{ hideAttribution: true }}
-        defaultEdgeOptions={{ type: "smoothstep" }}
-      >
-        <Controls showInteractive={false} />
-      </ReactFlow>
-    </div>
-  );
 }

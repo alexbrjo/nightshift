@@ -10,7 +10,7 @@ import {
   GiCheckboxTree,
 } from "react-icons/gi";
 import { FaCode, FaMarkdown, FaProjectDiagram } from "react-icons/fa";
-import logoUrl from "../assets/nightshift_icon.png";
+import logoUrl from "../../assets/nightshift_icon.png";
 
 const ICON_SIZE = 20;
 

@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { InferenceJob, JobFailure } from "../database";
-import { formatDetailTimestamp } from "../utils/date";
+import type { InferenceJob, JobFailure } from "../../database";
+import { formatDetailTimestamp } from "../../utils/date";
 
 interface JobViewPageProps {
   jobId: number;

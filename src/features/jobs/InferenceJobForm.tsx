@@ -2,122 +2,24 @@ import { useState, useCallback, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import DataSourceSelect from "./DataSourceSelect";
+import {
+  INITIAL_FORM_STATE,
+  INITIAL_TRANSFORM_STATE,
+  OUTPUT_MODES,
+  PROVIDERS,
+  STRATEGIES,
+  THINKING_OPTIONS,
+  formatSubmitError,
+  type JobConfig,
+  type TransformJobConfig,
+} from "./jobFormModel";
 
-export interface JobConfig {
-  name: string;
-  promptFile: string;
-  dataSource: string;
-  provider: string;
-  model: string;
-  serverUrl: string;
-  outputMode: string;
-  temperature?: number;
-  maxTokens?: number;
-  thinkingBudget?: number;
-  samples: number;
-  strategy: string;
-  jsonSchemaFile?: string;
-}
-
-interface TransformJobConfig {
-  name: string;
-  dataSource: string;
-  scriptFile: string;
-  errorMode: "stop" | "skip";
-  outputMode: "one_to_one" | "unwrap_arrays";
-}
-
-interface DataSourceSelectProps {
-  id: string;
-  value: string;
-  error?: string;
-  dataFiles: string[];
-  onChange: (value: string) => void;
-  onBrowse: () => void;
-}
-
-function DataSourceSelect({
-  id,
-  value,
-  error,
-  dataFiles,
-  onChange,
-  onBrowse,
-}: DataSourceSelectProps) {
-  if (dataFiles.length > 0) {
-    return (
-      <select
-        id={id}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className={error ? "error" : ""}
-      >
-        <option value="">Select a data source...</option>
-        {dataFiles.length > 0 && (
-          <optgroup label="Files">
-            {dataFiles.map((file) => (
-              <option key={`f:${file}`} value={file}>{file}</option>
-            ))}
-          </optgroup>
-        )}
-      </select>
-    );
-  }
-
-  return (
-    <div className="file-picker-row">
-      <input
-        id={id}
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder="path/to/data.jsonl"
-        className={error ? "error" : ""}
-      />
-      <button type="button" className="btn-secondary" onClick={onBrowse}>
-        Browse
-      </button>
-    </div>
-  );
-}
-
+export type { JobConfig } from "./jobFormModel";
 interface InferenceJobFormProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: (jobId: number) => void;
-}
-
-const PROVIDERS = ["Local", "OpenAI", "Anthropic", "Google", "Custom"];
-const OUTPUT_MODES = ["Unstructured", "Plain JSON", "JSON Schema"];
-const STRATEGIES = ["Single", "Random", "Exhaustive"];
-const THINKING_OPTIONS = ["Off", "Low", "Medium", "High"];
-
-const DEFAULT_SERVER_URL = "http://localhost:1234";
-
-const INITIAL_FORM_STATE: JobConfig = {
-  name: "",
-  promptFile: "",
-  dataSource: "",
-  provider: "Local",
-  model: "bonsai-8b",
-  serverUrl: DEFAULT_SERVER_URL,
-  outputMode: "JSON Schema",
-  samples: 1,
-  strategy: "Single",
-};
-
-const INITIAL_TRANSFORM_STATE: TransformJobConfig = {
-  name: "",
-  dataSource: "",
-  scriptFile: "",
-  errorMode: "stop",
-  outputMode: "one_to_one",
-};
-
-function formatSubmitError(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message.trim()) return error.message;
-  if (typeof error === "string" && error.trim()) return error;
-  return fallback;
 }
 
 export default function InferenceJobForm({ isOpen, onClose, onSuccess }: InferenceJobFormProps) {
