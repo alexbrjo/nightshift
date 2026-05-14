@@ -22,9 +22,7 @@ use super::execution::{
 };
 use super::model::*;
 use super::preflight::preflight_method_for_root;
-use super::storage::{
-    freeze_files, read_method_document, write_method_document,
-};
+use super::storage::{freeze_files, read_method_document, write_method_document};
 use super::validation::validate_method;
 
 fn sample_method() -> MethodDocument {
@@ -295,12 +293,10 @@ fn named_file_resource_with_path_is_not_reported_missing() {
         metadata: serde_json::json!({}),
     };
 
-    assert!(
-        !super::draft::derive_readiness(&draft)
-            .blockers
-            .iter()
-            .any(|blocker| blocker.code == "missing_resource")
-    );
+    assert!(!super::draft::derive_readiness(&draft)
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == "missing_resource"));
 }
 
 #[test]
@@ -693,14 +689,16 @@ fn preflight_reports_missing_required_files() {
     let result = preflight_method_for_root(&method, &temp);
 
     assert_eq!(result.status, "drafting");
-    assert!(
-        result.blockers.iter().any(|blocker| blocker.code == "missing_file"
-            && blocker.file_kind.as_deref() == Some("prompt"))
-    );
-    assert!(
-        result.blockers.iter().any(|blocker| blocker.code == "missing_file"
-            && blocker.file_kind.as_deref() == Some("data"))
-    );
+    assert!(result
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == "missing_file"
+            && blocker.file_kind.as_deref() == Some("prompt")));
+    assert!(result
+        .blockers
+        .iter()
+        .any(|blocker| blocker.code == "missing_file"
+            && blocker.file_kind.as_deref() == Some("data")));
     fs::remove_dir_all(temp).unwrap();
 }
 
@@ -887,10 +885,9 @@ async fn create_inference_job_for_node_prefers_prompt_consumed_by_node() {
     .unwrap();
     let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
 
-    assert!(job.prompt_file.starts_with(&format!(
-        ".nightshift/executions/{}/snapshot/files/",
-        execution_id
-    )));
+    assert!(job
+        .prompt_file
+        .starts_with(&format!(".nightshift/executions/{}/snapshot/files/", execution_id)));
     assert!(job.prompt_file.ends_with(".jinja2"));
     let prompt = fs::read_to_string(temp.join(&job.prompt_file)).unwrap();
     assert_eq!(prompt, "Judge {{word_de}}");
@@ -983,10 +980,9 @@ async fn create_sample_job_for_node_persists_sampling_config() {
     let job = crate::database::get_inference_job_by_id(&db.pool(), job_id).await.unwrap().unwrap();
 
     assert_eq!(job.job_type, "sample");
-    assert!(job.data_source.starts_with(&format!(
-        ".nightshift/executions/{}/snapshot/files/",
-        execution_id
-    )));
+    assert!(job
+        .data_source
+        .starts_with(&format!(".nightshift/executions/{}/snapshot/files/", execution_id)));
     assert_eq!(job.samples, 2);
     assert_eq!(job.strategy, "random");
     fs::remove_dir_all(temp).unwrap();
@@ -1230,19 +1226,16 @@ Conclusion.
     let bad_report = report.replace("## Caveats", "## Limitations");
 
     assert!(output_ref.starts_with("file:"));
-    assert!(
-        temp.join(".nightshift/executions")
-            .join(execution_id.to_string())
-            .join("files")
-            .join("analysis")
-            .join("analysis.md")
-            .is_file()
-    );
-    assert!(
-        insert_analysis_report_artifact(&db, &method, execution_id, &node, &bad_report)
-            .await
-            .is_err()
-    );
+    assert!(temp
+        .join(".nightshift/executions")
+        .join(execution_id.to_string())
+        .join("files")
+        .join("analysis")
+        .join("analysis.md")
+        .is_file());
+    assert!(insert_analysis_report_artifact(&db, &method, execution_id, &node, &bad_report)
+        .await
+        .is_err());
     fs::remove_dir_all(temp).unwrap();
 }
 

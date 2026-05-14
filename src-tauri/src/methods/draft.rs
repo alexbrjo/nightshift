@@ -194,7 +194,8 @@ fn resource_is_missing(resource: &MethodWorkflowNode) -> bool {
     if FILE_RESOURCE_KINDS.contains(&kind) {
         return resource.path.as_deref().is_none_or(|path| path.trim().is_empty());
     }
-    kind == "api_key" && resource.reference.as_deref().is_none_or(|reference| reference.trim().is_empty())
+    kind == "api_key"
+        && resource.reference.as_deref().is_none_or(|reference| reference.trim().is_empty())
 }
 
 fn resource_kind_label(kind: &str) -> &'static str {

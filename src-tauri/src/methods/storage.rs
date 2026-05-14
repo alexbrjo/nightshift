@@ -85,7 +85,11 @@ fn slug_for_title(title: &str) -> String {
         .filter(|part| !part.is_empty())
         .collect::<Vec<_>>()
         .join("-");
-    if slug.is_empty() { "untitled-method".into() } else { slug }
+    if slug.is_empty() {
+        "untitled-method".into()
+    } else {
+        slug
+    }
 }
 
 fn method_source_summary(root: &Path, path: &Path, method: &MethodDocument) -> MethodSummary {
@@ -113,7 +117,8 @@ pub async fn create_method_file(
         .filter(|value| !value.is_empty())
         .unwrap_or("Untitled Method")
         .to_string();
-    let relative_path = path.unwrap_or_else(|| format!("methods/{}.method.yaml", slug_for_title(&title)));
+    let relative_path =
+        path.unwrap_or_else(|| format!("methods/{}.method.yaml", slug_for_title(&title)));
     let target = project_relative_path(&root, &relative_path)?;
     if target.exists() {
         return Err(format!("Method file already exists: {}", relative_path));

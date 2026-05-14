@@ -229,7 +229,11 @@ impl MethodWorkflowNode {
     }
 
     pub fn label_or_id(&self) -> &str {
-        if self.label.trim().is_empty() { &self.id } else { &self.label }
+        if self.label.trim().is_empty() {
+            &self.id
+        } else {
+            &self.label
+        }
     }
 }
 

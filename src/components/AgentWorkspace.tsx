@@ -474,7 +474,8 @@ function normalizeChatSessions(value: unknown): ChatSession[] {
       ...chat,
       messages: chat.messages.filter((message) => message.id !== WELCOME_MESSAGE.id),
     }))
-    .filter((chat) => chat.messages.length > 0);
+    .filter((chat) => chat.messages.length > 0)
+    .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
 function loadPersistedChatSessions(): ChatSession[] {

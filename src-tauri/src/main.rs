@@ -15,8 +15,8 @@ use tauri::Manager;
 use crate::codex_app_server::CodexAppServerManager;
 use crate::commands::*;
 use crate::database::{
-    DatabaseState, create_inference_job, create_transform_job, delete_inference_job,
-    get_inference_job, get_job_failures, list_inference_jobs, update_inference_job,
+    create_inference_job, create_transform_job, delete_inference_job, get_inference_job,
+    get_job_failures, list_inference_jobs, update_inference_job, DatabaseState,
 };
 use crate::state::{AppState, JobManager, MethodExecutionManager};
 use std::collections::HashMap;

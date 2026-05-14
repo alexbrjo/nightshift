@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use sqlx::{Column, Row, TypeInfo, ValueRef};
 use tauri::{AppHandle, Emitter, State};
 use tokio::sync::mpsc;
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 
 use crate::database::DatabaseState;
 use crate::job_executor::{JobEvent, JobExecutor, WorkerConfig};
@@ -27,10 +27,8 @@ use super::paths::{
     execution_dir, execution_log_path, execution_output_path, project_root,
     validate_method_source_path,
 };
-use super::storage::{
-    freeze_files, hex, read_method_document, write_method_document,
-};
 use super::preflight::{format_preflight_blockers, preflight_method_for_root};
+use super::storage::{freeze_files, hex, read_method_document, write_method_document};
 
 fn method_level_config_string(method: &MethodDocument, key: &str) -> Option<String> {
     yaml_string(yaml_lookup(&method.parameters, key))
@@ -39,8 +37,9 @@ fn method_level_config_string(method: &MethodDocument, key: &str) -> Option<Stri
 
 fn append_jsonl(path: &Path, value: &serde_json::Value) -> Result<(), String> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create JSONL directory '{}': {}", parent.display(), e))?;
+        fs::create_dir_all(parent).map_err(|e| {
+            format!("Failed to create JSONL directory '{}': {}", parent.display(), e)
+        })?;
     }
     let mut line = serde_json::to_string(value)
         .map_err(|e| format!("Failed to encode JSONL record: {}", e))?;
@@ -1782,7 +1781,8 @@ pub async fn execute_method_file(
     let manifest_text = serde_yaml::to_string(&method)
         .map_err(|e| format!("Failed to serialize Method for hashing: {}", e))?;
     let content_hash = hex(&Sha256::digest(manifest_text.as_bytes()));
-    let execution_id = start_method_execution(app, db.clone(), manager, method, content_hash).await?;
+    let execution_id =
+        start_method_execution(app, db.clone(), manager, method, content_hash).await?;
     sqlx::query_as::<_, MethodExecutionSummary>(
         r#"
         SELECT id, method_id, method_content_hash, status, error_message, created_at, started_at, completed_at

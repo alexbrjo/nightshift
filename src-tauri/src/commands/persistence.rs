@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager, State};
@@ -75,7 +76,33 @@ fn project_state_path_from_root(root: &std::path::Path) -> PathBuf {
     root.join(".nightshift").join("state.json")
 }
 
-fn load_project_state_file(path: &std::path::Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+fn session_file_name(session_id: &str) -> Result<String, String> {
+    if session_id.trim().is_empty() {
+        return Err("Conversation id cannot be empty".into());
+    }
+    let mut encoded = String::with_capacity(session_id.len() + 5);
+    for byte in session_id.as_bytes() {
+        match byte {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' => {
+                encoded.push(*byte as char);
+            }
+            other => encoded.push_str(&format!("%{:02X}", other)),
+        }
+    }
+    Ok(format!("{}.json", encoded))
+}
+
+fn session_id_from_value(value: &serde_json::Value) -> Result<String, String> {
+    value
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| "Conversation session is missing a string id".to_string())
+}
+
+fn load_project_state_file(
+    path: &std::path::Path,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
     if !path.exists() {
         return Ok(serde_json::Map::new());
     }
@@ -136,6 +163,91 @@ fn save_project_json(
     save_project_state_key(state, key, value)
 }
 
+fn load_project_sessions_value(state: &AppState) -> Result<Option<serde_json::Value>, String> {
+    let nightshift_dir = current_nightshift_dir(state)?;
+    let sessions_dir = nightshift_dir.join("sessions");
+    if !sessions_dir.exists() {
+        return Ok(None);
+    }
+
+    let mut sessions = Vec::new();
+    for entry in fs::read_dir(&sessions_dir)
+        .map_err(|e| format!("Failed to list .nightshift/sessions: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read session directory entry: {}", e))?;
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+            continue;
+        }
+        let content = fs::read_to_string(&path).map_err(|e| {
+            format!("Failed to read conversation session '{}': {}", path.display(), e)
+        })?;
+        let value: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+            format!("Failed to parse conversation session '{}': {}", path.display(), e)
+        })?;
+        session_id_from_value(&value)?;
+        sessions.push(value);
+    }
+
+    if sessions.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(serde_json::Value::Array(sessions)))
+    }
+}
+
+fn save_project_sessions_value(
+    state: &AppState,
+    conversations: serde_json::Value,
+) -> Result<(), String> {
+    let nightshift_dir = current_nightshift_dir(state)?;
+    let sessions_dir = nightshift_dir.join("sessions");
+    fs::create_dir_all(&sessions_dir)
+        .map_err(|e| format!("Failed to create .nightshift/sessions: {}", e))?;
+
+    let sessions = conversations
+        .as_array()
+        .ok_or_else(|| "Project conversations must be an array".to_string())?;
+    let mut keep_files = HashSet::new();
+
+    for session in sessions {
+        let redacted = redact_project_json(session.clone());
+        let id = session_id_from_value(&redacted)?;
+        let file_name = session_file_name(&id)?;
+        let path = sessions_dir.join(&file_name);
+        let content = serde_json::to_string_pretty(&redacted)
+            .map_err(|e| format!("Failed to serialize conversation session '{}': {}", id, e))?;
+        fs::write(&path, content.as_bytes())
+            .map_err(|e| format!("Failed to save conversation session '{}': {}", id, e))?;
+        keep_files.insert(file_name);
+    }
+
+    for entry in fs::read_dir(&sessions_dir)
+        .map_err(|e| format!("Failed to list .nightshift/sessions: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read session directory entry: {}", e))?;
+        let path = entry.path();
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if keep_files.contains(file_name) {
+            continue;
+        }
+        if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            fs::remove_file(&path).map_err(|e| {
+                format!("Failed to remove stale conversation session '{}': {}", path.display(), e)
+            })?;
+        }
+    }
+
+    let state_path = nightshift_dir.join("state.json");
+    let mut project_state = load_project_state_file(&state_path)?;
+    if project_state.remove("conversations").is_some() {
+        save_project_state_file(&state_path, &project_state)?;
+    }
+    Ok(())
+}
+
 fn redact_project_json(value: serde_json::Value) -> serde_json::Value {
     match value {
         serde_json::Value::Object(map) => serde_json::Value::Object(
@@ -176,7 +288,7 @@ pub fn save_project_layout(
 pub fn load_project_conversations(
     state: State<AppState>,
 ) -> Result<Option<serde_json::Value>, String> {
-    load_project_json(&state, "conversations.json")
+    load_project_sessions_value(&state)
 }
 
 #[tauri::command]
@@ -184,7 +296,7 @@ pub fn save_project_conversations(
     state: State<AppState>,
     conversations: serde_json::Value,
 ) -> Result<(), String> {
-    save_project_json(&state, "conversations.json", redact_project_json(conversations))
+    save_project_sessions_value(&state, conversations)
 }
 
 #[cfg(test)]
@@ -280,5 +392,126 @@ mod tests {
         assert_eq!(redacted[0]["messages"][1]["text"], "0123456789abcdef0123456789abcdef01234567");
         assert_eq!(redacted[0]["messages"][2]["text"], "[redacted]");
         assert_eq!(redacted[0]["messages"][3]["toolArguments"]["api_key"], "[redacted]");
+    }
+
+    #[test]
+    fn saves_project_conversations_as_session_files_not_state() {
+        let temp_dir = env::temp_dir();
+        let unique_id = Uuid::new_v4().to_string();
+        let test_project_dir =
+            temp_dir.join(format!("nightshift_project_sessions_test_{}", unique_id));
+        fs::create_dir_all(test_project_dir.join(".nightshift")).unwrap();
+        let state = AppState { root_path: std::sync::Mutex::new(Some(test_project_dir.clone())) };
+        let conversations = serde_json::json!([
+            {
+                "id": "chat-one",
+                "title": "First chat",
+                "createdAt": "2026-05-14T00:00:00Z",
+                "updatedAt": "2026-05-14T00:00:01Z",
+                "messages": [{ "id": "m1", "role": "user", "text": "hello" }]
+            },
+            {
+                "id": "chat/two",
+                "title": "Second chat",
+                "createdAt": "2026-05-14T00:00:00Z",
+                "updatedAt": "2026-05-14T00:00:02Z",
+                "messages": [{ "id": "m2", "role": "assistant", "text": "hi" }]
+            }
+        ]);
+
+        save_project_sessions_value(&state, conversations.clone()).unwrap();
+        let loaded = load_project_sessions_value(&state).unwrap();
+        let state_json =
+            load_project_state_file(&test_project_dir.join(".nightshift/state.json")).unwrap();
+
+        assert_eq!(loaded, Some(conversations));
+        assert!(!state_json.contains_key("conversations"));
+        assert!(test_project_dir.join(".nightshift/sessions/chat-one.json").exists());
+        assert!(test_project_dir.join(".nightshift/sessions/chat%2Ftwo.json").exists());
+
+        fs::remove_dir_all(&test_project_dir).ok();
+    }
+
+    #[test]
+    fn save_project_conversations_removes_stale_session_files() {
+        let temp_dir = env::temp_dir();
+        let unique_id = Uuid::new_v4().to_string();
+        let test_project_dir =
+            temp_dir.join(format!("nightshift_project_stale_sessions_test_{}", unique_id));
+        fs::create_dir_all(test_project_dir.join(".nightshift")).unwrap();
+        let state = AppState { root_path: std::sync::Mutex::new(Some(test_project_dir.clone())) };
+
+        save_project_sessions_value(
+            &state,
+            serde_json::json!([
+                {
+                    "id": "chat-one",
+                    "title": "First chat",
+                    "createdAt": "2026-05-14T00:00:00Z",
+                    "updatedAt": "2026-05-14T00:00:01Z",
+                    "messages": [{ "id": "m1", "role": "user", "text": "hello" }]
+                },
+                {
+                    "id": "chat-two",
+                    "title": "Second chat",
+                    "createdAt": "2026-05-14T00:00:00Z",
+                    "updatedAt": "2026-05-14T00:00:02Z",
+                    "messages": [{ "id": "m2", "role": "assistant", "text": "hi" }]
+                }
+            ]),
+        )
+        .unwrap();
+
+        save_project_sessions_value(
+            &state,
+            serde_json::json!([
+                {
+                    "id": "chat-two",
+                    "title": "Second chat",
+                    "createdAt": "2026-05-14T00:00:00Z",
+                    "updatedAt": "2026-05-14T00:00:03Z",
+                    "messages": [{ "id": "m2", "role": "assistant", "text": "updated" }]
+                }
+            ]),
+        )
+        .unwrap();
+
+        assert!(!test_project_dir.join(".nightshift/sessions/chat-one.json").exists());
+        assert!(test_project_dir.join(".nightshift/sessions/chat-two.json").exists());
+        fs::remove_dir_all(&test_project_dir).ok();
+    }
+
+    #[test]
+    fn save_project_conversations_removes_legacy_state_conversations() {
+        let temp_dir = env::temp_dir();
+        let unique_id = Uuid::new_v4().to_string();
+        let test_project_dir =
+            temp_dir.join(format!("nightshift_project_legacy_state_cleanup_test_{}", unique_id));
+        fs::create_dir_all(test_project_dir.join(".nightshift")).unwrap();
+        let state = AppState { root_path: std::sync::Mutex::new(Some(test_project_dir.clone())) };
+        let conversations = serde_json::json!([
+            {
+                "id": "chat-one",
+                "title": "Legacy chat",
+                "createdAt": "2026-05-14T00:00:00Z",
+                "updatedAt": "2026-05-14T00:00:01Z",
+                "messages": [{ "id": "m1", "role": "user", "text": "legacy" }]
+            }
+        ]);
+        let mut state_json = serde_json::Map::new();
+        state_json.insert("layout".into(), serde_json::json!({ "panels": [] }));
+        state_json.insert("conversations".into(), serde_json::json!([{ "id": "old-chat" }]));
+        save_project_state_file(&test_project_dir.join(".nightshift/state.json"), &state_json)
+            .unwrap();
+
+        save_project_sessions_value(&state, conversations).unwrap();
+        let next_state_json =
+            load_project_state_file(&test_project_dir.join(".nightshift/state.json")).unwrap();
+
+        assert!(test_project_dir.join(".nightshift/sessions/chat-one.json").exists());
+        assert_eq!(next_state_json.get("layout"), Some(&serde_json::json!({ "panels": [] })));
+        assert!(!next_state_json.contains_key("conversations"));
+
+        fs::remove_dir_all(&test_project_dir).ok();
     }
 }

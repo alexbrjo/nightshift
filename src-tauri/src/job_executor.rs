@@ -662,7 +662,8 @@ impl JobExecutor {
 
             match transform_runner::run_transform_script(&script, &sample).await {
                 Ok(Some(output)) => {
-                    if let Err(e) = self.save_transform_output(config.job_id, &config, &output).await
+                    if let Err(e) =
+                        self.save_transform_output(config.job_id, &config, &output).await
                     {
                         return Err(e);
                     }
@@ -1302,7 +1303,11 @@ mod tests {
             transform_output_mode: "one_to_one".into(),
         };
         let err = exec.load_samples(&cfg).await.unwrap_err();
-        assert!(err.contains("Invalid execution output reference") || err.contains("Invalid execution id"), "got: {err}");
+        assert!(
+            err.contains("Invalid execution output reference")
+                || err.contains("Invalid execution id"),
+            "got: {err}"
+        );
         std::fs::remove_dir_all(dir).ok();
     }
 
