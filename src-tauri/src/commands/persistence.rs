@@ -41,13 +41,10 @@ pub fn save_expanded_state(root_path: String, paths: Vec<String>) -> Result<(), 
     if !root.is_dir() {
         return Err("Invalid root path".to_string());
     }
-    let nightshift_dir = root.join(".nightshift");
-    fs::create_dir_all(&nightshift_dir)
-        .map_err(|e| format!("Failed to create .nightshift dir: {}", e))?;
-    let state_path = nightshift_dir.join("state.json");
-    let json = serde_json::json!({ "expandedFolders": paths });
-    fs::write(&state_path, json.to_string())
-        .map_err(|e| format!("Failed to save expanded state: {}", e))?;
+    let state_path = project_state_path_from_root(&root);
+    let mut state = load_project_state_file(&state_path)?;
+    state.insert("expandedFolders".into(), serde_json::json!(paths));
+    save_project_state_file(&state_path, &state)?;
     Ok(())
 }
 
@@ -58,16 +55,11 @@ pub fn load_expanded_state(root_path: String) -> Result<Vec<String>, String> {
     if !root.is_dir() {
         return Ok(Vec::new());
     }
-    let state_path = root.join(".nightshift").join("state.json");
-    if !state_path.exists() {
-        return Ok(Vec::new());
-    }
-    let content = fs::read_to_string(&state_path)
-        .map_err(|e| format!("Failed to read expanded state: {}", e))?;
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse expanded state: {}", e))?;
-    let paths = json["expandedFolders"]
-        .as_array()
+    let state_path = project_state_path_from_root(&root);
+    let json = load_project_state_file(&state_path)?;
+    let paths = json
+        .get("expandedFolders")
+        .and_then(serde_json::Value::as_array)
         .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
         .unwrap_or_default();
     Ok(paths)
@@ -79,19 +71,60 @@ fn current_nightshift_dir(state: &AppState) -> Result<PathBuf, String> {
     Ok(root.join(".nightshift"))
 }
 
+fn project_state_path_from_root(root: &std::path::Path) -> PathBuf {
+    root.join(".nightshift").join("state.json")
+}
+
+fn load_project_state_file(path: &std::path::Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    if !path.exists() {
+        return Ok(serde_json::Map::new());
+    }
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read .nightshift/state.json: {}", e))?;
+    let value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse .nightshift/state.json: {}", e))?;
+    Ok(value.as_object().cloned().unwrap_or_default())
+}
+
+fn save_project_state_file(
+    path: &std::path::Path,
+    state: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create .nightshift dir: {}", e))?;
+    }
+    let content = serde_json::to_string_pretty(&serde_json::Value::Object(state.clone()))
+        .map_err(|e| format!("Failed to serialize .nightshift/state.json: {}", e))?;
+    fs::write(path, content.as_bytes())
+        .map_err(|e| format!("Failed to save .nightshift/state.json: {}", e))
+}
+
+fn load_project_state_key(
+    state: &AppState,
+    key: &str,
+) -> Result<Option<serde_json::Value>, String> {
+    let path = current_nightshift_dir(state)?.join("state.json");
+    Ok(load_project_state_file(&path)?.remove(key))
+}
+
+fn save_project_state_key(
+    state: &AppState,
+    key: &str,
+    value: serde_json::Value,
+) -> Result<(), String> {
+    let path = current_nightshift_dir(state)?.join("state.json");
+    let mut project_state = load_project_state_file(&path)?;
+    project_state.insert(key.to_string(), value);
+    save_project_state_file(&path, &project_state)
+}
+
 fn load_project_json(
     state: &AppState,
     file_name: &str,
 ) -> Result<Option<serde_json::Value>, String> {
-    let path = current_nightshift_dir(state)?.join(file_name);
-    if !path.exists() {
-        return Ok(None);
-    }
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read .nightshift/{}: {}", file_name, e))?;
-    serde_json::from_str(&content)
-        .map(Some)
-        .map_err(|e| format!("Failed to parse .nightshift/{}: {}", file_name, e))
+    let key = file_name.strip_suffix(".json").unwrap_or(file_name);
+    load_project_state_key(state, key)
 }
 
 fn save_project_json(
@@ -99,13 +132,8 @@ fn save_project_json(
     file_name: &str,
     value: serde_json::Value,
 ) -> Result<(), String> {
-    let dir = current_nightshift_dir(state)?;
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create .nightshift dir: {}", e))?;
-    let path = dir.join(file_name);
-    let content = serde_json::to_string_pretty(&value)
-        .map_err(|e| format!("Failed to serialize .nightshift/{}: {}", file_name, e))?;
-    fs::write(&path, content.as_bytes())
-        .map_err(|e| format!("Failed to save .nightshift/{}: {}", file_name, e))
+    let key = file_name.strip_suffix(".json").unwrap_or(file_name);
+    save_project_state_key(state, key, value)
 }
 
 fn redact_project_json(value: serde_json::Value) -> serde_json::Value {

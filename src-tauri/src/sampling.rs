@@ -27,8 +27,8 @@ impl std::str::FromStr for SamplingStrategy {
     }
 }
 
-/// Load samples from a data source, either a project-relative file path or a
-/// `collection:<id>` reference, and then apply the requested strategy.
+/// Load samples from a data source, either a project-relative file path or an
+/// `execution:<id>/node:<node_id>` reference, and then apply the requested strategy.
 pub async fn load_samples(
     db: &DatabaseState,
     data_source: &str,
@@ -37,9 +37,8 @@ pub async fn load_samples(
 ) -> Result<Vec<serde_json::Value>, String> {
     debug!("Loading samples from data source: {} with strategy: {:?}", data_source, strategy);
 
-    let samples = if let Some(rest) = data_source.strip_prefix("collection:") {
-        let id: i64 = rest.parse().map_err(|_| format!("Invalid collection id: {}", rest))?;
-        load_collection_samples(db, id).await?
+    let samples = if let Some((execution_id, node_id)) = parse_execution_node_ref(data_source)? {
+        load_execution_node_samples(db, execution_id, &node_id).await?
     } else {
         load_file_samples(db, data_source).await?
     };
@@ -54,6 +53,22 @@ pub async fn load_samples(
     }
 
     Ok(apply_strategy(samples, strategy, limit))
+}
+
+fn parse_execution_node_ref(value: &str) -> Result<Option<(i64, String)>, String> {
+    let Some(rest) = value.strip_prefix("execution:") else {
+        return Ok(None);
+    };
+    let Some((execution, node)) = rest.split_once("/node:") else {
+        return Err(format!("Invalid execution output reference: {}", value));
+    };
+    let execution_id = execution
+        .parse::<i64>()
+        .map_err(|_| format!("Invalid execution id in reference: {}", value))?;
+    if node.trim().is_empty() {
+        return Err(format!("Invalid node id in reference: {}", value));
+    }
+    Ok(Some((execution_id, node.to_string())))
 }
 
 async fn load_file_samples(
@@ -118,44 +133,19 @@ fn resolve_within_project(
     Ok(full_canonical)
 }
 
-pub async fn load_collection_samples(
+pub async fn load_execution_node_samples(
     db: &DatabaseState,
-    collection_id: i64,
+    execution_id: i64,
+    node_id: &str,
 ) -> Result<Vec<serde_json::Value>, String> {
-    let source_status = sqlx::query_scalar::<_, Option<String>>(
-        r#"
-        SELECT j.status
-        FROM collections c
-        JOIN inference_jobs j ON j.id = c.job_id
-        WHERE c.id = ?
-        "#,
-    )
-    .bind(collection_id)
-    .fetch_optional(&db.pool())
-    .await
-    .map_err(|e| format!("Failed to check collection eligibility: {}", e))?
-    .flatten();
-
-    match source_status.as_deref() {
-        None => {
-            return Err(format!("Collection no longer exists (id={})", collection_id));
-        }
-        Some("completed") => {}
-        Some(other) => {
-            return Err(format!(
-                "Collection {} is not usable as a data source: source job is {}",
-                collection_id, other
-            ));
-        }
-    }
-
     let rows = sqlx::query_scalar::<_, serde_json::Value>(
-        "SELECT data FROM collection_items WHERE collection_id = ? ORDER BY created_at ASC, id ASC",
+        "SELECT data FROM method_execution_outputs WHERE execution_id = ? AND node_id = ? ORDER BY id ASC",
     )
-    .bind(collection_id)
+    .bind(execution_id)
+    .bind(node_id)
     .fetch_all(&db.pool())
     .await
-    .map_err(|e| format!("Failed to load collection items: {}", e))?;
+    .map_err(|e| format!("Failed to load execution output items: {}", e))?;
 
     Ok(rows.into_iter().map(parse_content_field).collect())
 }

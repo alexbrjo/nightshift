@@ -55,7 +55,7 @@ describe("JobListSidebar", () => {
         job_type: "transform",
         name: "Mixed Result Job",
         prompt_file: "",
-        data_source: "collection:1",
+        data_source: "execution:42/node:source",
         provider: "Nightshift",
         model: "JavaScript",
         server_url: "",

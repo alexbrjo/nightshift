@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -22,7 +22,7 @@ describe("JobViewPage failure surfacing", () => {
           job_type: "transform",
           name: "Transform with skips",
           prompt_file: "",
-          data_source: "collection:3",
+          data_source: "execution:42/node:source",
           provider: "Nightshift",
           model: "JavaScript",
           server_url: "",
@@ -36,17 +36,6 @@ describe("JobViewPage failure surfacing", () => {
           created_at: "2026-05-03T09:00:00Z",
           updated_at: "2026-05-03T09:05:00Z",
         });
-      }
-
-      if (command === "get_collections_for_job") {
-        return Promise.resolve([
-          {
-            id: 12,
-            job_id: 7,
-            name: "Transform with skips outputs",
-            created_at: "2026-05-03T09:05:00Z",
-          },
-        ]);
       }
 
       if (command === "get_job_failures") {
@@ -66,20 +55,18 @@ describe("JobViewPage failure surfacing", () => {
   });
 
   it("shows completed-with-errors status, skipped item errors, and available output", async () => {
-    const onViewCollection = vi.fn();
-    render(<JobViewPage jobId={7} onViewCollection={onViewCollection} />);
+    render(<JobViewPage jobId={7} />);
 
     expect(await screen.findByText("Completed with errors")).toBeInTheDocument();
     expect(screen.getByText("Job completed and skipped 1 failed item.")).toBeInTheDocument();
     expect(screen.getByText("Skipped Items")).toBeInTheDocument();
     expect(screen.getByText("Item 3")).toBeInTheDocument();
     expect(screen.getByText("Transform script failed: missing questions array")).toBeInTheDocument();
-    const viewCollectionButton = screen.getByRole("button", { name: "View Collection (1)" });
-    expect(viewCollectionButton).toBeEnabled();
-    fireEvent.click(viewCollectionButton);
-    expect(onViewCollection).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 12, name: "Transform with skips outputs" }),
-    );
+    expect(
+      screen.getByText(
+        "Job output is indexed locally and execution output is written as JSONL when jobs run inside a Method execution.",
+      ),
+    ).toBeInTheDocument();
     expect(listen).toHaveBeenCalledWith("job-completed", expect.any(Function));
   });
 });

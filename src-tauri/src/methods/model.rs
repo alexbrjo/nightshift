@@ -233,12 +233,6 @@ impl MethodWorkflowNode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SaveMethodInput {
-    pub method: MethodDocument,
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MethodPreflightBlocker {
@@ -279,13 +273,6 @@ pub struct MethodExecutionSummary {
     pub completed_at: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ExecuteCurrentMethodDraftResult {
-    pub method: MethodSummary,
-    pub execution_id: i64,
-}
-
 #[derive(Debug, Clone, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
 pub struct MethodExecutionNodeSummary {
@@ -313,13 +300,26 @@ pub struct MethodExecutionEventSummary {
 
 #[derive(Debug, Clone, Serialize, FromRow)]
 #[serde(rename_all = "camelCase")]
-pub struct MethodArtifactSummary {
+pub struct ExecutionFileSummary {
     pub id: i64,
     pub execution_id: i64,
     pub node_id: Option<String>,
-    pub artifact_type: String,
-    pub storage_kind: String,
-    pub storage_ref: String,
+    pub file_type: String,
+    pub path: String,
     pub content_hash: String,
     pub created_at: String,
 }
+
+#[derive(Debug, Clone, Serialize, FromRow)]
+#[serde(rename_all = "camelCase")]
+pub struct OutputItem {
+    pub id: i64,
+    pub execution_id: i64,
+    pub node_id: String,
+    pub job_id: Option<i64>,
+    pub sample_index: Option<i64>,
+    pub data: serde_json::Value,
+    pub created_at: String,
+}
+
+pub type MethodArtifactSummary = ExecutionFileSummary;

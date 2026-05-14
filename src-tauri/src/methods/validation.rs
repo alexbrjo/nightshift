@@ -5,8 +5,7 @@ use super::config::normalized_resource_kind;
 use super::model::{MethodDocument, MethodWorkflowNode};
 use super::paths::{require_nonempty, validate_method_id, validate_relative_path};
 
-const RESOURCE_KINDS: &[&str] =
-    &["prompt", "data", "json_schema", "eval_script", "collection", "api_key"];
+const RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "eval_script", "api_key"];
 const GENERATED_OR_DEPENDENCY_DIRS: &[&str] = &[
     ".git",
     ".nightshift",
@@ -147,9 +146,7 @@ fn resource_kind_matches_node(resource: &MethodWorkflowNode, node: &MethodWorkfl
         "prompt" | "api_key" => node.node_type == "inference",
         "json_schema" => matches!(node.node_type.as_str(), "inference" | "eval"),
         "eval_script" => node.node_type == "eval" || node.node_type == "transform",
-        "data" | "collection" => {
-            matches!(node.node_type.as_str(), "sample" | "inference" | "eval" | "transform")
-        }
+        "data" => matches!(node.node_type.as_str(), "sample" | "inference" | "eval" | "transform"),
         _ => false,
     }
 }
@@ -160,7 +157,6 @@ fn resource_kind_label(kind: &str) -> &'static str {
         "data" => "a data file",
         "json_schema" => "a JSON schema file",
         "eval_script" => "an eval script",
-        "collection" => "a collection",
         "api_key" => "an API key",
         _ => "a supported resource",
     }

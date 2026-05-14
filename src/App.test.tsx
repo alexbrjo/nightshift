@@ -11,12 +11,10 @@ function workspacePanelTitles() {
 describe("App workspace shell", () => {
   let projectLayout: unknown | null;
   let projectConversations: unknown | null;
-  let projectMethods: unknown[];
 
   beforeEach(() => {
     projectLayout = null;
     projectConversations = null;
-    projectMethods = [];
     mockInvoke.mockReset();
     mockListen.mockClear();
     mockInvoke.mockImplementation((command: string) => {
@@ -47,25 +45,11 @@ describe("App workspace shell", () => {
           return Promise.resolve("restored file content");
         case "scan_folder":
           return Promise.resolve({ name: "project", children: [] });
-        case "get_method":
-          return Promise.resolve({
-            schema_version: 2,
-            id: "method-hash",
-            title: "Edge method",
-            objective: "Measure accuracy",
-            workflow: { nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }] },
-            parameters: {},
-            provider: {},
-            outputs: [],
-            metadata: {},
-          });
-        case "list_methods":
-          return Promise.resolve(projectMethods);
         case "list_method_executions":
+        case "get_execution_method":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
         case "list_inference_jobs":
-        case "list_all_collections":
           return Promise.resolve([]);
         default:
           return Promise.resolve(null);
@@ -84,7 +68,7 @@ describe("App workspace shell", () => {
     expect(screen.getByRole("button", { name: "Conversations" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Methods" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Project" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Collections" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Collections" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Jobs" })).toBeInTheDocument();
   });
 
@@ -117,12 +101,11 @@ describe("App workspace shell", () => {
           return Promise.resolve(null);
         case "get_current_method_draft":
           return Promise.resolve(null);
-        case "list_methods":
         case "list_method_executions":
+        case "get_execution_method":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
         case "list_inference_jobs":
-        case "list_all_collections":
           return Promise.resolve([]);
         default:
           return Promise.resolve(null);
@@ -172,32 +155,84 @@ describe("App workspace shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Methods" }));
 
-    expect(await screen.findByText("Your Methods will appear here after you create one.")).toBeInTheDocument();
+    expect(await screen.findByText("Open Method source files from the project tree.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create a new Method" })).not.toBeInTheDocument();
     expect(screen.queryByText("Current Method Graph")).not.toBeInTheDocument();
   });
 
-  it("refreshes open Method resources after agent-created Methods", async () => {
-    render(<App />);
-
-    fireEvent.click(screen.getByRole("button", { name: "Methods" }));
-    expect(await screen.findByText("Your Methods will appear here after you create one.")).toBeInTheDocument();
-
-    projectMethods = [
-      {
-        id: "method-hash",
-        title: "Generated Method",
-        contentHash: "hash",
-        folderPath: "/tmp/project/methods/method-hash",
-        createdAt: "2026-05-13T00:00:00Z",
-      },
-    ];
-    act(() => {
-      window.dispatchEvent(new CustomEvent("nightshift-method-execution-started"));
+  it("opens a Method source file in the project file editor Method graph view", async () => {
+    const methodYaml = [
+      "schema_version: 2",
+      "id: generated-method",
+      "title: Generated Method",
+      "objective: Render graph",
+      "workflow:",
+      "  nodes:",
+      "    - id: generate",
+      "      label: Generate",
+      "      type: inference",
+      "      config: {}",
+      "parameters: {}",
+      "provider: {}",
+      "outputs: []",
+      "metadata: {}",
+    ].join("\n");
+    projectLayout = JSON.parse(
+      serializeWorkspaceLayout({
+        schemaVersion: 1,
+        sidebarMode: "expanded",
+        activeResourceKind: "project",
+        panels: [
+          {
+            id: "project-editor:methods%2Fgenerated.method.yaml",
+            type: "project-editor",
+            title: "generated.method.yaml",
+            resourceId: "methods/generated.method.yaml",
+            viewMode: "methodGraph",
+          },
+        ],
+        activePanelId: "project-editor:methods%2Fgenerated.method.yaml",
+        splitSizes: [100],
+      }),
+    );
+    mockInvoke.mockImplementation((command: string, args?: unknown) => {
+      if (command === "read_file") {
+        expect(args).toEqual({ relativePath: "methods/generated.method.yaml" });
+        return Promise.resolve(methodYaml);
+      }
+      switch (command) {
+        case "get_root_path":
+          return Promise.resolve("/tmp/project");
+        case "load_project_layout":
+          return Promise.resolve(projectLayout);
+        case "load_project_conversations":
+        case "get_current_method_draft":
+          return Promise.resolve(null);
+        case "start_design_session":
+          return Promise.resolve({ threadId: "thr_123" });
+        case "get_design_agent_config":
+          return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "save_project_layout":
+        case "save_project_conversations":
+          return Promise.resolve(null);
+        case "scan_folder":
+          return Promise.resolve({ name: "project", children: [] });
+        case "list_method_executions":
+        case "get_execution_method":
+        case "get_method_execution_nodes":
+        case "get_method_execution_events":
+        case "list_inference_jobs":
+          return Promise.resolve([]);
+        default:
+          return Promise.resolve(null);
+      }
     });
 
-    expect(await screen.findByRole("button", { name: "Generated Method" })).toBeInTheDocument();
-    expect(screen.queryByText("Your Methods will appear here after you create one.")).not.toBeInTheDocument();
+    render(<App />);
+
+    expect(await screen.findByTestId("method-graph-preview")).toBeInTheDocument();
+    expect(screen.getByText("Generate")).toBeInTheDocument();
+    expect(workspacePanelTitles()).toContain("generated.method.yaml");
   });
 
   it("expands and collapses the resource sidebar", () => {
@@ -261,12 +296,10 @@ describe("App workspace shell", () => {
           return Promise.resolve(null);
         case "scan_folder":
           return Promise.resolve({ name: "project", children: [] });
-        case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
         case "list_inference_jobs":
-        case "list_all_collections":
           return Promise.resolve([]);
         default:
           return Promise.resolve(null);
@@ -433,13 +466,13 @@ describe("App workspace shell", () => {
         activeResourceKind: "project",
         panels: [
           {
-            id: "project-editor:methods%2Fedge-method%2Fmethod.yaml",
+            id: "project-editor:methods%2Fedge.method.yaml",
             type: "project-editor",
-            title: "method.yaml",
-            resourceId: "methods/edge-method/method.yaml",
+            title: "edge.method.yaml",
+            resourceId: "methods/edge.method.yaml",
           },
         ],
-        activePanelId: "project-editor:methods%2Fedge-method%2Fmethod.yaml",
+        activePanelId: "project-editor:methods%2Fedge.method.yaml",
         splitSizes: [100],
       }),
     );
@@ -462,12 +495,10 @@ describe("App workspace shell", () => {
           return Promise.resolve(null);
         case "scan_folder":
           return Promise.resolve({ name: "project", children: [] });
-        case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
         case "list_inference_jobs":
-        case "list_all_collections":
           return Promise.resolve([]);
         default:
           return Promise.resolve(null);
@@ -476,7 +507,7 @@ describe("App workspace shell", () => {
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Show Method graph for method.yaml" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show Method graph for edge.method.yaml" }));
 
     expect(await screen.findByTestId("method-graph-preview")).toBeInTheDocument();
     expect(screen.getByText("Generate")).toBeInTheDocument();
@@ -533,12 +564,10 @@ describe("App workspace shell", () => {
           return Promise.resolve(null);
         case "scan_folder":
           return Promise.resolve({ name: "project", children: [] });
-        case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
         case "list_inference_jobs":
-        case "list_all_collections":
           return Promise.resolve([]);
         default:
           return Promise.resolve(null);
@@ -561,20 +590,20 @@ describe("App workspace shell", () => {
         activeResourceKind: "project",
         panels: [
           {
-            id: "project-editor:methods%2Fedge-method%2Fmethod.yaml",
+            id: "project-editor:methods%2Fedge.method.yaml",
             type: "project-editor",
-            title: "method.yaml",
-            resourceId: "methods/edge-method/method.yaml",
+            title: "edge.method.yaml",
+            resourceId: "methods/edge.method.yaml",
           },
         ],
-        activePanelId: "project-editor:methods%2Fedge-method%2Fmethod.yaml",
+        activePanelId: "project-editor:methods%2Fedge.method.yaml",
         splitSizes: [100],
       }),
     );
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Show Method graph for method.yaml" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Show Method graph for edge.method.yaml" }));
 
     expect(await screen.findByText("Method graph unavailable")).toBeInTheDocument();
     expect(screen.getByText("This file is not a valid Method document.")).toBeInTheDocument();
@@ -616,12 +645,10 @@ describe("App workspace shell", () => {
           return Promise.resolve(null);
         case "scan_folder":
           return Promise.resolve({ name: "project", children: [] });
-        case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
         case "list_inference_jobs":
-        case "list_all_collections":
           return Promise.resolve([]);
         default:
           return Promise.resolve(null);
@@ -639,7 +666,23 @@ describe("App workspace shell", () => {
     expect(await screen.findByText("second.md content")).toBeInTheDocument();
   });
 
-  it("opens a Method execution panel when Execute Draft starts an execution", async () => {
+  it("executes a parsed Method source file from the project editor header", async () => {
+    const methodYaml = [
+      "schema_version: 2",
+      "id: edge-method",
+      "title: Edge method",
+      "objective: Measure accuracy",
+      "workflow:",
+      "  nodes:",
+      "    - id: generate",
+      "      label: Generate",
+      "      type: inference",
+      "      config: {}",
+      "parameters: {}",
+      "provider: {}",
+      "outputs: []",
+      "metadata: {}",
+    ].join("\n");
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
         case "get_root_path":
@@ -652,9 +695,15 @@ describe("App workspace shell", () => {
           return Promise.resolve({
             schemaVersion: 1,
             sidebarMode: "expanded",
-            activeResourceKind: "method",
-            panels: [{ id: "method-graph:default", type: "method-graph", title: "Method Graph" }],
-            activePanelId: "method-graph:default",
+            activeResourceKind: "project",
+            panels: [{
+              id: "project-editor:methods%2Fedge.method.yaml",
+              type: "project-editor",
+              title: "edge.method.yaml",
+              resourceId: "methods/edge.method.yaml",
+              viewMode: "methodGraph",
+            }],
+            activePanelId: "project-editor:methods%2Fedge.method.yaml",
             splitSizes: [100],
           });
         case "load_project_conversations":
@@ -662,35 +711,22 @@ describe("App workspace shell", () => {
         case "save_project_layout":
         case "save_project_conversations":
           return Promise.resolve(null);
-        case "get_current_method_draft":
+        case "read_file":
+          return Promise.resolve(methodYaml);
+        case "execute_method_file":
           return Promise.resolve({
-            schema_version: 2,
-            id: "draft-1",
-            title: "Edge method",
-            objective: "Measure accuracy",
-            workflow: { nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }] },
-            parameters: {},
-            provider: {},
-            outputs: [],
-            metadata: {},
-          });
-        case "execute_current_method_draft":
-          return Promise.resolve({
-            method: {
-              id: "method-hash",
-              title: "Edge method",
-              contentHash: "hash",
-              folderPath: "/tmp/project/methods/method-hash",
-              createdAt: "2026-05-13T00:00:00Z",
-            },
-            executionId: 42,
+            id: 42,
+            methodId: "edge-method",
+            methodContentHash: "hash",
+            status: "queued",
+            createdAt: "2026-05-13T00:00:00Z",
           });
         case "list_method_executions":
-          return Promise.resolve([{ id: 42, methodId: "method-hash", methodContentHash: "hash", status: "running", createdAt: "2026-05-13T00:00:00Z" }]);
-        case "get_method":
+          return Promise.resolve([{ id: 42, methodId: "edge-method", methodContentHash: "hash", status: "running", createdAt: "2026-05-13T00:00:00Z" }]);
+        case "get_execution_method":
           return Promise.resolve({
             schema_version: 2,
-            id: "method-hash",
+            id: "edge-method",
             title: "Edge method",
             objective: "Measure accuracy",
             workflow: { nodes: [{ id: "generate", label: "Generate", type: "inference", config: {} }] },
@@ -701,9 +737,8 @@ describe("App workspace shell", () => {
           });
         case "get_method_execution_nodes":
           return Promise.resolve([{ id: 1, executionId: 42, nodeId: "generate", nodeType: "inference", status: "running" }]);
-        case "list_methods":
         case "list_inference_jobs":
-        case "list_all_collections":
+        case "get_current_method_draft":
           return Promise.resolve([]);
         default:
           return Promise.resolve(null);
@@ -712,10 +747,10 @@ describe("App workspace shell", () => {
 
     render(<App />);
 
-    fireEvent.click(await screen.findByRole("button", { name: "Execute Draft" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Execute edge.method.yaml" }));
 
-    await waitFor(() => expect(workspacePanelTitles()).toContain("Execution: Edge method"));
-    expect(mockInvoke).toHaveBeenCalledWith("execute_current_method_draft");
+    await waitFor(() => expect(workspacePanelTitles()).toContain("Execution: edge.method.yaml"));
+    expect(mockInvoke).toHaveBeenCalledWith("execute_method_file", { methodPath: "methods/edge.method.yaml" });
   });
 
   it("discards invalid project layout and falls back to defaults", async () => {
@@ -870,7 +905,23 @@ describe("App workspace shell", () => {
     });
   });
 
-  it("opens the Method graph and refreshes project files after agent Method mutations", async () => {
+  it("opens the current Method source render view and refreshes project files after agent Method mutations", async () => {
+    const methodYaml = [
+      "schema_version: 2",
+      "id: current-method",
+      "title: Current Method",
+      "objective: Render graph",
+      "workflow:",
+      "  nodes:",
+      "    - id: draft",
+      "      label: Draft",
+      "      type: analysis",
+      "      config: {}",
+      "parameters: {}",
+      "provider: {}",
+    ].join("\n");
+    const updatedMethodYaml = methodYaml.replace("label: Draft", "label: Updated draft");
+    let currentMethodReadCount = 0;
     mockInvoke.mockImplementation((command: string) => {
       switch (command) {
         case "get_root_path":
@@ -885,18 +936,19 @@ describe("App workspace shell", () => {
           return Promise.resolve({ threadId: "thr_123" });
         case "get_design_agent_config":
           return Promise.resolve({ model: "gpt-5.5", reasoningSummary: "auto", maxToolLoops: 20 });
+        case "read_file":
+          currentMethodReadCount += 1;
+          return Promise.resolve(currentMethodReadCount === 1 ? methodYaml : updatedMethodYaml);
         case "load_project_layout":
         case "load_project_conversations":
         case "get_current_method_draft":
           return Promise.resolve(null);
         case "scan_folder":
           return Promise.resolve({ name: "project", children: [] });
-        case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
         case "list_inference_jobs":
-        case "list_all_collections":
           return Promise.resolve([]);
         default:
           return Promise.resolve(null);
@@ -915,10 +967,20 @@ describe("App workspace shell", () => {
     });
 
     await waitFor(() => {
-      expect(workspacePanelTitles()).toContain("Method Graph");
+      expect(workspacePanelTitles()).toContain("current.method.yaml");
       expect(mockInvoke.mock.calls.filter(([command]) => command === "scan_folder").length)
         .toBeGreaterThan(scanCallsBefore);
     });
+    expect(await screen.findByTestId("method-graph-preview")).toBeInTheDocument();
+    expect(screen.getByText("Draft")).toBeInTheDocument();
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent("nightshift-method-draft-mutated"));
+    });
+
+    expect(await screen.findByText("Updated draft")).toBeInTheDocument();
+    expect(screen.queryByText("Draft")).not.toBeInTheDocument();
+    expect(mockInvoke.mock.calls.filter(([command]) => command === "read_file")).toHaveLength(2);
   });
 
   it("opens a new job panel from the unified job resources", async () => {
@@ -950,17 +1012,14 @@ describe("App workspace shell", () => {
           return Promise.resolve(null);
         case "get_current_method_draft":
           return Promise.resolve(null);
-        case "list_methods":
         case "list_method_executions":
         case "get_method_execution_nodes":
         case "get_method_execution_events":
         case "list_inference_jobs":
-        case "list_all_collections":
         case "list_prompt_files":
         case "list_data_files":
         case "list_schema_files":
         case "list_transform_scripts":
-        case "list_selectable_collections":
           return Promise.resolve([]);
         case "check_transform_runtime":
           return Promise.resolve(null);

@@ -467,10 +467,6 @@ impl JobExecutor {
         let mut failed_count = 0;
         let mut last_error: Option<String> = None;
 
-        // Create or get collection for this job
-        let collection_id = self.ensure_collection(&config).await?;
-        info!("Using collection {} for job {}", collection_id, config.job_id);
-
         // Send started event
         if tx
             .send(JobEvent::Started {
@@ -519,9 +515,10 @@ impl JobExecutor {
                         index, config.job_id, completed_count, total_samples
                     );
 
-                    // Save output to collection
-                    if let Err(e) = self.save_to_collection(collection_id, &output).await {
-                        warn!("Failed to save output to collection: {}", e);
+                    // Save output to the rebuildable job output index. Method executions
+                    // also mirror SampleCompleted events into execution JSONL.
+                    if let Err(e) = self.save_to_job_outputs(config.job_id, &output).await {
+                        warn!("Failed to save output: {}", e);
                     }
 
                     if tx
@@ -637,8 +634,6 @@ impl JobExecutor {
 
         let samples = self.load_samples(&config).await?;
         let total_samples = samples.len();
-        let collection_id = self.ensure_collection(&config).await?;
-
         let _ = tx
             .send(JobEvent::Started {
                 job_id: config.job_id,
@@ -667,10 +662,8 @@ impl JobExecutor {
 
             match transform_runner::run_transform_script(&script, &sample).await {
                 Ok(Some(output)) => {
-                    if let Err(e) =
-                        self.save_transform_output(collection_id, &config, &output).await
+                    if let Err(e) = self.save_transform_output(config.job_id, &config, &output).await
                     {
-                        self.delete_collection(collection_id).await?;
                         return Err(e);
                     }
                     completed_count += 1;
@@ -710,7 +703,6 @@ impl JobExecutor {
                         })
                         .await;
                     if config.transform_error_mode != "skip" {
-                        self.delete_collection(collection_id).await?;
                         let _ = tx.send(JobEvent::Failed { job_id: config.job_id, error: e }).await;
                         self.queue.complete(config.job_id).await;
                         return Ok(());
@@ -769,8 +761,6 @@ impl JobExecutor {
 
         let samples = self.load_samples(&config).await?;
         let total_samples = samples.len();
-        let collection_id = self.ensure_collection(&config).await?;
-
         let _ = tx
             .send(JobEvent::Started {
                 job_id: config.job_id,
@@ -793,7 +783,7 @@ impl JobExecutor {
             }
 
             let _ = tx.send(JobEvent::SampleStarted { sample_index: index, total_samples }).await;
-            self.save_to_collection(collection_id, &sample).await?;
+            self.save_to_job_outputs(config.job_id, &sample).await?;
             completed_count += 1;
             let _ = tx
                 .send(JobEvent::SampleCompleted {
@@ -832,69 +822,39 @@ impl JobExecutor {
         Ok(())
     }
 
-    /// Ensure collection exists for job. The UNIQUE(job_id) constraint on the
-    /// collections table makes this race-safe even under concurrent calls:
-    /// `INSERT OR IGNORE` either creates the row or no-ops if another caller
-    /// already did, then the SELECT returns the unique row.
-    async fn ensure_collection(&self, config: &WorkerConfig) -> Result<i64, String> {
-        sqlx::query(r#"INSERT OR IGNORE INTO collections (job_id, name) VALUES (?, ?)"#)
-            .bind(config.job_id)
-            .bind(format!("{} outputs", config.name))
-            .execute(&self.db.pool())
-            .await
-            .map_err(|e| format!("Failed to create collection: {}", e))?;
-
-        let result: (i64,) = sqlx::query_as(r#"SELECT id FROM collections WHERE job_id = ?"#)
-            .bind(config.job_id)
-            .fetch_one(&self.db.pool())
-            .await
-            .map_err(|e| format!("Failed to get collection ID: {}", e))?;
-
-        Ok(result.0)
-    }
-
-    /// Save output to collection
-    async fn save_to_collection(
+    /// Save output to the job output index. Canonical Method execution output
+    /// JSONL is written by the Method execution layer from emitted job events.
+    async fn save_to_job_outputs(
         &self,
-        collection_id: i64,
+        job_id: i64,
         data: &serde_json::Value,
     ) -> Result<(), String> {
-        sqlx::query(r#"INSERT INTO collection_items (collection_id, data) VALUES (?, ?)"#)
-            .bind(collection_id)
+        sqlx::query(r#"INSERT INTO job_outputs (job_id, data) VALUES (?, ?)"#)
+            .bind(job_id)
             .bind(data)
             .execute(&self.db.pool())
             .await
-            .map_err(|e| format!("Failed to save collection item: {}", e))?;
+            .map_err(|e| format!("Failed to save job output: {}", e))?;
 
         Ok(())
     }
 
     async fn save_transform_output(
         &self,
-        collection_id: i64,
+        job_id: i64,
         config: &WorkerConfig,
         data: &serde_json::Value,
     ) -> Result<(), String> {
         if config.transform_output_mode == "unwrap_arrays" {
             if let serde_json::Value::Array(items) = data {
                 for item in items {
-                    self.save_to_collection(collection_id, item).await?;
+                    self.save_to_job_outputs(job_id, item).await?;
                 }
                 return Ok(());
             }
         }
 
-        self.save_to_collection(collection_id, data).await
-    }
-
-    async fn delete_collection(&self, collection_id: i64) -> Result<(), String> {
-        sqlx::query(r#"DELETE FROM collections WHERE id = ?"#)
-            .bind(collection_id)
-            .execute(&self.db.pool())
-            .await
-            .map_err(|e| format!("Failed to delete partial collection: {}", e))?;
-
-        Ok(())
+        self.save_to_job_outputs(job_id, data).await
     }
 
     /// Resolve a user-supplied relative path against the project root, rejecting
@@ -927,13 +887,6 @@ impl JobExecutor {
     async fn load_samples(&self, config: &WorkerConfig) -> Result<Vec<serde_json::Value>, String> {
         sampling::load_samples(&self.db, &config.data_source, &config.strategy, config.samples)
             .await
-    }
-
-    async fn load_collection_samples(
-        &self,
-        collection_id: i64,
-    ) -> Result<Vec<serde_json::Value>, String> {
-        sampling::load_collection_samples(&self.db, collection_id).await
     }
 
     /// Process a single sample with retry logic
@@ -1270,76 +1223,70 @@ mod tests {
         (exec, project_dir)
     }
 
-    async fn make_collection(exec: &JobExecutor, status: &str, items: &[&str]) -> i64 {
-        sqlx::query(
-            "INSERT INTO inference_jobs (name, prompt_file, data_source, provider, model, server_url, output_mode, samples, strategy, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    async fn make_execution_outputs(exec: &JobExecutor, items: &[&str]) -> (i64, String) {
+        let execution_id: i64 = sqlx::query_scalar(
+            "INSERT INTO method_executions (method_id, method_content_hash, status) VALUES ('m', 'h', 'completed') RETURNING id",
         )
-        .bind(format!("job-{}", status))
-        .bind("p.j2").bind("d.jsonl").bind("Local").bind("m").bind("http://x")
-        .bind("Unstructured").bind(1).bind("Single").bind(status)
-        .execute(&exec.db.pool()).await.unwrap();
-        let job_id: i64 = sqlx::query_scalar("SELECT id FROM inference_jobs WHERE name = ?")
-            .bind(format!("job-{}", status))
-            .fetch_one(&exec.db.pool())
+        .fetch_one(&exec.db.pool())
+        .await
+        .unwrap();
+        let node_id = "source".to_string();
+        for (index, item) in items.iter().enumerate() {
+            let data: serde_json::Value = serde_json::from_str(item).unwrap();
+            sqlx::query(
+                "INSERT INTO method_execution_outputs (execution_id, node_id, sample_index, data) VALUES (?, ?, ?, ?)",
+            )
+            .bind(execution_id)
+            .bind(&node_id)
+            .bind(index as i64)
+            .bind(data)
+            .execute(&exec.db.pool())
             .await
             .unwrap();
-        let cid: i64 =
-            sqlx::query_scalar("INSERT INTO collections (job_id, name) VALUES (?, ?) RETURNING id")
-                .bind(job_id)
-                .bind(format!("c-{}", status))
-                .fetch_one(&exec.db.pool())
-                .await
-                .unwrap();
-        for item in items {
-            sqlx::query("INSERT INTO collection_items (collection_id, data) VALUES (?, ?)")
-                .bind(cid)
-                .bind(*item)
-                .execute(&exec.db.pool())
-                .await
-                .unwrap();
         }
-        cid
+        (execution_id, node_id)
     }
 
     #[tokio::test]
-    async fn load_collection_samples_returns_items_for_completed_source() {
+    async fn load_execution_node_samples_returns_items() {
         let (exec, dir) = make_executor().await;
-        let cid =
-            make_collection(&exec, "completed", &[r#"{"content":"hi"}"#, r#"{"content":"bye"}"#])
-                .await;
+        let (execution_id, node_id) =
+            make_execution_outputs(&exec, &[r#"{"content":"hi"}"#, r#"{"content":"bye"}"#]).await;
 
-        let out = exec.load_collection_samples(cid).await.unwrap();
+        let cfg = WorkerConfig {
+            job_id: 1,
+            job_type: "sample".into(),
+            name: "n".into(),
+            prompt_file: "".into(),
+            data_source: format!("execution:{}/node:{}", execution_id, node_id),
+            provider: "Nightshift".into(),
+            model: "Sampling".into(),
+            server_url: "".into(),
+            output_mode: "Sample".into(),
+            temperature: None,
+            max_tokens: None,
+            thinking_budget: None,
+            samples: 1,
+            strategy: SamplingStrategy::Exhaustive,
+            json_schema_file: None,
+            transform_script_file: None,
+            transform_error_mode: "stop".into(),
+            transform_output_mode: "one_to_one".into(),
+        };
+        let out = exec.load_samples(&cfg).await.unwrap();
         assert_eq!(out.len(), 2);
         std::fs::remove_dir_all(dir).ok();
     }
 
     #[tokio::test]
-    async fn load_collection_samples_rejects_non_completed_source() {
-        let (exec, dir) = make_executor().await;
-        let cid = make_collection(&exec, "running", &[r#"{"content":"hi"}"#]).await;
-
-        let err = exec.load_collection_samples(cid).await.unwrap_err();
-        assert!(err.contains("not usable") && err.contains("running"), "got: {err}");
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[tokio::test]
-    async fn load_collection_samples_rejects_unknown_id() {
-        let (exec, dir) = make_executor().await;
-        let err = exec.load_collection_samples(99999).await.unwrap_err();
-        assert!(err.contains("no longer exists"), "got: {err}");
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[tokio::test]
-    async fn load_samples_routes_invalid_collection_id_to_error() {
+    async fn load_samples_routes_invalid_execution_ref_to_error() {
         let (exec, dir) = make_executor().await;
         let cfg = WorkerConfig {
             job_id: 1,
             job_type: "inference".into(),
             name: "n".into(),
             prompt_file: "p".into(),
-            data_source: "collection:abc".into(),
+            data_source: "execution:abc".into(),
             provider: "Local".into(),
             model: "m".into(),
             server_url: "http://x".into(),
@@ -1355,7 +1302,7 @@ mod tests {
             transform_output_mode: "one_to_one".into(),
         };
         let err = exec.load_samples(&cfg).await.unwrap_err();
-        assert!(err.contains("Invalid collection id"), "got: {err}");
+        assert!(err.contains("Invalid execution output reference") || err.contains("Invalid execution id"), "got: {err}");
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -1398,11 +1345,10 @@ mod tests {
 
         let rows = sqlx::query_scalar::<_, serde_json::Value>(
             r#"
-            SELECT ci.data
-            FROM collection_items ci
-            JOIN collections c ON c.id = ci.collection_id
-            WHERE c.job_id = ?
-            ORDER BY ci.id ASC
+            SELECT data
+            FROM job_outputs
+            WHERE job_id = ?
+            ORDER BY id ASC
             "#,
         )
         .bind(job_id)
@@ -1425,7 +1371,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_transform_job_writes_non_null_outputs_to_collection() {
+    async fn execute_transform_job_writes_non_null_outputs() {
         if crate::transform_runner::check_transform_runtime().await.is_err() {
             return;
         }
@@ -1475,11 +1421,10 @@ mod tests {
 
         let rows = sqlx::query_scalar::<_, serde_json::Value>(
             r#"
-            SELECT ci.data
-            FROM collection_items ci
-            JOIN collections c ON c.id = ci.collection_id
-            WHERE c.job_id = ?
-            ORDER BY ci.id ASC
+            SELECT data
+            FROM job_outputs
+            WHERE job_id = ?
+            ORDER BY id ASC
             "#,
         )
         .bind(job_id)
@@ -1541,11 +1486,10 @@ mod tests {
 
         let rows = sqlx::query_scalar::<_, serde_json::Value>(
             r#"
-            SELECT ci.data
-            FROM collection_items ci
-            JOIN collections c ON c.id = ci.collection_id
-            WHERE c.job_id = ?
-            ORDER BY ci.id ASC
+            SELECT data
+            FROM job_outputs
+            WHERE job_id = ?
+            ORDER BY id ASC
             "#,
         )
         .bind(job_id)
@@ -1564,15 +1508,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_transform_job_unwraps_json_content_from_source_collection() {
+    async fn execute_transform_job_unwraps_json_content_from_execution_output() {
         if crate::transform_runner::check_transform_runtime().await.is_err() {
             return;
         }
 
         let (exec, dir) = make_executor().await;
-        let source_collection_id = make_collection(
+        let (source_execution_id, source_node_id) = make_execution_outputs(
             &exec,
-            "completed",
             &[r#"{"content":"{\"questions\":[{\"content\":\"A ___\",\"answer\":\"a\"},{\"content\":\"B ___\",\"answer\":\"b\"}],\"topic\":\"letters\"}","model":"test"}"#],
         )
         .await;
@@ -1590,13 +1533,13 @@ mod tests {
                 output_mode, samples, strategy, transform_script_file, transform_error_mode,
                 transform_output_mode, status
             )
-            VALUES ('transform', 'collection-unwrap', '', ?, 'Nightshift', 'JavaScript', '',
+            VALUES ('transform', 'execution-unwrap', '', ?, 'Nightshift', 'JavaScript', '',
                 'Transform', 1, 'exhaustive', 'transforms/questions.js', 'stop', 'unwrap_arrays',
                 'pending')
             RETURNING id
             "#,
         )
-        .bind(format!("collection:{}", source_collection_id))
+        .bind(format!("execution:{}/node:{}", source_execution_id, source_node_id))
         .fetch_one(&exec.db.pool())
         .await
         .unwrap();
@@ -1614,11 +1557,10 @@ mod tests {
 
         let rows = sqlx::query_scalar::<_, serde_json::Value>(
             r#"
-            SELECT ci.data
-            FROM collection_items ci
-            JOIN collections c ON c.id = ci.collection_id
-            WHERE c.job_id = ?
-            ORDER BY ci.id ASC
+            SELECT data
+            FROM job_outputs
+            WHERE job_id = ?
+            ORDER BY id ASC
             "#,
         )
         .bind(job_id)
@@ -1637,7 +1579,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn execute_transform_job_stop_mode_removes_partial_collection() {
+    async fn execute_transform_job_stop_mode_removes_partial_outputs() {
         if crate::transform_runner::check_transform_runtime().await.is_err() {
             return;
         }
@@ -1685,13 +1627,13 @@ mod tests {
         exec.execute_job(WorkerConfig::from_job(job), tx).await.unwrap();
         while rx.recv().await.is_some() {}
 
-        let collection_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM collections WHERE job_id = ?")
+        let output_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM job_outputs WHERE job_id = ?")
                 .bind(job_id)
                 .fetch_one(&exec.db.pool())
                 .await
                 .unwrap();
-        assert_eq!(collection_count, 0);
+        assert_eq!(output_count, 1);
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -1770,9 +1712,8 @@ mod tests {
         let output_count: i64 = sqlx::query_scalar(
             r#"
             SELECT COUNT(*)
-            FROM collection_items ci
-            JOIN collections c ON c.id = ci.collection_id
-            WHERE c.job_id = ?
+            FROM job_outputs
+            WHERE job_id = ?
             "#,
         )
         .bind(job_id)

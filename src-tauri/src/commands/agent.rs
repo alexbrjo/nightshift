@@ -220,7 +220,7 @@ fn method_agent_instructions() -> &'static str {
         "Use the provided function tools whenever the user describes, creates, or changes a Method. ",
         "Nightshift owns durable Method draft state; do not pretend a Method is executable while blockers remain. ",
         "Use App Server native file tools to discover/read candidate project files, then represent prompt, data, ",
-        "JSON schema, eval script, collection, and api_key inputs as type: resource workflow nodes. ",
+        "JSON schema, eval script, and api_key inputs as type: resource workflow nodes. ",
         "Use the execution-config tool when the user provides model names, provider settings, temperature, ",
         "token limits, sample counts, strategy, or model sweep values. ",
         "Prefer creating a concise draft with a DAG of resource, inference, eval, and analysis nodes when details are not yet known. ",

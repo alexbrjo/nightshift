@@ -40,7 +40,7 @@ describe("workspace layout helpers", () => {
   it("keeps split sizes matched to surviving panels when closing a middle panel", () => {
     const first = createPanel("chat", { resourceId: "first" });
     const second = createPanel("job-view", { resourceId: 2 });
-    const third = createPanel("collection-view", { resourceId: 3 });
+    const third = createPanel("method-editor", { resourceId: "methods/example.method.yaml" });
     const layout = {
       ...defaultWorkspaceLayout(),
       panels: [first, second, third],
@@ -55,7 +55,7 @@ describe("workspace layout helpers", () => {
   });
 
   it("validates persisted schema and discards incompatible cache payloads", () => {
-    const layout = openOrFocusPanel(defaultWorkspaceLayout(), createPanel("collection-view", { resourceId: 3 }));
+    const layout = openOrFocusPanel(defaultWorkspaceLayout(), createPanel("job-view", { resourceId: 3 }));
     expect(parseWorkspaceLayout(serializeWorkspaceLayout(layout))?.panels).toHaveLength(1);
     expect(validateWorkspaceLayout({ ...layout, schemaVersion: 2 })).toBeNull();
     expect(parseWorkspaceLayout("{bad json")).toBeNull();
@@ -70,6 +70,18 @@ describe("workspace layout helpers", () => {
     const parsed = parseWorkspaceLayout(serializeWorkspaceLayout(layout));
 
     expect(parsed?.panels[0].viewMode).toBe("markdown");
+  });
+
+  it("applies requested view mode when focusing an existing project editor panel", () => {
+    const filePanel = createPanel("project-editor", { resourceId: "methods/current.method.yaml" });
+    const layout = openOrFocusPanel(defaultWorkspaceLayout(), filePanel);
+    const focused = openOrFocusPanel(
+      layout,
+      createPanel("project-editor", { resourceId: "methods/current.method.yaml", viewMode: "methodGraph" }),
+    );
+
+    expect(focused.panels).toHaveLength(1);
+    expect(focused.panels[0].viewMode).toBe("methodGraph");
   });
 
   it("ignores invalid persisted project editor view modes", () => {

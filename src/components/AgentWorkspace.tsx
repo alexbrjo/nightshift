@@ -24,14 +24,8 @@ import type {
   MethodDocument,
   MethodExecutionNodeSummary,
   MethodExecutionSummary,
-  MethodSummary,
 } from "../database";
 import MethodGraph from "./MethodGraph";
-
-interface ExecuteCurrentMethodDraftResult {
-  method: MethodSummary;
-  executionId: number;
-}
 
 interface ChatMessage {
   id: string;
@@ -104,13 +98,6 @@ const WELCOME_MESSAGE: ChatMessage = {
   text: "Describe the Method you want to design. I can help shape the workflow and keep the draft state visible beside chat.",
   status: "completed",
 };
-
-interface MethodExecutionEventPayload {
-  executionId: number;
-  nodeId?: string;
-  eventType: string;
-  payload: Record<string, unknown>;
-}
 
 function appendDelta(messages: ChatMessage[], itemId: string, delta: string): ChatMessage[] {
   const index = messages.findIndex((message) => message.id === itemId);
@@ -552,18 +539,6 @@ function isMethodDocument(value: unknown): value is MethodDocument {
   );
 }
 
-function derivedDraftReadiness(draft: MethodDocument | null) {
-  if (!draft) return { status: "drafting", blockers: [] };
-  const blockers: string[] = [];
-  if (!draft.title.trim() || draft.title === "Untitled Method") blockers.push("title");
-  if (!draft.objective.trim()) blockers.push("objective");
-  if (draft.workflow.nodes.length === 0) blockers.push("nodes");
-  for (const resource of draft.workflow.nodes.filter((node) => node.type === "resource")) {
-    if (!resource.path && !resource.reference) blockers.push(resource.id);
-  }
-  return { status: blockers.length ? "drafting" : "ready", blockers };
-}
-
 interface AgentWorkspaceProps {
   initialChatId?: string;
 }
@@ -623,14 +598,6 @@ export function MethodWorkspaceProvider({
   const [session, setSession] = useState<CodexAppServerSession | null>(null);
   const [activeTurn, setActiveTurn] = useState<CodexTurnSummary | null>(null);
   const [draft, setDraft] = useState<MethodDocument | null>(null);
-  const [activeExecutionId, setActiveExecutionId] = useState<number | null>(null);
-  const [executionNodes, setExecutionNodes] = useState<MethodExecutionNodeSummary[]>([]);
-  const [executionStatus, setExecutionStatus] = useState<string>("idle");
-  const [isExecutingMethod, setIsExecutingMethod] = useState(false);
-  const [methodActionFeedback, setMethodActionFeedback] = useState<{
-    tone: "info" | "success" | "error";
-    text: string;
-  } | null>(null);
   const [composerDrafts, setComposerDrafts] = useState<Record<string, string>>({});
   const [agentConfig, setAgentConfig] = useState<DesignAgentConfig | null>(null);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -849,23 +816,6 @@ export function MethodWorkspaceProvider({
     };
   }, [addSystemMessage, loadCurrentDraft, startSession]);
 
-  const refreshExecution = useCallback(
-    async (executionId: number) => {
-      try {
-        const [executions, nodes] = await Promise.all([
-          invoke<MethodExecutionSummary[]>("list_method_executions", { methodId: null }),
-          invoke<MethodExecutionNodeSummary[]>("get_method_execution_nodes", { executionId }),
-        ]);
-        const currentExecution = executions.find((execution) => execution.id === executionId);
-        setExecutionStatus(currentExecution?.status ?? "running");
-        setExecutionNodes(nodes);
-      } catch (err) {
-        addSystemMessage(`I could not refresh Method execution ${executionId}: ${String(err)}`, "failed");
-      }
-    },
-    [addSystemMessage],
-  );
-
   useEffect(() => {
     void loadCurrentDraft({ silentMissingProject: true });
   }, [loadCurrentDraft]);
@@ -910,36 +860,6 @@ export function MethodWorkspaceProvider({
       unlisten?.();
     };
   }, [addSystemMessage]);
-
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | null = null;
-    listen<MethodExecutionEventPayload>("method-execution-event", (event) => {
-      if (cancelled || event.payload.executionId !== activeExecutionId) return;
-      void refreshExecution(event.payload.executionId);
-    })
-      .then((fn) => {
-        if (cancelled) fn();
-        else unlisten = fn;
-      })
-      .catch((err) => {
-        addSystemMessage(`I could not subscribe to Method execution updates: ${String(err)}`, "failed");
-      });
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, [activeExecutionId, addSystemMessage, refreshExecution]);
-
-  useEffect(() => {
-    if (!activeExecutionId || ["completed", "completed_with_errors", "failed", "cancelled"].includes(executionStatus)) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      void refreshExecution(activeExecutionId);
-    }, 5000);
-    return () => window.clearInterval(timer);
-  }, [activeExecutionId, executionStatus, refreshExecution]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1104,34 +1024,6 @@ export function MethodWorkspaceProvider({
     await submitChatMessage(activeChatIdRef.current, activeMessages, text);
   }, [activeInput, activeMessages, clearComposerInput, isSending, submitChatMessage]);
 
-  const executeCurrentDraft = useCallback(async () => {
-    if (!draft || isExecutingMethod) return;
-    if (derivedDraftReadiness(draft).blockers.length > 0) return;
-    setIsExecutingMethod(true);
-    setMethodActionFeedback(null);
-    setExecutionStatus("starting");
-    setExecutionNodes([]);
-    try {
-      const result = await invoke<ExecuteCurrentMethodDraftResult>("execute_current_method_draft");
-      setActiveExecutionId(result.executionId);
-      window.dispatchEvent(new CustomEvent("nightshift-method-execution-started", { detail: result }));
-      setExecutionStatus("queued");
-      await refreshExecution(result.executionId);
-    } catch (err) {
-      setExecutionStatus("failed");
-      const message = `I could not execute the current Method draft: ${String(err)}`;
-      setMethodActionFeedback({ tone: "error", text: message });
-      addSystemMessage(message, "failed");
-    } finally {
-      setIsExecutingMethod(false);
-    }
-  }, [
-    addSystemMessage,
-    draft,
-    isExecutingMethod,
-    refreshExecution,
-  ]);
-
   const modelConfigLabel = agentConfig
     ? `${agentConfig.model} · reasoning ${agentConfig.reasoningSummary}${
       agentConfig.maxToolLoops ? ` · ${agentConfig.maxToolLoops} tool loops` : ""
@@ -1269,42 +1161,25 @@ export function MethodWorkspaceProvider({
   const graphPanel = useMemo(() => (
     <div className="agent-visual-panel agent-graph-sidebar">
       <section className="method-execution-panel" aria-label="Method execution">
-            <div className="method-execution-controls">
-              <button
-                type="button"
-                onClick={() => void loadCurrentDraft()}
-                disabled={isExecutingMethod}
-              >
-                Refresh
-              </button>
-              <button
-                type="button"
-                onClick={() => void executeCurrentDraft()}
-                disabled={!draft || derivedDraftReadiness(draft).blockers.length > 0 || isExecutingMethod}
-              >
-                {isExecutingMethod ? "Starting" : "Execute Draft"}
-              </button>
-            </div>
-            {methodActionFeedback && (
-              <div className={`method-action-feedback ${methodActionFeedback.tone}`} role="status">
-                {methodActionFeedback.text}
-              </div>
-            )}
-          </section>
+	            <div className="method-execution-controls">
+	              <button
+	                type="button"
+	                onClick={() => void loadCurrentDraft()}
+	              >
+	                Refresh
+	              </button>
+	            </div>
+	          </section>
 
-          {draft ? (
-            <MethodGraph draft={draft} executionNodes={executionNodes} />
-          ) : (
-            <div className="agent-empty-visual">No Method draft yet. Start in Chat to create one.</div>
-          )}
+	          {draft ? (
+	            <MethodGraph draft={draft} />
+	          ) : (
+	            <div className="agent-empty-visual">No Method draft yet. Start in Chat to create one.</div>
+	          )}
     </div>
   ), [
     draft,
-    executionNodes,
-    executeCurrentDraft,
-    isExecutingMethod,
     loadCurrentDraft,
-    methodActionFeedback,
   ]);
 
   const renderDraftGraphPanel = useCallback(() => (
@@ -1390,7 +1265,7 @@ function ExecutionGraphPanelView({ executionId }: { executionId?: string | numbe
       const execution = executions.find((candidate) => candidate.id === numericExecutionId);
       if (!execution) throw new Error(`Method execution ${numericExecutionId} was not found.`);
       const [frozenMethod, executionNodes] = await Promise.all([
-        invoke<MethodDocument>("get_method", { id: execution.methodId }),
+        invoke<MethodDocument>("get_execution_method", { executionId: numericExecutionId }),
         invoke<MethodExecutionNodeSummary[]>("get_method_execution_nodes", { executionId: numericExecutionId }),
       ]);
       setMethod(frozenMethod);

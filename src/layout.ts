@@ -1,13 +1,12 @@
 export const LAYOUT_SCHEMA_VERSION = 1;
 
 export type SidebarMode = "collapsed" | "expanded";
-export type ResourceKind = "conversation" | "method" | "project" | "job" | "collection";
+export type ResourceKind = "conversation" | "method" | "project" | "job";
 export type PanelType =
   | "chat"
   | "method-graph"
   | "method-execution"
   | "project-editor"
-  | "collection-view"
   | "job-view"
   | "new-job";
 export type EditorViewMode = "code" | "markdown" | "methodGraph";
@@ -45,19 +44,27 @@ export function panelId(type: PanelType, resourceId?: string | number | null): s
   return `${type}:${encodeURIComponent(suffix)}`;
 }
 
-export function createPanel(type: PanelType, options: { resourceId?: string | number | null; title?: string } = {}): WorkspacePanel {
+export function createPanel(
+  type: PanelType,
+  options: { resourceId?: string | number | null; title?: string; viewMode?: EditorViewMode } = {},
+): WorkspacePanel {
   const resourceId = options.resourceId === undefined || options.resourceId === null ? undefined : String(options.resourceId);
   return {
     id: panelId(type, resourceId),
     type,
     title: options.title ?? defaultPanelTitle(type, resourceId),
     resourceId,
+    ...(options.viewMode ? { viewMode: options.viewMode } : {}),
   };
 }
 
 export function openOrFocusPanel(layout: WorkspaceLayout, panel: WorkspacePanel): WorkspaceLayout {
   if (layout.panels.some((candidate) => candidate.id === panel.id)) {
-    return { ...layout, activePanelId: panel.id };
+    return {
+      ...layout,
+      panels: layout.panels.map((candidate) => candidate.id === panel.id ? { ...candidate, ...panel } : candidate),
+      activePanelId: panel.id,
+    };
   }
   return {
     ...layout,
@@ -131,8 +138,6 @@ function defaultPanelTitle(type: PanelType, resourceId?: string) {
       return resourceId ? `Execution #${resourceId}` : "Method Execution";
     case "project-editor":
       return resourceId ?? "Project Editor";
-    case "collection-view":
-      return resourceId ? `Collection #${resourceId}` : "Collection";
     case "job-view":
       return resourceId ? `Job #${resourceId}` : "Job";
     case "new-job":
@@ -165,7 +170,6 @@ function isPanelType(value: unknown): value is PanelType {
     || value === "method-graph"
     || value === "method-execution"
     || value === "project-editor"
-    || value === "collection-view"
     || value === "job-view"
     || value === "new-job";
 }
@@ -174,8 +178,7 @@ function isResourceKind(value: unknown): value is ResourceKind {
   return value === "conversation"
     || value === "method"
     || value === "project"
-    || value === "job"
-    || value === "collection";
+    || value === "job";
 }
 
 function isEditorViewMode(value: unknown): value is EditorViewMode {
