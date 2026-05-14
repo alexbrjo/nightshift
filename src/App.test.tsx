@@ -77,6 +77,7 @@ describe("App workspace shell", () => {
 
     expect(workspacePanelTitles()).toEqual([]);
     expect(screen.getByText("Let's get started!")).toBeInTheDocument();
+    expect(document.querySelector(".workspace-empty-state-image")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Create a new chat" })).toBeInTheDocument();
     expect(screen.queryByText("Planning Chat")).not.toBeInTheDocument();
   });

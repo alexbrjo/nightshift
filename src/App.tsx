@@ -20,6 +20,7 @@ import {
 } from "./components/ProjectFileViews";
 import { ToastProvider } from "./components/Toast";
 import type { MethodExecutionSummary } from "./database";
+import raccoonsDumpsterImage from "./assets/raccoons_dumpster.png";
 import {
   CodeViewIcon,
   DropperIcon,
@@ -582,6 +583,12 @@ export default function App() {
 
   const renderEmptyWorkspace = () => (
     <div className="workspace-empty-state">
+      <img
+        className="workspace-empty-state-image"
+        src={raccoonsDumpsterImage}
+        alt=""
+        aria-hidden="true"
+      />
       <h2>Let's get started!</h2>
       <p>Create a chat, Method, job, or open a project file from the sidebar.</p>
     </div>
