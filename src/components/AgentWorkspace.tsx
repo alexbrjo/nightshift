@@ -1160,28 +1160,14 @@ export function MethodWorkspaceProvider({
   }, [chatSessions, renderActiveChatPanel, renderEmptyChatPanel, renderSavedChatPanel]);
 
   const graphPanel = useMemo(() => (
-    <div className="agent-visual-panel agent-graph-sidebar">
-      <section className="method-execution-panel" aria-label="Method execution">
-	            <div className="method-execution-controls">
-	              <button
-	                type="button"
-	                onClick={() => void loadCurrentDraft()}
-	              >
-	                Refresh
-	              </button>
-	            </div>
-	          </section>
-
-	          {draft ? (
-	            <MethodGraph draft={draft} />
-	          ) : (
-	            <div className="agent-empty-visual">No Method draft yet. Start in Chat to create one.</div>
-	          )}
+    <div className="agent-visual-panel agent-graph-sidebar graph-only">
+      {draft ? (
+        <MethodGraph draft={draft} />
+      ) : (
+        <div className="agent-empty-visual">No Method draft yet. Start in Chat to create one.</div>
+      )}
     </div>
-  ), [
-    draft,
-    loadCurrentDraft,
-  ]);
+  ), [draft]);
 
   const renderDraftGraphPanel = useCallback(() => (
     <div className="agent-chat-workspace panel-embedded">{graphPanel}</div>
@@ -1306,7 +1292,7 @@ function ExecutionGraphPanelView({ executionId }: { executionId?: string | numbe
   }
   return (
     <div className="agent-chat-workspace panel-embedded">
-      <div className="agent-visual-panel agent-graph-sidebar">
+      <div className="agent-visual-panel agent-graph-sidebar graph-only">
         <MethodGraph draft={method} executionNodes={nodes} />
       </div>
     </div>

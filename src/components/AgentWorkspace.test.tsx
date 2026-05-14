@@ -150,7 +150,9 @@ describe("AgentWorkspace", () => {
       </MethodWorkspaceProvider>,
     );
 
-    expect(await screen.findByText("Generate")).toBeInTheDocument();
+    const generateNode = await screen.findByText("Generate");
+    expect(generateNode).toBeInTheDocument();
+    expect(generateNode.closest(".agent-graph-sidebar")).toHaveClass("graph-only");
     expect(screen.queryByRole("button", { name: "Refresh" })).not.toBeInTheDocument();
     expect(setIntervalSpy.mock.calls.some(([, delay]) => delay === 5000)).toBe(false);
     const initialLoads = mockInvoke.mock.calls.filter(([command]) => command === "list_method_executions").length;

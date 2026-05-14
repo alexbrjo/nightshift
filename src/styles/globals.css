@@ -2771,6 +2771,10 @@ legend {
   padding: 0;
 }
 
+.agent-graph-sidebar.graph-only {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .agent-graph-sidebar .agent-empty-visual {
   margin: 0;
   padding: 20px;
