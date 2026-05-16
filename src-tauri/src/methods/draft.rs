@@ -16,8 +16,10 @@ use super::model::{
 use super::paths::{project_root, require_nonempty};
 use super::storage::{read_method_document, write_method_document};
 
-const FILE_RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "eval_script"];
-const RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "eval_script", "api_key"];
+const FILE_RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "script"];
+const RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "script", "api_key"];
+const NODE_TYPES: &[&str] =
+    &["resource", "sample", "inference", "transform", "analysis", "aggregate"];
 fn draft_path(root: &Path) -> PathBuf {
     root.join("methods").join("current.method.yaml")
 }
@@ -203,7 +205,7 @@ fn resource_kind_label(kind: &str) -> &'static str {
         "prompt" => "a prompt file",
         "data" => "a data file",
         "json_schema" => "a JSON schema file",
-        "eval_script" => "an eval script",
+        "script" => "a script",
         "api_key" => "an API key",
         _ => "a supported resource",
     }
@@ -212,9 +214,9 @@ fn resource_kind_label(kind: &str) -> &'static str {
 fn resource_kind_matches_node(kind: &str, node_type: &str) -> bool {
     match normalized_resource_kind(kind) {
         "prompt" | "api_key" => node_type == "inference",
-        "json_schema" => matches!(node_type, "inference" | "eval"),
-        "eval_script" => matches!(node_type, "eval" | "transform"),
-        "data" => matches!(node_type, "sample" | "inference" | "eval" | "transform"),
+        "json_schema" => node_type == "inference",
+        "script" => node_type == "transform",
+        "data" => matches!(node_type, "sample" | "inference" | "transform"),
         _ => false,
     }
 }
@@ -226,6 +228,12 @@ pub(crate) fn validate_graph(nodes: &[MethodWorkflowNode]) -> Result<(), String>
     for node in nodes {
         require_nonempty("method.workflow.nodes[].id", &node.id)?;
         require_nonempty("method.workflow.nodes[].type", &node.node_type)?;
+        if !NODE_TYPES.contains(&node.node_type.as_str()) {
+            return Err(format!(
+                "draft node '{}' has unsupported type '{}'",
+                node.id, node.node_type
+            ));
+        }
         if !ids.insert(node.id.as_str()) {
             return Err(format!("draft node id '{}' is duplicated", node.id));
         }

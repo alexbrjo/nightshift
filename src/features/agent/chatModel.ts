@@ -90,6 +90,7 @@ export function markdownSource(text: string) {
 
 export const METHOD_DRAFT_MUTATION_TOOLS = new Set([
   "create_method_draft",
+  "create_new_method",
   "update_method_draft_metadata",
   "update_method_draft_execution_config",
   "replace_method_draft_graph",

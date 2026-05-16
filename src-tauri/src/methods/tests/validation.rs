@@ -63,6 +63,16 @@ fn validate_method_rejects_cycles() {
 }
 
 #[test]
+fn validate_method_rejects_eval_node_type() {
+    let mut method = sample_method();
+    method.workflow.nodes[1].node_type = "eval".into();
+
+    let err = validate_method(&method).unwrap_err();
+
+    assert!(err.contains("unsupported type 'eval'"), "got: {err}");
+}
+
+#[test]
 fn validate_method_rejects_secret_values() {
     let mut method = sample_method();
     method.provider = serde_yaml::from_str("api_key: sk-test").unwrap();

@@ -58,7 +58,7 @@ fn draft_graph_validation_rejects_cycles() {
         MethodWorkflowNode {
             id: "b".into(),
             label: "B".into(),
-            node_type: "eval".into(),
+            node_type: "transform".into(),
             kind: None,
             path: None,
             reference: None,

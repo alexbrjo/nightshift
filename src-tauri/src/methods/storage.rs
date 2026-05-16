@@ -30,10 +30,7 @@ pub(crate) fn freeze_files(
     fs::create_dir_all(dest.join("files"))
         .map_err(|e| format!("Failed to create method files directory: {}", e))?;
     for resource in method.workflow.nodes.iter_mut().filter(|node| node.is_resource()) {
-        if !matches!(
-            resource.kind.as_deref(),
-            Some("prompt" | "data" | "json_schema" | "eval_script")
-        ) {
+        if !matches!(resource.kind.as_deref(), Some("prompt" | "data" | "json_schema" | "script")) {
             continue;
         }
         let Some(path) = resource.path.as_mut() else {

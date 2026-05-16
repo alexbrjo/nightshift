@@ -34,8 +34,8 @@ pub(crate) fn required_file_kind_for_node(
                 vec![]
             }
         }
-        "transform" | "eval" => {
-            let mut kinds = vec![("script", "Transform/eval needs a script file".to_string())];
+        "transform" => {
+            let mut kinds = vec![("script", "Transform needs a script file".to_string())];
             if runnable_dependency_ids(method, node).next().is_none() {
                 kinds.push(("data", "Standalone transform needs a data source".to_string()));
             }

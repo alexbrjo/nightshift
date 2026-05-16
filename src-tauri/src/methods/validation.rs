@@ -5,7 +5,8 @@ use super::config::normalized_resource_kind;
 use super::model::{MethodDocument, MethodWorkflowNode};
 use super::paths::{require_nonempty, validate_method_id, validate_relative_path};
 
-const RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "eval_script", "api_key"];
+const RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "script", "api_key"];
+const NODE_TYPES: &[&str] = &["resource", "sample", "inference", "transform", "analysis"];
 const GENERATED_OR_DEPENDENCY_DIRS: &[&str] = &[
     ".git",
     ".nightshift",
@@ -86,6 +87,12 @@ pub fn validate_method(method: &MethodDocument) -> Result<(), String> {
                 node.id
             ));
         }
+        if !NODE_TYPES.contains(&node.node_type.as_str()) {
+            return Err(format!(
+                "method.workflow node '{}' has unsupported type '{}'",
+                node.id, node.node_type
+            ));
+        }
         if node.node_type == "analysis" {
             if let Some(path) = node.path.as_deref().filter(|path| !path.trim().is_empty()) {
                 validate_relative_path(path)?;
@@ -141,9 +148,9 @@ fn resource_kind_matches_node(resource: &MethodWorkflowNode, node: &MethodWorkfl
     let kind = normalized_resource_kind(resource.kind.as_deref().unwrap_or_default());
     match kind {
         "prompt" | "api_key" => node.node_type == "inference",
-        "json_schema" => matches!(node.node_type.as_str(), "inference" | "eval"),
-        "eval_script" => node.node_type == "eval" || node.node_type == "transform",
-        "data" => matches!(node.node_type.as_str(), "sample" | "inference" | "eval" | "transform"),
+        "json_schema" => node.node_type == "inference",
+        "script" => node.node_type == "transform",
+        "data" => matches!(node.node_type.as_str(), "sample" | "inference" | "transform"),
         _ => false,
     }
 }
@@ -153,7 +160,7 @@ fn resource_kind_label(kind: &str) -> &'static str {
         "prompt" => "a prompt file",
         "data" => "a data file",
         "json_schema" => "a JSON schema file",
-        "eval_script" => "an eval script",
+        "script" => "a script",
         "api_key" => "an API key",
         _ => "a supported resource",
     }

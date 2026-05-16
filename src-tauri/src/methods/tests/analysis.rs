@@ -16,39 +16,14 @@ model_values:
 }
 
 #[test]
-fn method_tool_schema_exposes_analysis_without_aggregate() {
+fn method_tool_schema_exposes_only_method_file_helpers() {
     let tools = crate::methods::method_function_tools();
-    let replace_graph = tools
+    let names = tools
         .iter()
-        .find(|tool| {
-            tool.get("name").and_then(serde_json::Value::as_str)
-                == Some("replace_method_draft_graph")
-        })
-        .unwrap();
-    let enum_values = replace_graph["parameters"]["properties"]["workflow"]["properties"]["nodes"]
-        ["items"]["properties"]["type"]["enum"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|value| value.as_str().unwrap())
+        .map(|tool| tool.get("name").and_then(serde_json::Value::as_str).unwrap())
         .collect::<Vec<_>>();
 
-    assert!(enum_values.contains(&"analysis"));
-    assert!(!enum_values.contains(&"output_file"));
-    assert!(!enum_values.contains(&"aggregate"));
-    assert!(replace_graph["parameters"]["properties"]["workflow"]["properties"]["nodes"]["items"]
-        ["properties"]["config"]["properties"]
-        .as_object()
-        .unwrap()
-        .get("output_file")
-        .is_none());
-    let config_properties = replace_graph["parameters"]["properties"]["workflow"]["properties"]
-        ["nodes"]["items"]["properties"]["config"]["properties"]
-        .as_object()
-        .unwrap();
-    for key in ["samples", "strategy", "model", "server_url", "prompt_file", "json_schema_file"] {
-        assert!(config_properties.contains_key(key), "missing config key {key}");
-    }
+    assert_eq!(names, vec!["create_new_method", "explain_method"]);
 }
 
 #[test]

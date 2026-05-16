@@ -315,7 +315,7 @@ async fn create_transform_job_for_node_uses_frozen_script_and_data() {
     let mut method = sample_method();
     method.workflow.nodes = vec![
         method_resource("data", "data", "data/examples.jsonl"),
-        method_resource("script", "eval_script", "scripts/score.js"),
+        method_resource("script", "script", "scripts/score.js"),
         MethodWorkflowNode {
             id: "score".into(),
             label: "Score".into(),

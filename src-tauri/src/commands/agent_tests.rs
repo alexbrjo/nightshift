@@ -9,7 +9,7 @@ mod tests {
             "output": [{
                 "type": "function_call",
                 "call_id": "call_1",
-                "name": "create_method_draft",
+                "name": "create_new_method",
                 "arguments": "{\"title\":\"T\",\"objective\":\"O\"}"
             }]
         });
@@ -17,7 +17,7 @@ mod tests {
         let calls = response_function_calls(&response).unwrap();
 
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].name, "create_method_draft");
+        assert_eq!(calls[0].name, "create_new_method");
     }
 
     #[test]
@@ -61,9 +61,9 @@ mod tests {
         assert!(instructions.contains("Use portable GitHub Flavored Markdown for readability"));
         assert!(instructions.contains("fenced code blocks only for code, paths, or configuration"));
         assert!(instructions.contains("Do not use raw HTML"));
-        assert!(instructions.contains("You only have Method draft tools"));
+        assert!(instructions.contains("filesystem tools"));
         assert!(instructions.contains("Use node config only for settings that must differ by node"));
-        assert!(!instructions.contains("App Server native file tools"));
+        assert!(instructions.contains("Prompt-based judging is an inference node"));
     }
 
     #[test]
@@ -76,7 +76,7 @@ mod tests {
                     "workflow": { "nodes": [
                         { "id": "prompt", "type": "resource" },
                         { "id": "generate", "type": "inference" },
-                        { "id": "judge", "type": "eval" }
+                        { "id": "judge", "type": "transform" }
                     ] }
                 }
             }

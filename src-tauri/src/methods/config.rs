@@ -150,7 +150,6 @@ pub(crate) fn config_f64(
 pub(crate) fn normalized_resource_kind(kind: &str) -> &str {
     match kind {
         "schema" | "json_schema_file" => "json_schema",
-        "script" => "eval_script",
         "prompt_file" => "prompt",
         "data_file" => "data",
         other => other,

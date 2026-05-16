@@ -116,8 +116,8 @@ export function resourceKindLabel(kind: string | undefined) {
     case "json_schema":
     case "json_schema_file":
       return "Schema";
-    case "eval_script":
-      return "Eval script";
+    case "script":
+      return "Script";
     case "api_key":
       return "API key";
     default:

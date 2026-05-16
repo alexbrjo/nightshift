@@ -46,7 +46,7 @@ describe("buildMethodGraphElements", () => {
           {
             id: "score",
             label: "Score answers",
-            type: "eval",
+            type: "transform",
             depends_on: ["generate", "schema"],
             config: {},
           },
@@ -152,10 +152,10 @@ describe("buildMethodGraphElements", () => {
         nodes: [
           { id: "data", label: "Dataset", type: "resource", kind: "data", path: "data.jsonl" },
           { id: "prompt", label: "Prompt", type: "resource", kind: "prompt", path: "prompt.md" },
-          { id: "script", label: "Script", type: "resource", kind: "eval_script", path: "eval.js" },
+          { id: "script", label: "Script", type: "resource", kind: "script", path: "transform.js" },
           { id: "a", label: "Model A", type: "inference", depends_on: ["data", "prompt"], config: {} },
           { id: "b", label: "Model B", type: "inference", depends_on: ["data", "prompt"], config: {} },
-          { id: "eval", label: "Evaluate", type: "eval", depends_on: ["a", "b", "script"], config: {} },
+          { id: "transform", label: "Transform", type: "transform", depends_on: ["a", "b", "script"], config: {} },
         ],
       },
     });
@@ -172,7 +172,7 @@ describe("buildMethodGraphElements", () => {
     expect(graph.edges).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "data-a", source: "data", target: "a" }),
       expect.objectContaining({ id: "prompt-b", source: "prompt", target: "b" }),
-      expect.objectContaining({ id: "script-eval", source: "script", target: "eval" }),
+      expect.objectContaining({ id: "script-transform", source: "script", target: "transform" }),
     ]));
   });
 
@@ -199,7 +199,7 @@ describe("buildMethodGraphElements", () => {
       workflow: {
         nodes: [
           { id: "generate", label: "Generate", type: "inference", config: undefined },
-          { id: "score", label: "Score", type: "eval", config: undefined },
+          { id: "score", label: "Score", type: "transform", config: undefined },
         ],
       },
       parameters: {
@@ -277,7 +277,7 @@ describe("buildMethodGraphElements", () => {
         nodes: [
           { id: "done", label: "Done", type: "sample", config: {} },
           { id: "run", label: "Run", type: "inference", depends_on: ["done"], config: {} },
-          { id: "wait", label: "Wait", type: "eval", depends_on: ["run"], config: {} },
+          { id: "wait", label: "Wait", type: "transform", depends_on: ["run"], config: {} },
           { id: "bad", label: "Bad", type: "analysis", depends_on: ["wait"], config: {} },
         ],
       },
@@ -289,7 +289,7 @@ describe("buildMethodGraphElements", () => {
         executionNodes={[
           { id: 1, executionId: 1, nodeId: "done", nodeType: "sample", status: "completed" },
           { id: 2, executionId: 1, nodeId: "run", nodeType: "inference", status: "running" },
-          { id: 3, executionId: 1, nodeId: "wait", nodeType: "eval", status: "queued" },
+          { id: 3, executionId: 1, nodeId: "wait", nodeType: "transform", status: "queued" },
           { id: 4, executionId: 1, nodeId: "bad", nodeType: "analysis", status: "failed" },
         ]}
       />,

@@ -1,24 +1,5 @@
 use super::*;
 
-pub(crate) async fn run_not_implemented_agent(
-    db: &DatabaseState,
-    execution_id: i64,
-    node: &MethodWorkflowNode,
-) -> Result<String, String> {
-    insert_artifact(
-        db,
-        execution_id,
-        Some(&node.id),
-        "not_implemented",
-        "inline",
-        &format!(
-            "{} agent is not implemented yet. The node was recorded with scoped status for this execution.",
-            node.node_type
-        ),
-    )
-    .await
-}
-
 pub(crate) async fn wait_if_paused(
     app: &AppHandle,
     db: &DatabaseState,
@@ -66,18 +47,11 @@ async fn run_method_node(
     execution_id: i64,
     node: &MethodWorkflowNode,
     node_outputs: &HashMap<String, String>,
-    had_not_implemented: &mut bool,
 ) -> Result<String, String> {
     match node.node_type.as_str() {
         "sample" => run_sample_agent(app, db, method, node, execution_id, node_outputs).await,
         "inference" => run_inference_agent(app, db, method, node, execution_id, node_outputs).await,
         "transform" => run_transform_agent(app, db, method, node, execution_id, node_outputs).await,
-        "eval"
-            if method_file_by_kind(method, "script").is_some()
-                || config_string(node, method, "script_file", None).is_some() =>
-        {
-            run_transform_agent(app, db, method, node, execution_id, node_outputs).await
-        }
         "aggregate" => {
             insert_event(
                 app,
@@ -95,29 +69,6 @@ async fn run_method_node(
             run_analysis_agent(db, method, execution_id, node, node_outputs).await
         }
         "analysis" => run_analysis_agent(db, method, execution_id, node, node_outputs).await,
-        "eval" => {
-            *had_not_implemented = true;
-            let artifact = run_not_implemented_agent(db, execution_id, node).await?;
-            update_node_status(
-                db,
-                execution_id,
-                &node.id,
-                "not_implemented",
-                Some(&artifact),
-                Some("Agent implementation is not available yet"),
-            )
-            .await?;
-            insert_event(
-                app,
-                db,
-                execution_id,
-                Some(&node.id),
-                "node_not_implemented",
-                serde_json::json!({ "nodeType": node.node_type, "artifact": artifact }),
-            )
-            .await?;
-            Ok(artifact)
-        }
         other => Err(format!("Unknown method node type '{}'", other)),
     }
 }
@@ -146,7 +97,6 @@ pub(crate) async fn orchestrate_method_execution(
     }
 
     let mut node_outputs = HashMap::new();
-    let mut had_not_implemented = false;
     for node in ordered_nodes {
         if let Err(e) = wait_if_paused(&app, &db, execution_id, &control).await {
             if control.cancel_requested.load(Ordering::SeqCst) {
@@ -171,45 +121,27 @@ pub(crate) async fn orchestrate_method_execution(
         )
         .await?;
 
-        let is_not_implemented_eval = node.node_type == "eval"
-            && method_file_by_kind(&method, "script").is_none()
-            && config_string(&node, &method, "script_file", None).is_none();
-
-        match run_method_node(
-            &app,
-            &db,
-            &method,
-            execution_id,
-            &node,
-            &node_outputs,
-            &mut had_not_implemented,
-        )
-        .await
-        {
+        match run_method_node(&app, &db, &method, execution_id, &node, &node_outputs).await {
             Ok(output_ref) => {
                 node_outputs.insert(node.id.clone(), output_ref.clone());
-                if !is_not_implemented_eval {
-                    update_node_status(
-                        &db,
-                        execution_id,
-                        &node.id,
-                        "completed",
-                        Some(&output_ref),
-                        None,
-                    )
-                    .await?;
-                }
-                if !is_not_implemented_eval {
-                    insert_event(
-                        &app,
-                        &db,
-                        execution_id,
-                        Some(&node.id),
-                        "node_completed",
-                        serde_json::json!({ "outputRef": output_ref }),
-                    )
-                    .await?;
-                }
+                update_node_status(
+                    &db,
+                    execution_id,
+                    &node.id,
+                    "completed",
+                    Some(&output_ref),
+                    None,
+                )
+                .await?;
+                insert_event(
+                    &app,
+                    &db,
+                    execution_id,
+                    Some(&node.id),
+                    "node_completed",
+                    serde_json::json!({ "outputRef": output_ref }),
+                )
+                .await?;
             }
             Err(e) => {
                 update_node_status(&db, execution_id, &node.id, "failed", None, Some(&e)).await?;
@@ -228,15 +160,14 @@ pub(crate) async fn orchestrate_method_execution(
         }
     }
 
-    let status = if had_not_implemented { "completed_with_errors" } else { "completed" };
-    update_execution_status(&db, execution_id, status, None).await?;
+    update_execution_status(&db, execution_id, "completed", None).await?;
     insert_event(
         &app,
         &db,
         execution_id,
         None,
         "execution_completed",
-        serde_json::json!({ "status": status }),
+        serde_json::json!({ "status": "completed" }),
     )
     .await?;
     Ok(())
