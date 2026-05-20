@@ -1,3 +1,4 @@
+use crate::codex_app_server::CodexAppServerManager;
 use crate::database::DatabaseState;
 use crate::state::AppState;
 use crate::utils::{sanitize_name, scan_directory};
@@ -23,15 +24,41 @@ fn validate_relative_path(relative_path: &str) -> Result<&Path, String> {
 
 fn reject_protected_write_path(relative_path: &str) -> Result<(), String> {
     let normalized = relative_path.replace('\\', "/");
-    if normalized == ".git"
-        || normalized.starts_with(".git/")
-        || normalized == ".nightshift"
-        || normalized.starts_with(".nightshift/")
-    {
+    if is_protected_app_path(&normalized) {
         Err(format!("Writes to '{}' are managed by Nightshift and are not allowed", normalized))
     } else {
         Ok(())
     }
+}
+
+fn is_protected_app_path(relative_path: &str) -> bool {
+    relative_path == ".git"
+        || relative_path.starts_with(".git/")
+        || relative_path == ".nightshift"
+        || relative_path.starts_with(".nightshift/")
+}
+
+fn reject_protected_canonical_path(
+    root_canonical: &Path,
+    canonical_path: &Path,
+) -> Result<(), String> {
+    let relative = canonical_path.strip_prefix(root_canonical).unwrap_or(canonical_path);
+    let normalized = relative.to_string_lossy().replace('\\', "/");
+    if is_protected_app_path(&normalized) {
+        Err(format!("Writes to '{}' are managed by Nightshift and are not allowed", normalized))
+    } else {
+        Ok(())
+    }
+}
+
+fn reject_existing_protected_write_path(root: &Path, target: &Path) -> Result<(), String> {
+    let root_canonical = canonical_root(root)?;
+    let target_canonical =
+        fs::canonicalize(target).map_err(|e| format!("Failed to resolve path: {}", e))?;
+    if !target_canonical.starts_with(&root_canonical) {
+        return Err("Path outside root folder".to_string());
+    }
+    reject_protected_canonical_path(&root_canonical, &target_canonical)
 }
 
 fn canonical_root(root: &Path) -> Result<PathBuf, String> {
@@ -71,9 +98,13 @@ fn child_path_within_root(
     if !parent_canonical.starts_with(&root_canonical) {
         return Err("Path outside root folder".to_string());
     }
+    reject_protected_canonical_path(&root_canonical, &parent_canonical)?;
     if !parent_canonical.is_dir() {
         return Err("Parent is not a directory".to_string());
     }
+
+    let canonical_child = parent_canonical.join(name);
+    reject_protected_canonical_path(&root_canonical, &canonical_child)?;
 
     Ok(parent.join(name))
 }
@@ -97,6 +128,7 @@ fn rename_path_impl(
     reject_protected_write_path(&relative_path)?;
     let new_name = sanitize_name(&new_name)?;
     let old_path = existing_path_within_root(&root, &relative_path)?;
+    reject_existing_protected_write_path(&root, &old_path)?;
     let parent = old_path.parent().ok_or("Invalid path".to_string())?;
     let new_path = child_path_within_root(
         &root,
@@ -121,11 +153,13 @@ fn move_path_impl(
     reject_protected_write_path(&source_relative_path)?;
     reject_protected_write_path(&target_parent_relative_path)?;
     let source = existing_path_within_root(&root, &source_relative_path)?;
+    reject_existing_protected_write_path(&root, &source)?;
     let target_parent = if target_parent_relative_path.is_empty() {
         root.clone()
     } else {
         existing_path_within_root(&root, &target_parent_relative_path)?
     };
+    reject_existing_protected_write_path(&root, &target_parent)?;
 
     if !target_parent.is_dir() {
         return Err("Target parent is not a directory".to_string());
@@ -159,6 +193,7 @@ fn delete_path_impl(app_state: &AppState, relative_path: String) -> Result<(), S
     let root = root_path(app_state)?;
     reject_protected_write_path(&relative_path)?;
     let target = existing_path_within_root(&root, &relative_path)?;
+    reject_existing_protected_write_path(&root, &target)?;
 
     if target.is_dir() {
         fs::remove_dir_all(&target).map_err(|e| format!("Failed to delete folder: {}", e))?;
@@ -173,6 +208,7 @@ fn copy_file_impl(app_state: &AppState, relative_path: String) -> Result<String,
     let root = root_path(app_state)?;
     reject_protected_write_path(&relative_path)?;
     let source = existing_path_within_root(&root, &relative_path)?;
+    reject_existing_protected_write_path(&root, &source)?;
 
     if !source.is_file() {
         return Err("Can only copy files".to_string());
@@ -215,12 +251,14 @@ fn write_file_impl(
     if !parent_canonical.starts_with(&root_canonical) {
         return Err("Path outside root folder".to_string());
     }
+    reject_protected_canonical_path(&root_canonical, &parent_canonical)?;
     if target.exists() {
         let target_canonical =
             fs::canonicalize(&target).map_err(|e| format!("Failed to resolve path: {}", e))?;
         if !target_canonical.starts_with(&root_canonical) {
             return Err("Path outside root folder".to_string());
         }
+        reject_protected_canonical_path(&root_canonical, &target_canonical)?;
     }
 
     fs::write(&target, content.as_bytes()).map_err(|e| format!("Failed to write file: {}", e))?;
@@ -270,6 +308,7 @@ pub async fn scan_folder(
     app: AppHandle,
     app_state: State<'_, AppState>,
     db_state: State<'_, DatabaseState>,
+    codex: State<'_, CodexAppServerManager>,
     path: String,
 ) -> Result<serde_json::Value, String> {
     let path_buf = PathBuf::from(&path);
@@ -288,6 +327,7 @@ pub async fn scan_folder(
         *root = Some(resolved.clone());
     }
     if previous_root.as_ref() != Some(&resolved) {
+        codex.reset_for_project_switch().await;
         emit_project_opened(&app, &resolved);
     }
 
@@ -305,6 +345,7 @@ pub async fn set_root_path(
     app: AppHandle,
     app_state: State<'_, AppState>,
     db_state: State<'_, DatabaseState>,
+    codex: State<'_, CodexAppServerManager>,
     path: String,
 ) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
@@ -316,6 +357,7 @@ pub async fn set_root_path(
         *root = Some(resolved.clone());
     }
     if previous_root.as_ref() != Some(&resolved) {
+        codex.reset_for_project_switch().await;
         emit_project_opened(&app, &resolved);
     }
     Ok(())
@@ -613,6 +655,87 @@ mod tests {
         .is_err());
         assert!(write_file_impl(&app_state, ".git/config".to_string(), "x".to_string()).is_err());
 
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn create_folder_rejects_protected_destination_names() {
+        let test_dir = setup_test_dir();
+        let app_state = AppState { root_path: Mutex::new(Some(test_dir.clone())) };
+
+        assert!(create_folder_impl(&app_state, "".to_string(), ".nightshift".to_string()).is_err());
+        assert!(create_folder_impl(&app_state, "".to_string(), ".git".to_string()).is_err());
+        assert!(!test_dir.join(".nightshift").exists());
+        assert!(!test_dir.join(".git").exists());
+
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn create_file_rejects_protected_destination_names() {
+        let test_dir = setup_test_dir();
+        let app_state = AppState { root_path: Mutex::new(Some(test_dir.clone())) };
+
+        assert!(create_file_impl(&app_state, "".to_string(), ".nightshift".to_string()).is_err());
+        assert!(create_file_impl(&app_state, "".to_string(), ".git".to_string()).is_err());
+        assert!(!test_dir.join(".nightshift").exists());
+        assert!(!test_dir.join(".git").exists());
+
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn rename_path_rejects_protected_destination_names() {
+        let test_dir = setup_test_dir();
+        let app_state = AppState { root_path: Mutex::new(Some(test_dir.clone())) };
+        create_folder_impl(&app_state, "".to_string(), "folder".to_string()).unwrap();
+        create_file_impl(&app_state, "".to_string(), "file.txt".to_string()).unwrap();
+
+        assert!(
+            rename_path_impl(&app_state, "folder".to_string(), ".nightshift".to_string()).is_err()
+        );
+        assert!(rename_path_impl(&app_state, "file.txt".to_string(), ".git".to_string()).is_err());
+        assert!(test_dir.join("folder").exists());
+        assert!(test_dir.join("file.txt").exists());
+        assert!(!test_dir.join(".nightshift").exists());
+        assert!(!test_dir.join(".git").exists());
+
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_file_rejects_symlink_to_protected_app_path() {
+        use std::os::unix::fs::symlink;
+
+        let test_dir = setup_test_dir();
+        fs::create_dir_all(test_dir.join(".nightshift")).unwrap();
+        fs::write(test_dir.join(".nightshift/config.json"), "{}").unwrap();
+        symlink(test_dir.join(".nightshift/config.json"), test_dir.join("innocent.json")).unwrap();
+        let app_state = AppState { root_path: Mutex::new(Some(test_dir.clone())) };
+
+        let result = write_file_impl(&app_state, "innocent.json".to_string(), "secret".to_string());
+
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(test_dir.join(".nightshift/config.json")).unwrap(), "{}");
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_file_rejects_symlink_parent_to_protected_app_path() {
+        use std::os::unix::fs::symlink;
+
+        let test_dir = setup_test_dir();
+        fs::create_dir_all(test_dir.join(".nightshift")).unwrap();
+        symlink(test_dir.join(".nightshift"), test_dir.join("metadata")).unwrap();
+        let app_state = AppState { root_path: Mutex::new(Some(test_dir.clone())) };
+
+        let result =
+            create_file_impl(&app_state, "metadata".to_string(), "config.json".to_string());
+
+        assert!(result.is_err());
+        assert!(!test_dir.join(".nightshift/config.json").exists());
         fs::remove_dir_all(&test_dir).ok();
     }
 

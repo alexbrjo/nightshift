@@ -35,8 +35,8 @@ pub async fn get_method_agent_function_tools() -> Result<Vec<Value>, String> {
 #[tauri::command]
 pub async fn get_design_agent_config() -> Result<DesignAgentConfig, String> {
     Ok(DesignAgentConfig {
-        model: "codex-app-server".into(),
-        reasoning_summary: "app-server".into(),
+        model: "Codex App Server".into(),
+        reasoning_summary: "server-managed".into(),
         max_tool_loops: 0,
     })
 }

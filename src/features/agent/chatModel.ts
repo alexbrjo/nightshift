@@ -3,6 +3,7 @@ import { emitAppEvent } from "../../appEvents";
 import type { ChatItem, ChatMessage, ChatSession } from "./agentTypes";
 
 const RAW_SCRIPT_OR_STYLE_BLOCK = /<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi;
+export const CURRENT_METHOD_DRAFT_PATH = "methods/current.method.yaml";
 export const NEW_CHAT_DRAFT_KEY = "__nightshift_new_chat__";
 export const WELCOME_MESSAGE: ChatMessage = {
   id: "welcome",
@@ -97,7 +98,7 @@ export const METHOD_DRAFT_MUTATION_TOOLS = new Set([
 ]);
 
 function valueReferencesMethodFile(value: unknown): boolean {
-  if (typeof value === "string") return value.includes("methods/current.method.yaml");
+  if (typeof value === "string") return value.includes(CURRENT_METHOD_DRAFT_PATH);
   if (Array.isArray(value)) return value.some(valueReferencesMethodFile);
   if (value && typeof value === "object") {
     return Object.values(value).some(valueReferencesMethodFile);

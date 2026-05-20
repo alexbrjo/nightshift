@@ -74,6 +74,23 @@ describe("FileTree", () => {
     expect(screen.queryByText("my-project")).not.toBeInTheDocument();
   });
 
+  it("asks before switching away from an open project", async () => {
+    await setupWithFolder({ name: "project", children: [] });
+    vi.clearAllMocks({ implementations: false });
+    mockOpen.mockResolvedValueOnce("/test/other-project");
+    mockAsk.mockResolvedValueOnce(false);
+
+    fireEvent.click(screen.getByText("Open Folder"));
+
+    await waitFor(() => {
+      expect(mockAsk).toHaveBeenCalledWith(
+        "Opening a different project will stop the current Method agent session. Continue?",
+        { title: "Switch Project", kind: "warning" },
+      );
+    });
+    expect(mockInvoke).not.toHaveBeenCalledWith("scan_folder", { path: "/test/other-project" });
+  });
+
   it("renders file nodes correctly", async () => {
     await setupWithFolder({
       name: "project",

@@ -115,6 +115,15 @@ export default function FileTree({
       const path = typeof selected === "string" ? selected : selected[0];
       if (!path) return;
 
+      if (rootPath && path !== rootPath) {
+        const { ask } = await import("@tauri-apps/plugin-dialog");
+        const confirmed = await ask(
+          "Opening a different project will stop the current Method agent session. Continue?",
+          { title: "Switch Project", kind: "warning" },
+        );
+        if (!confirmed) return;
+      }
+
       const { invoke } = await import("@tauri-apps/api/core");
       const result: ScanFolderResult = await invoke("scan_folder", { path });
 
@@ -128,7 +137,7 @@ export default function FileTree({
     } catch (err) {
       showToast(`Failed to open folder: ${err}`);
     }
-  }, [loadExpandedState, onRootNameChange]);
+  }, [loadExpandedState, onRootNameChange, rootPath]);
 
   const handleFileClick = useCallback(
     async (node: FsNode) => {
@@ -355,10 +364,15 @@ export default function FileTree({
               Open Folder
             </button>
           </div>
-        ) : (
-          <>
-            <div
-              className={`tree-content${dragOverPath === "" ? " drop-target-root" : ""}`}
+      ) : (
+        <>
+          <div className="tree-toolbar">
+            <button className="open-folder-btn" onClick={openFolder}>
+              Open Folder
+            </button>
+          </div>
+          <div
+            className={`tree-content${dragOverPath === "" ? " drop-target-root" : ""}`}
               onContextMenu={(e) => {
                 if (e.target === e.currentTarget) {
                   e.preventDefault();
