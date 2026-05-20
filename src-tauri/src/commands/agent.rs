@@ -1,23 +1,10 @@
-use crate::codex_app_server::{CodexAppServerEvent, CodexAppServerSession, CodexTurnSummary};
+use crate::codex_app_server::{
+    method_agent_turn_input, CodexAppServerManager, CodexAppServerSession, CodexTurnSummary,
+};
 use crate::database::DatabaseState;
 use crate::methods::{dispatch_method_tool, get_current_draft_for_root, method_function_tools};
-use crate::utils::secrets::{is_sensitive_key, looks_like_secret_value};
-use reqwest::Client;
-use serde_json::{json, Value};
-use std::time::Instant;
+use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
-use uuid::Uuid;
-
-const METHOD_AGENT_MAX_TOOL_LOOPS: usize = 20;
-const MAX_TOOL_TRACE_STRING_CHARS: usize = 800;
-
-#[path = "agent_runtime.rs"]
-mod runtime;
-use runtime::*;
-
-#[cfg(test)]
-#[path = "agent_tests.rs"]
-mod tests;
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -47,10 +34,11 @@ pub async fn get_method_agent_function_tools() -> Result<Vec<Value>, String> {
 
 #[tauri::command]
 pub async fn get_design_agent_config() -> Result<DesignAgentConfig, String> {
-    let model = std::env::var("NIGHTSHIFT_METHOD_AGENT_MODEL").unwrap_or_else(|_| "gpt-5.5".into());
-    let reasoning_summary =
-        if method_agent_reasoning_config(&model).is_some() { "auto" } else { "off" }.to_string();
-    Ok(DesignAgentConfig { model, reasoning_summary, max_tool_loops: METHOD_AGENT_MAX_TOOL_LOOPS })
+    Ok(DesignAgentConfig {
+        model: "codex-app-server".into(),
+        reasoning_summary: "app-server".into(),
+        max_tool_loops: 0,
+    })
 }
 
 #[tauri::command]
@@ -77,16 +65,19 @@ fn project_root(db: &DatabaseState) -> Result<std::path::PathBuf, String> {
 
 #[tauri::command]
 pub async fn start_design_session(
+    app: AppHandle,
     db: State<'_, DatabaseState>,
+    codex: State<'_, CodexAppServerManager>,
 ) -> Result<CodexAppServerSession, String> {
     let root = project_root(&db)?;
-    Ok(CodexAppServerSession { thread_id: format!("method-agent-{}", root.to_string_lossy()) })
+    codex.ensure_session(app, &root).await
 }
 
 #[tauri::command]
 pub async fn send_design_chat_message(
     app: AppHandle,
     db: State<'_, DatabaseState>,
+    codex: State<'_, CodexAppServerManager>,
     input: SendDesignChatMessageInput,
 ) -> Result<CodexTurnSummary, String> {
     let message = input.message.trim();
@@ -94,11 +85,10 @@ pub async fn send_design_chat_message(
         return Err("message must not be empty".into());
     }
     let root = project_root(&db)?;
-    let thread_id = format!("method-agent-{}", root.to_string_lossy());
-    let turn_id = format!("turn-{}", Uuid::new_v4());
-    match run_method_agent_turn(&app, &root, &thread_id, &turn_id, message).await {
-        Ok(text) => emit_agent_message(&app, &thread_id, &turn_id, &text, "completed", None)?,
-        Err(error) => return Err(error),
-    }
-    Ok(CodexTurnSummary { thread_id, turn_id })
+    codex.start_turn(app, &root, method_agent_turn_input(message)).await
+}
+
+fn emit_current_draft(app: &AppHandle, root: &std::path::Path) -> Result<(), String> {
+    app.emit("method-draft-updated", get_current_draft_for_root(root).unwrap_or(None))
+        .map_err(|e| format!("Failed to emit Method draft update: {}", e))
 }

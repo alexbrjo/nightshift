@@ -96,9 +96,19 @@ export const METHOD_DRAFT_MUTATION_TOOLS = new Set([
   "replace_method_draft_graph",
 ]);
 
-export function dispatchAgentFileChange(toolName?: string) {
+function valueReferencesMethodFile(value: unknown): boolean {
+  if (typeof value === "string") return value.includes("methods/current.method.yaml");
+  if (Array.isArray(value)) return value.some(valueReferencesMethodFile);
+  if (value && typeof value === "object") {
+    return Object.values(value).some(valueReferencesMethodFile);
+  }
+  return false;
+}
+
+export function dispatchAgentFileChange(toolName?: string, toolArguments?: unknown, toolOutput?: unknown) {
   if (!toolName) return;
-  if (!METHOD_DRAFT_MUTATION_TOOLS.has(toolName)) return;
+  const touchedMethodFile = valueReferencesMethodFile(toolArguments) || valueReferencesMethodFile(toolOutput);
+  if (!METHOD_DRAFT_MUTATION_TOOLS.has(toolName) && !touchedMethodFile && toolName !== "apply_patch") return;
   emitAppEvent("methodDraftMutated");
   emitAppEvent("projectFilesChanged");
 }

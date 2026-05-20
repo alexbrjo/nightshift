@@ -73,6 +73,28 @@ fn validate_method_rejects_eval_node_type() {
 }
 
 #[test]
+fn validate_method_rejects_missing_resource_paths() {
+    let mut method = sample_method();
+    method.workflow.nodes[0].path = None;
+
+    let err = validate_method(&method).unwrap_err();
+
+    assert!(err.contains("must set path"), "got: {err}");
+}
+
+#[test]
+fn validate_method_rejects_missing_api_key_reference() {
+    let mut method = sample_method();
+    method.workflow.nodes[0].kind = Some("api_key".into());
+    method.workflow.nodes[0].path = None;
+    method.workflow.nodes[0].reference = None;
+
+    let err = validate_method(&method).unwrap_err();
+
+    assert!(err.contains("must set reference"), "got: {err}");
+}
+
+#[test]
 fn validate_method_rejects_secret_values() {
     let mut method = sample_method();
     method.provider = serde_yaml::from_str("api_key: sk-test").unwrap();
@@ -80,4 +102,32 @@ fn validate_method_rejects_secret_values() {
     let err = validate_method(&method).unwrap_err();
 
     assert!(err.contains("secret-like"), "got: {err}");
+}
+
+#[test]
+fn validate_method_rejects_provider_alias_keys() {
+    let mut method = sample_method();
+    method.provider = serde_json::json!({
+        "name": "Local",
+        "base_url": "http://localhost:1234/v1",
+        "model": "qwen-test"
+    });
+
+    let err = validate_method(&method).unwrap_err();
+
+    assert!(err.contains("unsupported key"), "got: {err}");
+    assert!(err.contains("provider.server_url"), "got: {err}");
+}
+
+#[test]
+fn validate_method_rejects_json_schema_file_without_json_schema_output_mode() {
+    let mut method = sample_method();
+    method.workflow.nodes[1].config = serde_json::json!({
+        "json_schema_file": "flash_card_schema"
+    });
+
+    let err = validate_method(&method).unwrap_err();
+
+    assert!(err.contains("json_schema_file"), "got: {err}");
+    assert!(err.contains("output_mode: JSON Schema"), "got: {err}");
 }

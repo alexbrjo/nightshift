@@ -608,6 +608,34 @@ describe("AgentWorkspace", () => {
     dispatchSpy.mockRestore();
   });
 
+  it("refreshes project files and Method draft after app-server file edits", async () => {
+    const dispatchSpy = vi.spyOn(window, "dispatchEvent");
+    render(<AgentWorkspace />);
+
+    await emitCodexEvent({
+      eventType: "item/toolCall/completed",
+      threadId: "thr_123",
+      turnId: "turn_456",
+      itemId: "patch_1",
+      toolName: "apply_patch",
+      traceKind: "tool",
+      status: "completed",
+      toolArguments: {
+        changes: [{ path: "methods/current.method.yaml" }],
+      },
+      raw: {},
+    });
+
+    await waitFor(() => {
+      const eventTypes = dispatchSpy.mock.calls.map(([event]) => event.type);
+      expect(eventTypes).toContain(appEventName("projectFilesChanged"));
+      expect(eventTypes).toContain(appEventName("methodDraftMutated"));
+      expect(mockInvoke).toHaveBeenCalledWith("get_current_method_draft");
+    });
+
+    dispatchSpy.mockRestore();
+  });
+
   it("shows a draft panel after chat creates Method state", async () => {
     render(<AgentWorkspace />);
 

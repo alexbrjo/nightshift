@@ -1,8 +1,7 @@
 use super::*;
 
 pub(crate) fn method_level_config_string(method: &MethodDocument, key: &str) -> Option<String> {
-    yaml_string(yaml_lookup(&method.parameters, key))
-        .or_else(|| yaml_string(yaml_lookup(&method.provider, key)))
+    method_config_string(method, key, None)
 }
 
 static JSONL_APPEND_LOCK: OnceLock<Mutex<()>> = OnceLock::new();

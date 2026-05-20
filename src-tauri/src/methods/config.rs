@@ -122,7 +122,15 @@ pub(crate) fn config_string(
     default: Option<&str>,
 ) -> Option<String> {
     yaml_string(yaml_lookup(&node.config, key))
-        .or_else(|| yaml_string(yaml_lookup(&method.parameters, key)))
+        .or_else(|| method_config_string(method, key, default))
+}
+
+pub(crate) fn method_config_string(
+    method: &MethodDocument,
+    key: &str,
+    default: Option<&str>,
+) -> Option<String> {
+    yaml_string(yaml_lookup(&method.parameters, key))
         .or_else(|| yaml_string(yaml_lookup(&method.provider, key)))
         .or_else(|| default.map(ToOwned::to_owned))
 }

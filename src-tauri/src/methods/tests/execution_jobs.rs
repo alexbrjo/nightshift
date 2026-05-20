@@ -127,6 +127,8 @@ model: qwen-test
     let snapshot_prefix = format!(".nightshift/executions/{}/snapshot/files/", execution_id);
     assert!(job.prompt_file.starts_with(&snapshot_prefix));
     assert!(job.data_source.starts_with(&snapshot_prefix));
+    assert_eq!(job.provider, "Local");
+    assert_eq!(job.server_url, "http://localhost:1234");
     assert_eq!(job.model, "qwen-test");
     fs::remove_dir_all(temp).unwrap();
 }

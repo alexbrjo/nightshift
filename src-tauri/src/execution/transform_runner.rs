@@ -4,6 +4,9 @@ use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 const ITEM_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_TRANSFORM_INPUT_BYTES: usize = 1_000_000;
+const MAX_TRANSFORM_STDOUT_BYTES: usize = 1_000_000;
+const MAX_TRANSFORM_STDERR_BYTES: usize = 64_000;
 
 const NODE_RUNNER: &str = r#"
 const fs = require('node:fs');
@@ -48,6 +51,11 @@ pub async fn check_transform_runtime() -> Result<(), String> {
 
 pub async fn run_transform_script(script: &str, item: &Value) -> Result<Option<Value>, String> {
     let input = serde_json::json!({ "script": script, "item": item });
+    let payload = serde_json::to_vec(&input)
+        .map_err(|e| format!("Failed to serialize transform input: {}", e))?;
+    if payload.len() > MAX_TRANSFORM_INPUT_BYTES {
+        return Err("Transform input is too large".into());
+    }
     let mut child = Command::new("node")
         .arg("-e")
         .arg(NODE_RUNNER)
@@ -59,8 +67,6 @@ pub async fn run_transform_script(script: &str, item: &Value) -> Result<Option<V
         .map_err(|e| format!("Failed to start JavaScript transform runtime: {}", e))?;
 
     if let Some(mut stdin) = child.stdin.take() {
-        let payload = serde_json::to_vec(&input)
-            .map_err(|e| format!("Failed to serialize transform input: {}", e))?;
         stdin
             .write_all(&payload)
             .await
@@ -72,6 +78,12 @@ pub async fn run_transform_script(script: &str, item: &Value) -> Result<Option<V
         Err(_) => return Err("Transform script timed out".to_string()),
     };
 
+    if output.stdout.len() > MAX_TRANSFORM_STDOUT_BYTES {
+        return Err("Transform script output exceeded size limit".into());
+    }
+    if output.stderr.len() > MAX_TRANSFORM_STDERR_BYTES {
+        return Err("Transform script stderr exceeded size limit".into());
+    }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let response: Value = serde_json::from_str(&stdout)
         .map_err(|e| format!("Transform runtime returned invalid output: {}", e))?;
@@ -133,5 +145,51 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.contains("returned undefined"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn run_transform_script_does_not_expose_process() {
+        if !runtime_available().await {
+            return;
+        }
+
+        let output =
+            run_transform_script("return { processType: typeof process };", &serde_json::json!({}))
+                .await
+                .unwrap();
+
+        assert_eq!(output, Some(serde_json::json!({ "processType": "undefined" })));
+    }
+
+    #[tokio::test]
+    async fn run_transform_script_rejects_oversized_input() {
+        if !runtime_available().await {
+            return;
+        }
+
+        let err = run_transform_script(
+            "return item;",
+            &serde_json::json!({ "value": "x".repeat(MAX_TRANSFORM_INPUT_BYTES) }),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("input is too large"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn run_transform_script_rejects_oversized_output() {
+        if !runtime_available().await {
+            return;
+        }
+
+        let err = run_transform_script(
+            &format!("return {{ value: 'x'.repeat({}) }};", MAX_TRANSFORM_STDOUT_BYTES + 1),
+            &serde_json::json!({}),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.contains("output exceeded size limit"), "got: {err}");
     }
 }

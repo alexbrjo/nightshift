@@ -6,6 +6,7 @@ use super::model::{MethodDocument, MethodWorkflowNode};
 use super::paths::{require_nonempty, validate_method_id, validate_relative_path};
 
 const RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "script", "api_key"];
+const FILE_RESOURCE_KINDS: &[&str] = &["prompt", "data", "json_schema", "script"];
 const NODE_TYPES: &[&str] = &["resource", "sample", "inference", "transform", "analysis"];
 const GENERATED_OR_DEPENDENCY_DIRS: &[&str] = &[
     ".git",
@@ -22,6 +23,7 @@ const GENERATED_OR_DEPENDENCY_DIRS: &[&str] = &[
 
 const SECRET_KEYS: &[&str] =
     &["api_key", "apikey", "password", "secret", "access_token", "refresh_token", "bearer_token"];
+const METHOD_PROVIDER_KEYS: &[&str] = &["provider", "server_url", "model", "api_key_ref"];
 
 pub(crate) fn reject_secret_values(value: &serde_yaml::Value, path: &str) -> Result<(), String> {
     match value {
@@ -68,6 +70,7 @@ pub fn validate_method(method: &MethodDocument) -> Result<(), String> {
     let manifest_value =
         serde_yaml::to_value(method).map_err(|e| format!("Failed to inspect method: {}", e))?;
     reject_secret_values(&manifest_value, "")?;
+    validate_provider_config_keys(&method.provider)?;
 
     if method.workflow.nodes.is_empty() {
         return Err("method.workflow.nodes must contain at least one node".into());
@@ -98,6 +101,9 @@ pub fn validate_method(method: &MethodDocument) -> Result<(), String> {
                 validate_relative_path(path)?;
             }
         }
+        if node.node_type == "inference" {
+            validate_inference_config(node)?;
+        }
         if node.is_resource() {
             let kind = node.kind.as_deref().unwrap_or_default();
             require_nonempty("method.workflow.nodes[].kind", kind)?;
@@ -113,6 +119,7 @@ pub fn validate_method(method: &MethodDocument) -> Result<(), String> {
                     node.id
                 ));
             }
+            validate_resource_location(node, kind)?;
             if let Some(path) = node.path.as_deref() {
                 if !path.starts_with("files/") {
                     validate_relative_path(path)?;
@@ -141,6 +148,63 @@ pub fn validate_method(method: &MethodDocument) -> Result<(), String> {
         }
     }
     detect_cycles(&method.workflow.nodes)?;
+    Ok(())
+}
+
+fn validate_inference_config(node: &MethodWorkflowNode) -> Result<(), String> {
+    let Some(config) = node.config.as_object() else {
+        return Ok(());
+    };
+    let has_json_schema_file = config
+        .get("json_schema_file")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| !value.trim().is_empty());
+    if !has_json_schema_file {
+        return Ok(());
+    }
+    let output_mode =
+        config.get("output_mode").and_then(serde_json::Value::as_str).unwrap_or_default();
+    if output_mode != "JSON Schema" {
+        return Err(format!(
+            "method.workflow inference node '{}' sets config.json_schema_file but must also set config.output_mode: JSON Schema",
+            node.id
+        ));
+    }
+    Ok(())
+}
+
+fn validate_provider_config_keys(provider: &serde_json::Value) -> Result<(), String> {
+    let Some(map) = provider.as_object() else {
+        return Ok(());
+    };
+    for key in map.keys() {
+        if !METHOD_PROVIDER_KEYS.contains(&key.as_str()) {
+            return Err(format!(
+                "method.provider has unsupported key '{}'; use provider.server_url for the server URL and provider.provider for the provider name",
+                key
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_resource_location(node: &MethodWorkflowNode, kind: &str) -> Result<(), String> {
+    if FILE_RESOURCE_KINDS.contains(&kind)
+        && node.path.as_deref().is_none_or(|path| path.trim().is_empty())
+    {
+        return Err(format!(
+            "method.workflow resource node '{}' with kind '{}' must set path",
+            node.id, kind
+        ));
+    }
+    if kind == "api_key"
+        && node.reference.as_deref().is_none_or(|reference| reference.trim().is_empty())
+    {
+        return Err(format!(
+            "method.workflow resource node '{}' with kind 'api_key' must set reference",
+            node.id
+        ));
+    }
     Ok(())
 }
 

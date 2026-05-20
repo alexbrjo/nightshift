@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type MutableRefObject,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -65,6 +66,187 @@ function useMethodWorkspace() {
     throw new Error("Method workspace panels must be rendered inside MethodWorkspaceProvider");
   }
   return value;
+}
+
+interface CodexEventHandlerOptions {
+  payload: CodexAppServerEvent;
+  activeChatIdRef: MutableRefObject<string | null>;
+  pendingTurnChatIdRef: MutableRefObject<string | null>;
+  setActiveChatId: (chatId: string) => void;
+  setIsSending: (isSending: boolean) => void;
+  setSendingChatId: (chatId: string | null) => void;
+  setActiveTurn: (turn: CodexTurnSummary | null) => void;
+  updateChatMessages: (chatId: string, updater: (current: ChatMessage[]) => ChatMessage[]) => void;
+  loadCurrentDraft: (options?: { silentMissingProject?: boolean }) => Promise<void>;
+}
+
+function handleCodexAppServerEvent({
+  payload,
+  activeChatIdRef,
+  pendingTurnChatIdRef,
+  setActiveChatId,
+  setIsSending,
+  setSendingChatId,
+  setActiveTurn,
+  updateChatMessages,
+  loadCurrentDraft,
+}: CodexEventHandlerOptions) {
+  const targetChatId = pendingTurnChatIdRef.current ?? activeChatIdRef.current ?? createChatSession().id;
+  if (!activeChatIdRef.current) {
+    activeChatIdRef.current = targetChatId;
+    setActiveChatId(targetChatId);
+  }
+
+  handleCodexMessageEvent(payload, targetChatId, updateChatMessages);
+  handleCodexToolEvent(payload, targetChatId, updateChatMessages, loadCurrentDraft);
+  handleCodexTurnEvent({
+    payload,
+    targetChatId,
+    pendingTurnChatIdRef,
+    setIsSending,
+    setSendingChatId,
+    setActiveTurn,
+    updateChatMessages,
+    loadCurrentDraft,
+  });
+}
+
+function handleCodexMessageEvent(
+  payload: CodexAppServerEvent,
+  targetChatId: string,
+  updateChatMessages: CodexEventHandlerOptions["updateChatMessages"],
+) {
+  if (payload.eventType === "item/agentMessage/delta" && payload.textDelta) {
+    updateChatMessages(targetChatId, (current) =>
+      appendDelta(current, payload.itemId ?? `assistant-${payload.turnId ?? Date.now()}`, payload.textDelta ?? ""),
+    );
+  }
+
+  if (payload.eventType === "item/completed" && payload.messageText && payload.traceKind === "reasoning") {
+    updateChatMessages(targetChatId, (current) =>
+      upsertTraceMessage(
+        current,
+        payload.itemId ?? `reasoning-${payload.turnId ?? Date.now()}`,
+        payload.messageText ?? "",
+        payload.status === "failed" ? "failed" : "completed",
+        "reasoning",
+      ),
+    );
+  } else if (payload.eventType === "item/completed" && payload.messageText) {
+    updateChatMessages(targetChatId, (current) =>
+      upsertAssistantMessage(
+        current,
+        payload.itemId ?? `assistant-${payload.turnId ?? Date.now()}`,
+        payload.messageText ?? "",
+      ),
+    );
+  }
+
+  if (payload.eventType.includes("reasoningSummary") && payload.messageText) {
+    updateChatMessages(targetChatId, (current) =>
+      upsertTraceMessage(
+        current,
+        payload.itemId ?? `reasoning-${payload.turnId ?? Date.now()}`,
+        payload.messageText ?? "",
+        payload.status === "failed" ? "failed" : "completed",
+        "reasoning",
+      ),
+    );
+  }
+}
+
+function handleCodexToolEvent(
+  payload: CodexAppServerEvent,
+  targetChatId: string,
+  updateChatMessages: CodexEventHandlerOptions["updateChatMessages"],
+  loadCurrentDraft: CodexEventHandlerOptions["loadCurrentDraft"],
+) {
+  if (payload.eventType.startsWith("item/toolCall/")) {
+    updateChatMessages(targetChatId, (current) =>
+      upsertTraceMessage(
+        current,
+        payload.itemId ?? `tool-${payload.turnId ?? Date.now()}-${payload.toolName ?? "unknown"}`,
+        toolTraceText(payload),
+        payload.status === "failed" ? "failed" : payload.status === "started" ? "streaming" : "completed",
+        "tool",
+        {
+          toolName: payload.toolName,
+          toolArguments: payload.toolArguments,
+          toolOutput: payload.toolOutput,
+          outputSummary: payload.outputSummary,
+          durationMs: payload.durationMs,
+        },
+      ),
+    );
+    if (payload.eventType === "item/toolCall/completed") {
+      dispatchAgentFileChange(payload.toolName, payload.toolArguments, payload.toolOutput);
+      if (
+        payload.toolName === "exec_command"
+        || payload.toolName === "apply_patch"
+        || (payload.toolName && METHOD_DRAFT_MUTATION_TOOLS.has(payload.toolName))
+      ) {
+        void loadCurrentDraft({ silentMissingProject: true });
+      }
+    }
+  }
+}
+
+interface CodexTurnEventOptions {
+  payload: CodexAppServerEvent;
+  targetChatId: string;
+  pendingTurnChatIdRef: MutableRefObject<string | null>;
+  setIsSending: (isSending: boolean) => void;
+  setSendingChatId: (chatId: string | null) => void;
+  setActiveTurn: (turn: CodexTurnSummary | null) => void;
+  updateChatMessages: CodexEventHandlerOptions["updateChatMessages"];
+  loadCurrentDraft: CodexEventHandlerOptions["loadCurrentDraft"];
+}
+
+function handleCodexTurnEvent({
+  payload,
+  targetChatId,
+  pendingTurnChatIdRef,
+  setIsSending,
+  setSendingChatId,
+  setActiveTurn,
+  updateChatMessages,
+  loadCurrentDraft,
+}: CodexTurnEventOptions) {
+  if (payload.eventType === "turn/completed") {
+    setIsSending(false);
+    setSendingChatId(null);
+    setActiveTurn(null);
+    pendingTurnChatIdRef.current = null;
+    emitAppEvent("projectFilesChanged");
+    void loadCurrentDraft({ silentMissingProject: true });
+    if (payload.status === "failed") {
+      updateChatMessages(targetChatId, (current) => [
+        ...current,
+        {
+          id: `system-${Date.now()}-${current.length}`,
+          role: "system",
+          text: payload.errorMessage ?? "The design turn failed.",
+          status: "failed",
+        },
+      ]);
+    }
+  }
+
+  if (payload.eventType.startsWith("connection/") && payload.errorMessage) {
+    setIsSending(false);
+    setSendingChatId(null);
+    setActiveTurn(null);
+    pendingTurnChatIdRef.current = null;
+    updateChatMessages(targetChatId, (current) => [
+      ...current,
+      {
+        id: `system-${Date.now()}-${current.length}`,
+        role: "system",
+        text: userFacingError(payload.errorMessage),
+        status: "failed",
+      },
+    ]);
+  }
 }
 
 export function ChatPanel({ chatId }: { chatId?: string | null }) {
@@ -373,97 +555,17 @@ export function MethodWorkspaceProvider({
     let unlisten: (() => void) | null = null;
     listen<CodexAppServerEvent>("codex-app-server-event", (event) => {
       if (cancelled) return;
-      const payload = event.payload;
-      const targetChatId = pendingTurnChatIdRef.current ?? activeChatIdRef.current ?? createChatSession().id;
-      if (!activeChatIdRef.current) {
-        activeChatIdRef.current = targetChatId;
-        setActiveChatId(targetChatId);
-      }
-      if (payload.eventType === "item/agentMessage/delta" && payload.textDelta) {
-        updateChatMessages(targetChatId, (current) =>
-          appendDelta(
-            current,
-            payload.itemId ?? `assistant-${payload.turnId ?? Date.now()}`,
-            payload.textDelta ?? "",
-          ),
-        );
-      }
-      if (payload.eventType === "item/completed" && payload.messageText) {
-        updateChatMessages(targetChatId, (current) =>
-          upsertAssistantMessage(
-            current,
-            payload.itemId ?? `assistant-${payload.turnId ?? Date.now()}`,
-            payload.messageText ?? "",
-          ),
-        );
-      }
-      if (payload.eventType.includes("reasoningSummary") && payload.messageText) {
-        updateChatMessages(targetChatId, (current) =>
-          upsertTraceMessage(
-            current,
-            payload.itemId ?? `reasoning-${payload.turnId ?? Date.now()}`,
-            payload.messageText ?? "",
-            payload.status === "failed" ? "failed" : "completed",
-            "reasoning",
-          ),
-        );
-      }
-      if (payload.eventType.startsWith("item/toolCall/")) {
-        updateChatMessages(targetChatId, (current) =>
-          upsertTraceMessage(
-            current,
-            payload.itemId ?? `tool-${payload.turnId ?? Date.now()}-${payload.toolName ?? "unknown"}`,
-            toolTraceText(payload),
-            payload.status === "failed" ? "failed" : payload.status === "started" ? "streaming" : "completed",
-            "tool",
-            {
-              toolName: payload.toolName,
-              toolArguments: payload.toolArguments,
-              toolOutput: payload.toolOutput,
-              outputSummary: payload.outputSummary,
-              durationMs: payload.durationMs,
-            },
-          ),
-        );
-        if (payload.eventType === "item/toolCall/completed") {
-          dispatchAgentFileChange(payload.toolName);
-          if (payload.toolName && METHOD_DRAFT_MUTATION_TOOLS.has(payload.toolName)) {
-            void loadCurrentDraft({ silentMissingProject: true });
-          }
-        }
-      }
-      if (payload.eventType === "turn/completed") {
-        setIsSending(false);
-        setSendingChatId(null);
-        setActiveTurn(null);
-        pendingTurnChatIdRef.current = null;
-        if (payload.status === "failed") {
-          updateChatMessages(targetChatId, (current) => [
-            ...current,
-            {
-              id: `system-${Date.now()}-${current.length}`,
-              role: "system",
-              text: payload.errorMessage ?? "The design turn failed.",
-              status: "failed",
-            },
-          ]);
-        }
-      }
-      if (payload.eventType.startsWith("connection/") && payload.errorMessage) {
-        setIsSending(false);
-        setSendingChatId(null);
-        setActiveTurn(null);
-        pendingTurnChatIdRef.current = null;
-        updateChatMessages(targetChatId, (current) => [
-          ...current,
-          {
-            id: `system-${Date.now()}-${current.length}`,
-            role: "system",
-            text: userFacingError(payload.errorMessage),
-            status: "failed",
-          },
-        ]);
-      }
+      handleCodexAppServerEvent({
+        payload: event.payload,
+        activeChatIdRef,
+        pendingTurnChatIdRef,
+        setActiveChatId,
+        setIsSending,
+        setSendingChatId,
+        setActiveTurn,
+        updateChatMessages,
+        loadCurrentDraft,
+      });
     })
       .then((fn) => {
         if (cancelled) fn();

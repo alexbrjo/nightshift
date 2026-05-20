@@ -104,14 +104,18 @@ pub(crate) fn preflight_method_for_root(
         }
     }
 
-    let has_inference = method.workflow.nodes.iter().any(|node| node.node_type == "inference");
-    if has_inference {
-        let model = yaml_string(yaml_lookup(&method.provider, "model"))
-            .or_else(|| yaml_string(yaml_lookup(&method.parameters, "model")));
-        if model.as_deref().unwrap_or("").trim().is_empty() && model_values(method).is_empty() {
+    let shared_model = yaml_string(yaml_lookup(&method.provider, "model"))
+        .or_else(|| yaml_string(yaml_lookup(&method.parameters, "model")));
+    let has_model_sweep = !model_values(method).is_empty();
+    for node in method.workflow.nodes.iter().filter(|node| node.node_type == "inference") {
+        let node_model = config_string(node, method, "model", None);
+        if shared_model.as_deref().unwrap_or("").trim().is_empty()
+            && node_model.as_deref().unwrap_or("").trim().is_empty()
+            && !has_model_sweep
+        {
             blockers.push(MethodPreflightBlocker {
                 code: "missing_model".into(),
-                message: "Inference needs a model name.".into(),
+                message: format!("Inference node '{}' needs a model name.", node.label_or_id()),
                 file_id: None,
                 file_kind: None,
                 path: None,

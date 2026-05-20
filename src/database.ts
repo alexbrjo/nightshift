@@ -94,6 +94,7 @@ export interface MethodDraftReadiness {
 
 export interface CodexAppServerSession {
   threadId: string;
+  methodToolConfigVersion?: number | null;
 }
 
 export interface CodexTurnSummary {

@@ -21,6 +21,19 @@ fn validate_relative_path(relative_path: &str) -> Result<&Path, String> {
     Ok(path)
 }
 
+fn reject_protected_write_path(relative_path: &str) -> Result<(), String> {
+    let normalized = relative_path.replace('\\', "/");
+    if normalized == ".git"
+        || normalized.starts_with(".git/")
+        || normalized == ".nightshift"
+        || normalized.starts_with(".nightshift/")
+    {
+        Err(format!("Writes to '{}' are managed by Nightshift and are not allowed", normalized))
+    } else {
+        Ok(())
+    }
+}
+
 fn canonical_root(root: &Path) -> Result<PathBuf, String> {
     fs::canonicalize(root).map_err(|e| format!("Failed to resolve root folder: {}", e))
 }
@@ -81,6 +94,7 @@ fn rename_path_impl(
     new_name: String,
 ) -> Result<String, String> {
     let root = root_path(app_state)?;
+    reject_protected_write_path(&relative_path)?;
     let new_name = sanitize_name(&new_name)?;
     let old_path = existing_path_within_root(&root, &relative_path)?;
     let parent = old_path.parent().ok_or("Invalid path".to_string())?;
@@ -104,6 +118,8 @@ fn move_path_impl(
     target_parent_relative_path: String,
 ) -> Result<String, String> {
     let root = root_path(app_state)?;
+    reject_protected_write_path(&source_relative_path)?;
+    reject_protected_write_path(&target_parent_relative_path)?;
     let source = existing_path_within_root(&root, &source_relative_path)?;
     let target_parent = if target_parent_relative_path.is_empty() {
         root.clone()
@@ -141,6 +157,7 @@ fn move_path_impl(
 
 fn delete_path_impl(app_state: &AppState, relative_path: String) -> Result<(), String> {
     let root = root_path(app_state)?;
+    reject_protected_write_path(&relative_path)?;
     let target = existing_path_within_root(&root, &relative_path)?;
 
     if target.is_dir() {
@@ -154,6 +171,7 @@ fn delete_path_impl(app_state: &AppState, relative_path: String) -> Result<(), S
 
 fn copy_file_impl(app_state: &AppState, relative_path: String) -> Result<String, String> {
     let root = root_path(app_state)?;
+    reject_protected_write_path(&relative_path)?;
     let source = existing_path_within_root(&root, &relative_path)?;
 
     if !source.is_file() {
@@ -186,6 +204,7 @@ fn write_file_impl(
     content: String,
 ) -> Result<(), String> {
     let root = root_path(app_state)?;
+    reject_protected_write_path(&relative_path)?;
     let relative = validate_relative_path(&relative_path)?;
     let target = root.join(relative);
     let parent = target.parent().ok_or("Invalid path".to_string())?;
@@ -214,6 +233,7 @@ fn create_folder_impl(
     folder_name: String,
 ) -> Result<String, String> {
     let root = root_path(app_state)?;
+    reject_protected_write_path(&parent_relative_path)?;
     let folder_name = sanitize_name(&folder_name)?;
     let new_folder = child_path_within_root(&root, &parent_relative_path, &folder_name)?;
 
@@ -231,6 +251,7 @@ fn create_file_impl(
     file_name: String,
 ) -> Result<String, String> {
     let root = root_path(app_state)?;
+    reject_protected_write_path(&parent_relative_path)?;
     let file_name = sanitize_name(&file_name)?;
     let new_file = child_path_within_root(&root, &parent_relative_path, &file_name)?;
 
@@ -574,6 +595,24 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!outside_file.exists());
+        fs::remove_dir_all(&test_dir).ok();
+    }
+
+    #[test]
+    fn write_file_rejects_protected_app_paths() {
+        let test_dir = setup_test_dir();
+        fs::create_dir_all(test_dir.join(".nightshift")).unwrap();
+        fs::create_dir_all(test_dir.join(".git")).unwrap();
+        let app_state = AppState { root_path: Mutex::new(Some(test_dir.clone())) };
+
+        assert!(write_file_impl(
+            &app_state,
+            ".nightshift/config.json".to_string(),
+            "{}".to_string(),
+        )
+        .is_err());
+        assert!(write_file_impl(&app_state, ".git/config".to_string(), "x".to_string()).is_err());
+
         fs::remove_dir_all(&test_dir).ok();
     }
 
