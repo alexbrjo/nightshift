@@ -252,9 +252,18 @@ pub(crate) async fn read_method_artifact_from_db(
         "inline_json" | "inline_markdown" | "inline" => Ok(artifact.path),
         "method_execution_file" | "analysis" | "not_implemented" => {
             let root = project_root(db)?;
+            super::super::paths::validate_execution_artifact_relative_path(&artifact.path)?;
             let path = root.join(&artifact.path);
-            fs::read_to_string(&path).map_err(|e| {
-                format!("Failed to read Method artifact file '{}': {}", path.display(), e)
+            let root_canonical = fs::canonicalize(&root)
+                .map_err(|e| format!("Failed to resolve project root: {}", e))?;
+            let path_canonical = fs::canonicalize(&path).map_err(|e| {
+                format!("Failed to resolve Method artifact file '{}': {}", path.display(), e)
+            })?;
+            if !path_canonical.starts_with(&root_canonical) {
+                return Err("Method artifact path is outside the project root".to_string());
+            }
+            fs::read_to_string(&path_canonical).map_err(|e| {
+                format!("Failed to read Method artifact file '{}': {}", path_canonical.display(), e)
             })
         }
         other => Err(format!("Unsupported execution file type: {}", other)),

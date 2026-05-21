@@ -63,7 +63,7 @@ fn security_policy_payload(project_root: &Path) -> Value {
         "readProtectedPaths": true,
         "appManagedAppendOnlyPaths": [AGENT_AUDIT_PATH],
         "denyCommandPatterns": COMMAND_DENY_PATTERNS,
-        "denyWritePaths": [".git/**", ".nightshift/**", "node_modules/**", "target/**", "dist/**", "build/**"],
+        "denyWritePaths": [".git/**", ".nightshift/**"],
         "requireCanonicalPathContainment": true,
         "denySymlinkEscapes": true,
         "auditLog": AGENT_AUDIT_PATH,
@@ -512,6 +512,10 @@ mod tests {
         assert_eq!(policy["enforcement"].as_str(), Some("advisory"));
         assert!(policy["threatModel"].as_str().unwrap().contains("sandboxPolicy"));
         assert!(policy["protectedPaths"].as_array().unwrap().contains(&json!(".git/**")));
+        assert_eq!(
+            policy["denyWritePaths"].as_array().unwrap(),
+            &vec![json!(".git/**"), json!(".nightshift/**")]
+        );
         assert!(policy["denyCommandPatterns"].as_array().unwrap().contains(&json!("rm -rf")));
     }
 

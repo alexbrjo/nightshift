@@ -27,12 +27,56 @@ pub(crate) fn validate_method_id(id: &str) -> Result<(), String> {
 }
 
 pub(crate) fn validate_relative_path(path: &str) -> Result<(), String> {
+    validate_project_relative_path(path, false)
+}
+
+pub(crate) fn validate_app_managed_relative_path(path: &str) -> Result<(), String> {
+    validate_project_relative_path(path, true)
+}
+
+pub(crate) fn validate_execution_artifact_relative_path(path: &str) -> Result<(), String> {
+    validate_app_managed_relative_path(path)?;
+    let mut normal_components =
+        Path::new(path).components().filter_map(|component| match component {
+            std::path::Component::Normal(name) => Some(name.to_string_lossy()),
+            _ => None,
+        });
+    let is_execution_artifact_path = normal_components
+        .next()
+        .is_some_and(|component| component.eq_ignore_ascii_case(".nightshift"))
+        && normal_components
+            .next()
+            .is_some_and(|component| component.eq_ignore_ascii_case("executions"));
+    if !is_execution_artifact_path {
+        return Err(format!(
+            "Method artifact path must point inside .nightshift/executions: {}",
+            path
+        ));
+    }
+    Ok(())
+}
+
+fn validate_project_relative_path(path: &str, allow_app_managed: bool) -> Result<(), String> {
     let p = Path::new(path);
-    if p.is_absolute() || path.contains("..") {
+    if p.is_absolute() {
         return Err(format!("Method file path must be project-relative: {}", path));
     }
-    if path.starts_with(".nightshift/") {
-        return Err(format!("Method file path cannot point inside app-managed storage: {}", path));
+    for component in p.components() {
+        match component {
+            std::path::Component::ParentDir | std::path::Component::Prefix(_) => {
+                return Err(format!("Method file path must be project-relative: {}", path));
+            }
+            std::path::Component::Normal(name)
+                if !allow_app_managed
+                    && name.to_string_lossy().eq_ignore_ascii_case(".nightshift") =>
+            {
+                return Err(format!(
+                    "Method file path cannot point inside app-managed storage: {}",
+                    path
+                ));
+            }
+            _ => {}
+        }
     }
     Ok(())
 }

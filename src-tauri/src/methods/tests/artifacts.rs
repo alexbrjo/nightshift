@@ -31,6 +31,116 @@ async fn read_method_artifact_returns_inline_content() {
     fs::remove_dir_all(temp).unwrap();
 }
 
+#[tokio::test]
+async fn read_method_artifact_rejects_persisted_parent_traversal_path() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-artifact-traversal-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(&temp).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let execution_id = insert_execution(&db, &sample_method(), "hash").await.unwrap();
+    sqlx::query(
+        r#"
+        INSERT INTO method_execution_files (
+            execution_id, node_id, file_type, path, content_hash
+        )
+        VALUES (?1, ?2, ?3, ?4, ?5)
+        "#,
+    )
+    .bind(execution_id)
+    .bind("analysis")
+    .bind("analysis")
+    .bind("../secret.md")
+    .bind("hash")
+    .execute(&db.pool())
+    .await
+    .unwrap();
+    let artifact = sqlx::query_as::<_, MethodArtifactSummary>(
+        "SELECT id, execution_id, node_id, file_type, path, content_hash, created_at FROM method_execution_files WHERE execution_id = ?",
+    )
+    .bind(execution_id)
+    .fetch_one(&db.pool())
+    .await
+    .unwrap();
+
+    let err = read_method_artifact_from_db(&db, artifact.id).await.unwrap_err();
+
+    assert!(err.contains("project-relative"), "got: {err}");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[tokio::test]
+async fn read_method_artifact_rejects_persisted_non_execution_path() {
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-artifact-protected-path-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".git")).unwrap();
+    fs::write(temp.join(".git/config"), "secret").unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let execution_id = insert_execution(&db, &sample_method(), "hash").await.unwrap();
+    insert_artifact(
+        &db,
+        execution_id,
+        Some("analysis"),
+        "analysis",
+        "method_execution_file",
+        ".git/config",
+    )
+    .await
+    .unwrap();
+    let artifact = sqlx::query_as::<_, MethodArtifactSummary>(
+        "SELECT id, execution_id, node_id, file_type, path, content_hash, created_at FROM method_execution_files WHERE execution_id = ?",
+    )
+    .bind(execution_id)
+    .fetch_one(&db.pool())
+    .await
+    .unwrap();
+
+    let err = read_method_artifact_from_db(&db, artifact.id).await.unwrap_err();
+
+    assert!(err.contains(".nightshift/executions"), "got: {err}");
+    fs::remove_dir_all(temp).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn read_method_artifact_rejects_persisted_symlink_escape() {
+    use std::os::unix::fs::symlink;
+
+    let temp = std::env::temp_dir()
+        .join(format!("nightshift-method-artifact-link-test-{}", Uuid::new_v4()));
+    fs::create_dir_all(temp.join(".nightshift/executions/1/files/analysis")).unwrap();
+    let outside = temp
+        .parent()
+        .unwrap()
+        .join(format!("nightshift-method-artifact-outside-{}.md", Uuid::new_v4()));
+    fs::write(&outside, "secret").unwrap();
+    symlink(&outside, temp.join(".nightshift/executions/1/files/analysis/report.md")).unwrap();
+    let db = DatabaseState::new(&temp).await.unwrap();
+    let execution_id = insert_execution(&db, &sample_method(), "hash").await.unwrap();
+    insert_artifact(
+        &db,
+        execution_id,
+        Some("analysis"),
+        "analysis",
+        "method_execution_file",
+        ".nightshift/executions/1/files/analysis/report.md",
+    )
+    .await
+    .unwrap();
+    let artifact = sqlx::query_as::<_, MethodArtifactSummary>(
+        "SELECT id, execution_id, node_id, file_type, path, content_hash, created_at FROM method_execution_files WHERE execution_id = ?",
+    )
+    .bind(execution_id)
+    .fetch_one(&db.pool())
+    .await
+    .unwrap();
+
+    let err = read_method_artifact_from_db(&db, artifact.id).await.unwrap_err();
+
+    assert!(err.contains("outside the project root"), "got: {err}");
+    fs::remove_file(outside).ok();
+    fs::remove_dir_all(temp).unwrap();
+}
+
 #[test]
 fn append_jsonl_writes_complete_lines_under_concurrent_calls() {
     use std::sync::{Arc, Barrier};

@@ -32,10 +32,8 @@ fn reject_protected_write_path(relative_path: &str) -> Result<(), String> {
 }
 
 fn is_protected_app_path(relative_path: &str) -> bool {
-    relative_path == ".git"
-        || relative_path.starts_with(".git/")
-        || relative_path == ".nightshift"
-        || relative_path.starts_with(".nightshift/")
+    let first = relative_path.split('/').next().unwrap_or_default();
+    first.eq_ignore_ascii_case(".git") || first.eq_ignore_ascii_case(".nightshift")
 }
 
 fn reject_protected_canonical_path(
@@ -654,6 +652,13 @@ mod tests {
         )
         .is_err());
         assert!(write_file_impl(&app_state, ".git/config".to_string(), "x".to_string()).is_err());
+        assert!(write_file_impl(
+            &app_state,
+            ".Nightshift/config.json".to_string(),
+            "{}".to_string()
+        )
+        .is_err());
+        assert!(write_file_impl(&app_state, ".GIT/config".to_string(), "x".to_string()).is_err());
 
         fs::remove_dir_all(&test_dir).ok();
     }
@@ -665,8 +670,12 @@ mod tests {
 
         assert!(create_folder_impl(&app_state, "".to_string(), ".nightshift".to_string()).is_err());
         assert!(create_folder_impl(&app_state, "".to_string(), ".git".to_string()).is_err());
+        assert!(create_folder_impl(&app_state, "".to_string(), ".Nightshift".to_string()).is_err());
+        assert!(create_folder_impl(&app_state, "".to_string(), ".GIT".to_string()).is_err());
         assert!(!test_dir.join(".nightshift").exists());
         assert!(!test_dir.join(".git").exists());
+        assert!(!test_dir.join(".Nightshift").exists());
+        assert!(!test_dir.join(".GIT").exists());
 
         fs::remove_dir_all(&test_dir).ok();
     }
@@ -678,8 +687,12 @@ mod tests {
 
         assert!(create_file_impl(&app_state, "".to_string(), ".nightshift".to_string()).is_err());
         assert!(create_file_impl(&app_state, "".to_string(), ".git".to_string()).is_err());
+        assert!(create_file_impl(&app_state, "".to_string(), ".Nightshift".to_string()).is_err());
+        assert!(create_file_impl(&app_state, "".to_string(), ".GIT".to_string()).is_err());
         assert!(!test_dir.join(".nightshift").exists());
         assert!(!test_dir.join(".git").exists());
+        assert!(!test_dir.join(".Nightshift").exists());
+        assert!(!test_dir.join(".GIT").exists());
 
         fs::remove_dir_all(&test_dir).ok();
     }

@@ -131,3 +131,17 @@ fn validate_method_rejects_json_schema_file_without_json_schema_output_mode() {
     assert!(err.contains("json_schema_file"), "got: {err}");
     assert!(err.contains("output_mode: JSON Schema"), "got: {err}");
 }
+
+#[test]
+fn validate_relative_path_rejects_parent_components_without_rejecting_names_containing_dots() {
+    assert!(validate_relative_path("../secret.txt").is_err());
+    assert!(validate_relative_path("prompts/../secret.txt").is_err());
+    assert!(validate_relative_path("prompts/..data/input.jsonl").is_ok());
+}
+
+#[test]
+fn validate_relative_path_rejects_app_managed_storage_case_insensitively() {
+    assert!(validate_relative_path(".nightshift/config.json").is_err());
+    assert!(validate_relative_path(".Nightshift/config.json").is_err());
+    assert!(validate_relative_path("methods/.nightshift/config.json").is_err());
+}

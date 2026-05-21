@@ -22,6 +22,7 @@ use super::execution::{
     update_execution_status, upstream_job_sources, validate_analysis_sql,
 };
 use super::model::*;
+use super::paths::validate_relative_path;
 use super::preflight::preflight_method_for_root;
 use super::storage::{freeze_files, read_method_document, write_method_document};
 use super::validation::validate_method;
