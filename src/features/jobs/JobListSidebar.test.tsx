@@ -2,6 +2,7 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import JobListSidebar from "./JobListSidebar";
+import { JobOutputMode, JobProvider } from "./jobFormModel";
 
 // Mock Tauri invoke
 vi.mock("@tauri-apps/api/core", () => ({
@@ -24,7 +25,7 @@ describe("JobListSidebar", () => {
         name: "Test Job 1",
         prompt_file: "test.jinja2",
         data_source: "data.jsonl",
-        provider: "Local",
+        provider: JobProvider.Local,
         model: "llama3",
         server_url: "http://localhost:8000",
         output_mode: "JSON",
@@ -40,10 +41,10 @@ describe("JobListSidebar", () => {
         name: "Running Job",
         prompt_file: "prompt.jinja2",
         data_source: "samples.jsonl",
-        provider: "OpenAI",
+        provider: JobProvider.OpenAI,
         model: "gpt-4",
         server_url: "https://api.openai.com/v1",
-        output_mode: "Unstructured",
+        output_mode: JobOutputMode.Unstructured,
         samples: 50,
         strategy: "exhaustive",
         status: "running",

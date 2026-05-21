@@ -6,10 +6,15 @@ import DataSourceSelect from "./DataSourceSelect";
 import {
   INITIAL_FORM_STATE,
   INITIAL_TRANSFORM_STATE,
+  JobOutputMode,
+  JobProvider,
+  JobStrategy,
   OUTPUT_MODES,
   PROVIDERS,
   STRATEGIES,
   THINKING_OPTIONS,
+  TransformErrorMode,
+  TransformOutputMode,
   formatSubmitError,
   type JobConfig,
   type TransformJobConfig,
@@ -143,7 +148,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
 
   const handleBrowseSchemaFile = useCallback(async () => {
     const path = await pickFile([
-      { name: "JSON Schema", extensions: ["json"] },
+      { name: JobOutputMode.JsonSchema, extensions: ["json"] },
     ]);
     if (path) updateField("jsonSchemaFile", path);
   }, [pickFile]);
@@ -408,12 +413,12 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
                   onChange={(e) =>
                     updateTransformField(
                       "outputMode",
-                      e.target.value as "one_to_one" | "unwrap_arrays",
+                      e.target.value as TransformOutputMode,
                     )
                   }
                 >
-                  <option value="one_to_one">One row per input</option>
-                  <option value="unwrap_arrays">Unwrap returned arrays</option>
+                  <option value={TransformOutputMode.OneToOne}>One row per input</option>
+                  <option value={TransformOutputMode.UnwrapArrays}>Unwrap returned arrays</option>
                 </select>
               </div>
 
@@ -422,10 +427,10 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
                 <select
                   id="transform-error-mode"
                   value={transformData.errorMode}
-                  onChange={(e) => updateTransformField("errorMode", e.target.value as "stop" | "skip")}
+                  onChange={(e) => updateTransformField("errorMode", e.target.value as TransformErrorMode)}
                 >
-                  <option value="stop">Stop job</option>
-                  <option value="skip">Skip failed item</option>
+                  <option value={TransformErrorMode.Stop}>Stop job</option>
+                  <option value={TransformErrorMode.Skip}>Skip failed item</option>
                 </select>
               </div>
             </div>
@@ -510,7 +515,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
             <select
               id="provider"
               value={formData.provider}
-              onChange={(e) => updateField("provider", e.target.value)}
+              onChange={(e) => updateField("provider", e.target.value as JobProvider)}
             >
               {PROVIDERS.map((p) => (
                 <option key={p} value={p}>{p}</option>
@@ -597,7 +602,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
             <select
               id="output-mode"
               value={formData.outputMode}
-              onChange={(e) => updateField("outputMode", e.target.value)}
+              onChange={(e) => updateField("outputMode", e.target.value as JobOutputMode)}
             >
               {OUTPUT_MODES.map((mode) => (
                 <option key={mode} value={mode}>{mode}</option>
@@ -605,7 +610,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
             </select>
           </div>
 
-          {formData.outputMode === "JSON Schema" && (
+          {formData.outputMode === JobOutputMode.JsonSchema && (
             <div className="form-group">
               <label htmlFor="json-schema-file">Schema File</label>
               {schemaFiles.length > 0 ? (
@@ -645,22 +650,22 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
         <div className="form-row">
           <div className="form-group">
             <label htmlFor="samples">
-              {formData.strategy === "Exhaustive" ? "Samples per row" : "Number of Samples"}
+              {formData.strategy === JobStrategy.Exhaustive ? "Samples per row" : "Number of Samples"}
             </label>
             <select
               id="samples"
               value={formData.samples}
               onChange={(e) => updateField("samples", parseInt(e.target.value))}
-              disabled={formData.strategy === "Single"}
+              disabled={formData.strategy === JobStrategy.Single}
             >
               {[1, 5, 10, 25, 50, 100, 250, 500, 1000].map((n) => (
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
-            {formData.strategy === "Exhaustive" && (
+            {formData.strategy === JobStrategy.Exhaustive && (
               <span className="hint">Each row in the source is evaluated this many times.</span>
             )}
-            {formData.strategy === "Single" && (
+            {formData.strategy === JobStrategy.Single && (
               <span className="hint">Single runs the first row only.</span>
             )}
           </div>
@@ -670,7 +675,7 @@ export default function InferenceJobForm({ isOpen, onClose, onSuccess }: Inferen
             <select
               id="strategy"
               value={formData.strategy}
-              onChange={(e) => updateField("strategy", e.target.value)}
+              onChange={(e) => updateField("strategy", e.target.value as JobStrategy)}
             >
               {STRATEGIES.map((s) => (
                 <option key={s} value={s}>{s}</option>

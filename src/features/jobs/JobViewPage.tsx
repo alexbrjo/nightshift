@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { InferenceJob, JobFailure } from "../../database";
 import { formatDetailTimestamp } from "../../utils/date";
+import { TransformErrorMode, TransformOutputMode } from "./jobFormModel";
 
 interface JobViewPageProps {
   jobId: number;
@@ -280,13 +281,9 @@ export default function JobViewPage({ jobId, onBack }: JobViewPageProps) {
               {job.job_type === "transform" ? (
                 <>
                   <dt>On Error</dt>
-                  <dd>{job.transform_error_mode === "skip" ? "Skip failed item" : "Stop job"}</dd>
+                  <dd>{job.transform_error_mode === TransformErrorMode.Skip ? "Skip failed item" : "Stop job"}</dd>
                   <dt>Output Behavior</dt>
-                  <dd>
-                    {job.transform_output_mode === "unwrap_arrays"
-                      ? "Unwrap returned arrays"
-                      : "One row per input"}
-                  </dd>
+                  <dd>{job.transform_output_mode === TransformOutputMode.UnwrapArrays ? "Unwrap returned arrays" : "One row per input"}</dd>
                 </>
               ) : (
                 <>

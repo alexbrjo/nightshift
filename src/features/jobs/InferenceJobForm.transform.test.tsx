@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import InferenceJobForm from "./InferenceJobForm";
+import { TransformErrorMode, TransformOutputMode } from "./jobFormModel";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -96,8 +97,8 @@ describe("InferenceJobForm transform jobs", () => {
           name: "Clean rows",
           dataSource: "data/input.jsonl",
           scriptFile: "transforms/clean.js",
-          errorMode: "stop",
-          outputMode: "one_to_one",
+          errorMode: TransformErrorMode.Stop,
+          outputMode: TransformOutputMode.OneToOne,
         },
       });
       expect(onSuccess).toHaveBeenCalledWith(42);
@@ -151,8 +152,8 @@ describe("InferenceJobForm transform jobs", () => {
           name: "Clean rows",
           dataSource: "data/input.jsonl",
           scriptFile: "transforms/clean.js",
-          errorMode: "stop",
-          outputMode: "one_to_one",
+          errorMode: TransformErrorMode.Stop,
+          outputMode: TransformOutputMode.OneToOne,
         },
       });
       expect(onSuccess).toHaveBeenCalledWith(43);
@@ -195,7 +196,7 @@ describe("InferenceJobForm transform jobs", () => {
       target: { value: "data/input.jsonl" },
     });
     fireEvent.change(screen.getByLabelText("Output Behavior"), {
-      target: { value: "unwrap_arrays" },
+      target: { value: TransformOutputMode.UnwrapArrays },
     });
     fireEvent.click(screen.getByRole("button", { name: "Create Transform Job" }));
 
@@ -205,8 +206,8 @@ describe("InferenceJobForm transform jobs", () => {
           name: "Split rows",
           dataSource: "data/input.jsonl",
           scriptFile: "transforms/clean.js",
-          errorMode: "stop",
-          outputMode: "unwrap_arrays",
+          errorMode: TransformErrorMode.Stop,
+          outputMode: TransformOutputMode.UnwrapArrays,
         },
       });
       expect(onSuccess).toHaveBeenCalledWith(44);

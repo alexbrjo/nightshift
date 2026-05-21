@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import JobViewPage from "./JobViewPage";
+import { TransformErrorMode, TransformOutputMode } from "./jobFormModel";
 
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn(),
@@ -30,8 +31,8 @@ describe("JobViewPage failure surfacing", () => {
           samples: 1,
           strategy: "exhaustive",
           transform_script_file: "transforms/normalize.js",
-          transform_error_mode: "skip",
-          transform_output_mode: "unwrap_arrays",
+          transform_error_mode: TransformErrorMode.Skip,
+          transform_output_mode: TransformOutputMode.UnwrapArrays,
           status: "completed_with_errors",
           created_at: "2026-05-03T09:00:00Z",
           updated_at: "2026-05-03T09:05:00Z",
