@@ -8,6 +8,8 @@ use uuid::Uuid;
 use crate::state::AppState;
 use crate::utils::secrets::{is_sensitive_key, looks_like_secret_value};
 
+const MAX_PROJECT_LAYOUT_BYTES: usize = 1024 * 1024;
+
 /// Save the last opened folder path to app data directory
 #[tauri::command]
 pub fn save_last_folder(app: AppHandle, path: String) -> Result<(), String> {
@@ -192,6 +194,28 @@ fn save_project_json(
     save_project_state_key(state, key, value)
 }
 
+fn ensure_serialized_json_within_limit(
+    label: &str,
+    value: &serde_json::Value,
+    max_bytes: usize,
+) -> Result<(), String> {
+    let byte_len = serde_json::to_vec(value)
+        .map_err(|e| format!("Failed to serialize {}: {}", label, e))?
+        .len();
+    if byte_len > max_bytes {
+        return Err(format!(
+            "{} is too large ({} bytes, limit {} bytes)",
+            label, byte_len, max_bytes
+        ));
+    }
+    Ok(())
+}
+
+fn save_project_layout_value(state: &AppState, layout: serde_json::Value) -> Result<(), String> {
+    ensure_serialized_json_within_limit("Project layout", &layout, MAX_PROJECT_LAYOUT_BYTES)?;
+    save_project_json(state, "layout.json", layout)
+}
+
 fn load_project_sessions_value(state: &AppState) -> Result<Option<serde_json::Value>, String> {
     let nightshift_dir = current_nightshift_dir(state)?;
     let sessions_dir = nightshift_dir.join("sessions");
@@ -310,7 +334,7 @@ pub fn save_project_layout(
     state: State<AppState>,
     layout: serde_json::Value,
 ) -> Result<(), String> {
-    save_project_json(&state, "layout.json", layout)
+    save_project_layout_value(&state, layout)
 }
 
 #[tauri::command]
@@ -399,6 +423,45 @@ mod tests {
         let loaded = load_project_json(&state, "layout.json").unwrap();
 
         assert_eq!(loaded, Some(value));
+        fs::remove_dir_all(&test_project_dir).ok();
+    }
+
+    #[test]
+    fn save_project_layout_rejects_oversized_layout() {
+        let temp_dir = env::temp_dir();
+        let unique_id = Uuid::new_v4().to_string();
+        let test_project_dir =
+            temp_dir.join(format!("nightshift_project_layout_size_test_{}", unique_id));
+        fs::create_dir_all(test_project_dir.join(".nightshift")).unwrap();
+        let state = AppState { root_path: std::sync::Mutex::new(Some(test_project_dir.clone())) };
+        let oversized_layout = serde_json::json!({
+            "schemaVersion": 1,
+            "panels": [],
+            "padding": "x".repeat(MAX_PROJECT_LAYOUT_BYTES)
+        });
+
+        let error = save_project_layout_value(&state, oversized_layout).unwrap_err();
+        let loaded = load_project_json(&state, "layout.json").unwrap();
+
+        assert!(error.contains("Project layout is too large"));
+        assert_eq!(loaded, None);
+        fs::remove_dir_all(&test_project_dir).ok();
+    }
+
+    #[test]
+    fn save_project_layout_allows_layouts_within_limit() {
+        let temp_dir = env::temp_dir();
+        let unique_id = Uuid::new_v4().to_string();
+        let test_project_dir =
+            temp_dir.join(format!("nightshift_project_layout_allowed_test_{}", unique_id));
+        fs::create_dir_all(test_project_dir.join(".nightshift")).unwrap();
+        let state = AppState { root_path: std::sync::Mutex::new(Some(test_project_dir.clone())) };
+        let layout = serde_json::json!({ "schemaVersion": 1, "panels": [] });
+
+        save_project_layout_value(&state, layout.clone()).unwrap();
+        let loaded = load_project_json(&state, "layout.json").unwrap();
+
+        assert_eq!(loaded, Some(layout));
         fs::remove_dir_all(&test_project_dir).ok();
     }
 
